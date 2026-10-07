@@ -1,7 +1,7 @@
 {
   "name": "zcode-fox-local",
   "version": 1,
-  "description": "Local marketplace for the ZCode DeepSeek balance whale widget.",
+  "description": "Local marketplace for ZCode狐娘小挂件 (zcode-fox-widget).",
   "plugins": [
     {
       "name": "zcode-fox-widget",

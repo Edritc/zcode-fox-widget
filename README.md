@@ -16,7 +16,7 @@
 |---|---|
 | **原版** | [MeteorNOX/DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)（MIT，Copyright (c) 2026 MeteorNOX）——DSH（DeepSeek Harness）的 Web 插件 |
 | **ZCode 移植** | [nb10yyds/zcode-whale-widget](https://github.com/nb10yyds/zcode-whale-widget)——ZCode 没有上游依赖的脚本注入与凭据服务扩展点，宿主适配层（本地服务、凭据发现、每轮消耗数据源、平台集成）为移植期重写；挂件本身的观感与算法追求与上游一致 |
-| **本仓库** | fork 自上址（基线 e60e09c），v1.1.0–v1.8.4 在移植版上继续开发 137 个提交，v1.8.5 起以「ZCode狐娘小挂件」独立建仓维护 |
+| **本仓库** | fork 自上址（基线 e60e09c），fork 基线到 v1.8.4 共 137 个提交的继续开发，v1.8.5 起以「ZCode狐娘小挂件」独立建仓维护 |
 
 **沿用自上游**：`assets/` 下上游素材（鲸鱼形象、`rua.gif`、两套音效）、气泡 SVG 几何、字号档、动画参数、拖拽/四分吸附/左吸附镜像/alpha 命中检测、随机台词六组的文案与权重、峰谷定价表与时段规则、记账模式语义、余额接口取项规则。
 
@@ -62,7 +62,7 @@
 
 - **桌宠模式**（v1.8.0 引入 → v1.8.1 重定义 → v1.8.2 贴顶）：视口 = 整个工作区、失焦不隐身、丢了置顶才重申；纵向钳制按命中画布**实测的角色不透明内容**计算，角色能真正拖到屏幕顶（气泡自动避让）。
 - **冻结防线**（v1.3.3 → v1.8.1，v1.8.6 精简）：禁用原生遮挡计算、首帧上屏、60 秒出帧保险、DPI 变更自动重建、显隐走透明度切换、视口钳到窗口交集——这套**被动防线**保留；主动的「活性点 + DXGI 桌面像素对账」检测（v1.4.2–v1.8.5）于 v1.8.6 移除：窗口拖动时采样链路时序错位会误报冻结（可见的闪烁）、检测点本身在拖动中滞后可见，而它能覆盖的场景被动防线已兜住（真冻结最迟 60 秒自愈，或 `node lib/cli.mjs window restart` 一键重建）。
-- **跟随引擎**（v1.3.1 → v1.5.3 → v1.8.1）：探测循环编译成 C#（40ms 档端到端 13ms、稳态 CPU ≈0.16% 单核），5/16/40/100/250ms 挡位实测表；跟随目标选目标进程**面积最大的可见窗口**（绕开 MainWindowHandle 陷阱）；pid 身份门控，重开 ZCode 不再在加载动画里冒头。
+- **跟随引擎**（v1.3.1 → v1.5.3 → v1.8.1）：探测循环编译成 C#（40ms 档端到端 13ms、稳态 CPU ≈0.16% 单核），16/40/100/250ms 挡位实测表（曾有的 5ms 档已移除——实际周期受系统定时器量子约束只能到 ≈11ms，名不副实）；跟随目标选目标进程**面积最大的可见窗口**（绕开 MainWindowHandle 陷阱）；pid 身份门控，重开 ZCode 不再在加载动画里冒头。
 - **点击无响应根除**（v1.3.2/v1.4.3）：隐藏→重现改透明度切换，不再拆原生输入管线；输入复活改纯样式翻转。
 - **不可激活窗口**（v1.3.0）：与挂件互动不抢 ZCode 前台（`WS_EX_NOACTIVATE`）；指针按到输入类控件才临时接管键盘焦点，离开即交还。
 - **渲染节流三重防线**（v1.8.2）：三个 Chromium 后台化开关 + 页面侧帧调度逃生门（300ms 排不上一帧就整体关过渡）——二级面板在任何遮挡/节流环境下必然可见。
@@ -160,7 +160,7 @@
 
 4. **重启会话**（或重开 ZCode），让 MCP 服务与 hook 生效。
 
-5. **想用桌面浮层的话，再装一次它的运行时**（约 150MB，一次性；只装到数据目录，不进仓库）：
+5. **想用桌面浮层的话，再装一次它的运行时**（下载约 150MB，一次性；只装到数据目录，不进仓库，解压后占用约 370MB）：
 
    ```bash
    node lib/cli.mjs desktop install
@@ -311,7 +311,7 @@ node lib/cli.mjs json            # 结构化输出，便于脚本消费
 ### 今日已用
 
 - **本机库（主口径，v1.7.0 起）**：读 ZCode 落库的每轮模型用量、按各厂商价目折算（`lib/usage-records.mjs` 的 `todayVendorUsage()`，与用量记录面板同一次聚合）。按模型看得见、不受充值干扰；套餐/网关行按配额或 tokens 表达，不折算虚构金额。
-- **小鲸鱼记账（对账 + 兜底）**：靠"观测到的余额下降"累计，覆盖该 DeepSeek 账号的全部花费（含其它设备/其它 key），服务未运行期间产生的消耗会漏记（从下次观测的新基准开始）。不需要额外令牌。与本机库数字不一致时两口径并排展示（气泡小字 / 用量面板「对账（DeepSeek）」行）；本机库当天无记录时兜底为主显示并标注来源。充值当天该口径会归零（余额上涨记为「待核对调整」），用菜单「余额校正」记一笔即可对上。
+- **小鲸鱼记账（对账 + 兜底）**：靠「观测到的余额下降」累计，覆盖该 DeepSeek 账号的全部花费（含其它设备/其它 key），服务未运行期间产生的消耗会漏记（从下次观测的新基准开始）。不需要额外令牌。与本机库数字不一致时两口径并排展示（气泡小字 / 用量面板「对账（DeepSeek）」行）；本机库当天无记录时兜底为主显示并标注来源。充值当天该口径会归零（余额上涨记为「待核对调整」），用菜单「余额校正」记一笔即可对上。
 - **实时·令牌（对账 + 兜底）**：需要 `DEEPSEEK_PLATFORM_TOKEN`（平台会话令牌，不是 API Key）。令牌会过期，过期后自动回落记账口径。
 
 ### 每轮消耗
@@ -354,7 +354,7 @@ DeepSeek 调价时改 `lib/pricing.mjs` 顶部的 `PEAK_HOURS` / `BASE_PRICE` / 
 | 每轮消耗不弹窗 | 需要 ZCode 至少完成过一轮对话（`turn_usage` 有 `completed` 行）；另外菜单里「每轮消耗提示」必须开着 |
 | **每轮消耗金额离谱（虚高十几倍）** | 计价口径踩了「input 含缓存」的坑。核对 `splitInputTokens()` 是否被 `costOfUsage()` 使用，并跑 `node tools/selftest.mjs`；用 `cli.mjs turn` 看逐档明细即可判断 |
 | 鲸鱼不跟着 ZCode 走 | 探测脚本可能挂了：`window stop` 后 `window start` 重建。开 `WHALE_DEBUG_PORT` 启动会把判断依据写进 `~/.zcode/whale/overlay-debug.log` |
-| 跟得不跟手 / 想更省资源 | 菜单「跟随延迟」即时切换 5/16/40/100/250ms（改完不需重启浮层），或写 `config.json` 的 `followIntervalMs`。默认 40ms 实测端到端延迟约 13ms、稳态 CPU 约 0.16% 单核；5ms 档实测 CPU 同量级（≈0.26%）但实际周期 ≈11ms（受定时器量子限制），详见 CHANGELOG 的 v1.8.1 小节实测表 |
+| 跟得不跟手 / 想更省资源 | 菜单「跟随延迟」即时切换 16/40/100/250ms（改完不需重启浮层），或写 `config.json` 的 `followIntervalMs`。默认 40ms 实测端到端延迟约 13ms、稳态 CPU 约 0.16% 单核（曾有的 5ms 档已移除：实际周期受定时器量子限制只能到 ≈11ms，名不副实） |
 | 浮层里点不动鲸鱼 | 指针要先落在鲸鱼上（光标变 `grab`、右上角出现菜单按钮）；若整块区域都点不动，检查是否被其它置顶窗口压住 |
 | 浮层启动失败 | `cli.mjs window status` 看运行时是否已装 |
 | 峰谷判定不对 | 看 `lib/pricing.mjs` 的 `PEAK_HOURS` 等常量；工作日高峰为北京时间 9–12、14–18，2026-08-23 起周末全天谷价 |
@@ -439,7 +439,7 @@ zcode-fox-widget/
 | `overlay.json` | 浮层进程 pid |
 | `overlay-debug.log` | 浮层黑匣子日志（常开，超 5MB 轮转） |
 | `autostart.log` | 每次会话启动的自启结果 |
-| `desktop-runtime/` | Electron 运行时（约 370MB，删掉即回收，浮层随之失效） |
+| `desktop-runtime/` | Electron 运行时（下载包约 150MB，解压装机后占用约 370MB；删掉即回收，浮层随之失效） |
 
 服务接口（排查时可直接 curl）：页面与资产 `/`（`/index.html`）、`/whale/widget.js`、`/whale/image.png`、`/whale/rua.gif`、`/whale/sound/press.mp3` 与 `/whale/sound/release.mp3`（`?set=<音效集 id>`）；状态查询 `/whale/health`、`/whale/balance.json`、`/whale/plan.json`、`/whale/cmdgo.json`（CommandCode 三重额度，`?refresh=1` 强制绕缓存）、`/whale/vendors.json`、`/whale/usage-records.json`、`/whale/session.json`、`/whale/last-turn.json`、`/whale/sounds.json`、`/whale/roles.json`、`/whale/bubble-content.json`（GET/POST）、`/whale/balance-adjustments.json`（GET/POST）、`/whale/size.json`（GET/PUT）、`/whale/zcode-theme.json`；写操作 `/whale/role-upload.json`、`/whale/role-rename.json`、`/whale/role-delete.json`、`/whale/sound-upload.json`、`/whale/sound-delete.json`（写操作校验 Origin）；关停 `/whale/shutdown`（需 `server.json` 随机令牌）。
 
@@ -473,7 +473,7 @@ zcode-fox-widget/
 4. **`resizable:false` 会锁死窗口尺寸**（Electron 把 min/max 设成创建时大小），之后任何改尺寸的调用都被拒。
 5. **位置记忆必须在拿到真实坐标系之后再恢复**，否则会按屏幕尺寸算出错误锚点。
 6. **`desktop/follow-window.ps1` 必须保持纯 ASCII**。Windows PowerShell 5.1 按系统 ANSI 代码页读取无 BOM 的 `.ps1`，中文注释会被解码成破坏语法的字节，脚本直接退出、跟随失效。
-7. **`$ErrorActionPreference='SilentlyContinue'` 会吞掉 `Add-Type` 的编译错误**，表现成"脚本秒退、浮层跟着退出"。该脚本已改为显式输出编译/运行错误。
+7. **`$ErrorActionPreference='SilentlyContinue'` 会吞掉 `Add-Type` 的编译错误**，表现成「脚本秒退、浮层跟着退出」。该脚本已改为显式输出编译/运行错误。
 8. **C# 内联代码只能用 .NET Framework 的 API**（PS 5.1 的编译目标），例如 `Environment.TickCount64` 不存在，要用 `TickCount`。
 9. **浮层里有两套坐标系，不能混用**。`viewport()` 返回的是 ZCode 窗口矩形（鲸鱼的位置、吸附、居中都按它算），而 `position:fixed` 的元素（挂在 `body` 上的挂件菜单）参照的是页面自身视口，也就是铺满整个工作区的浮层窗口。窗口化 ZCode 时两者差着几百像素，拿 `viewport()` 去算 `position:fixed` 的偏移会把菜单整个甩到屏幕外（实测菜单被算到 x=2812，而浮层只有 2560 宽）。这类 fixed 元素一律用 `pageViewport()`。
 10. **挂在 `body` 上的 fixed 元素不会跟着 root 走**。浮层里 ZCode 窗口一移动，鲸鱼跟着动、菜单留在原地，所以 `settle()` 里每次都带一次 `positionMenu()`。
@@ -484,7 +484,8 @@ zcode-fox-widget/
 
 ## 版本历史
 
-- 逐版本变更：[CHANGELOG.md](./CHANGELOG.md)（v1.1.0 起，每个版本都有 tag 与 GitHub Release）。
+- 逐版本变更：[CHANGELOG.md](./CHANGELOG.md)（v1.1.0 起；相邻小修复版本按合并策略并入组内最后版本号，现存版本均有 tag 与 GitHub Release）。
+- 贡献与提交规范：[CONTRIBUTING.md](./CONTRIBUTING.md)。
 - 命名沿革：ZCode 版 DeepSeek 余额小鲸鱼挂件（移植期）→ Widget of ZCode（v1.8.2–v1.8.4）→ **ZCode狐娘小挂件**（v1.8.5 起）。
 
 ---
