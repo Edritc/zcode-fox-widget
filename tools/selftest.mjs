@@ -6,7 +6,7 @@
 // 换算一致。顺带验证 health 接口与令牌关闭。
 //
 //   node tools/selftest.mjs
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
@@ -15,7 +15,7 @@ import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { costOfUsage, priceFor, isPeakTime, resolveVendor, resolvePricing, normalizeModelId } from '../lib/pricing.mjs'
-import { shapePlanPayload, turnPlanUsage, extraAmountsOfTurn, quotaBucketForModel, readPlanBalance } from '../lib/plan-balance.mjs'
+import { shapePlanPayload, turnPlanUsage, extraAmountsOfTurn, quotaBucketForModel, readPlanBalance, readLogFile } from '../lib/plan-balance.mjs'
 import { getPath, TEMPLATES, fetchFromTemplate, pickVendorBalance } from '../lib/vendors.mjs'
 import { isBlockedHost } from '../lib/blocked-host.mjs'
 import { matchTemplateId, buildProviderEntries, invalidateDiscoverCache } from '../lib/discover.mjs'
@@ -515,7 +515,7 @@ function check(name, ok, detail) {
   )
 }
 
-// ZCode Plan 日志解析：纯函数校验 shapePlanPayload
+// GLM Plan 日志解析：纯函数校验 shapePlanPayload
 {
   const today = todayKeyForLog()
   const shaped = shapePlanPayload(PLAN_FIXTURE, today, Date.now())
@@ -1391,6 +1391,16 @@ try {
     health.version === pluginManifest.version && marketplaceManifest.plugins[0].version === pluginManifest.version,
     JSON.stringify({ health: health.version, plugin: pluginManifest.version, market: marketplaceManifest.plugins[0].version })
   )
+  // 独立页面 CSP（审查 P3-3）：textContent + http(s) href 的 XSS 防线由浏览器强制化
+  {
+    const pageResp = await fetch('http://127.0.0.1:' + port + '/')
+    const csp = pageResp.headers.get('content-security-policy') || ''
+    check(
+      '独立页面带 CSP：default-src/script-src self、img-src self data:',
+      /default-src 'self'/.test(csp) && /script-src 'self'/.test(csp) && /img-src 'self' data:/.test(csp),
+      JSON.stringify({ csp: csp.slice(0, 140) })
+    )
+  }
   // 审查 P3-2：本地/私有判定统一口径——link-local / CGNAT / 0.0.0.0/8 都拦、
   // 公网域名放行；discover 与 credentials 共用 lib/blocked-host.mjs
   check(
@@ -1399,6 +1409,75 @@ try {
       isBlockedHost('localhost') && isBlockedHost('192.168.1.1') && !isBlockedHost('api.deepseek.com'),
     JSON.stringify({ linkLocal: isBlockedHost('169.254.169.254'), cgnat: isBlockedHost('100.64.0.1'), thisNet: isBlockedHost('0.1.2.3') })
   )
+  // 审查 P3-2 同型回归：IPv4-mapped IPv6（::ffff:127.0.0.1 / ::ffff:7f00:1）解包后
+  // 按 IPv4 判定——否则形如 http://[::ffff:127.0.0.1]:8080/ 的网关不被识别成本地
+  check(
+    '本地判定 IPv4-mapped IPv6：映射的环回/私网拦、映射的公网放行、NAT64 前缀保守拦',
+    isBlockedHost('::ffff:127.0.0.1') && isBlockedHost('[::ffff:127.0.0.1]') && isBlockedHost('[::ffff:7f00:1]') &&
+      isBlockedHost('::ffff:192.168.1.1') && isBlockedHost('[64:ff9b::1]') && !isBlockedHost('::ffff:8.8.8.8'),
+    JSON.stringify({
+      mappedLoopback: isBlockedHost('::ffff:127.0.0.1'),
+      mappedHex: isBlockedHost('[::ffff:7f00:1]'),
+      mappedPrivate: isBlockedHost('::ffff:192.168.1.1'),
+      nat64: isBlockedHost('[64:ff9b::1]'),
+      mappedPublic: isBlockedHost('::ffff:8.8.8.8'),
+    })
+  )
+  // 周末全天谷价（pricing.isPeakTime）：2026-08-23 00:00（北京，周日）起周末不再有高峰。
+  // 判定基准 = 北京日历日；生效时刻之前（含前 1 小时的周六）照旧按旧规则计价
+  {
+    const from = Math.floor(Date.UTC(2026, 7, 22, 16, 0, 0) / 1000) // = 2026-08-23 00:00+08（周日）
+    check(
+      '周末全天谷价：生效前 1 小时（周六 10:00+08）仍判高峰；生效后的周日 10:00/15:00 判谷价；周一 10:00 照常高峰',
+      isPeakTime(from - 14 * 3600) === true &&
+        isPeakTime(from + 10 * 3600) === false &&
+        isPeakTime(from + 15 * 3600) === false &&
+        isPeakTime(from + 34 * 3600) === true,
+      JSON.stringify({
+        satBeforeEdge: isPeakTime(from - 14 * 3600),
+        sunMorning: isPeakTime(from + 10 * 3600),
+        sunAfternoon: isPeakTime(from + 15 * 3600),
+        monday: isPeakTime(from + 34 * 3600),
+      })
+    )
+  }
+  // Plan 日志尾窗逐级扩读 + 32MB 封顶（审查 P2-2 回归）：封顶后找不到标记就
+  // 如实返回 null，绝不再同步读整个文件（Infinity 级会把服务事件循环冻结数秒）
+  {
+    const lab = path.join(tmpHome, 'plan-tail-lab')
+    fs.mkdirSync(lab, { recursive: true })
+    const markerLine = (payload) => '[' + new Date().toISOString() + '][info] billing/balance 请求完成 ' + JSON.stringify(payload) + '\n'
+    const big = path.join(lab, 'big.log')
+    const fdBig = fs.openSync(big, 'w')
+    fs.writeSync(fdBig, markerLine({ percentRemaining: 42 }), 0) // 标记在文件头：任何尾窗都罩不住
+    fs.ftruncateSync(fdBig, 33 * 1024 * 1024) // 稀疏补长到 33MB，标记落在 32MB 尾窗之外
+    fs.closeSync(fdBig)
+    check(
+      'Plan 尾窗封顶：标记在 32MB 尾窗之外（33MB 文件）→ 如实返回 null',
+      readLogFile(big) === null,
+      JSON.stringify({ hit: readLogFile(big) !== null })
+    )
+    const mid = path.join(lab, 'mid.log')
+    const fdMid = fs.openSync(mid, 'w')
+    fs.writeSync(fdMid, 'x'.repeat(1024 * 1024) + '\n')
+    fs.writeSync(fdMid, markerLine({ percentRemaining: 7 }), 2 * 1024 * 1024) // 标记距尾部 3MB：第一级漏、第二级罩住
+    fs.ftruncateSync(fdMid, 5 * 1024 * 1024)
+    fs.closeSync(fdMid)
+    const midHit = readLogFile(mid)
+    check(
+      'Plan 尾窗扩读：标记距尾 3MB（512KB 漏、4MB 罩住）→ 仍能找到',
+      !!midHit && midHit.lines.length === 1 && midHit.lines[0].percentRemaining === 7,
+      JSON.stringify(midHit && midHit.lines[0])
+    )
+    const near = path.join(lab, 'near.log')
+    fs.writeFileSync(near, markerLine({ percentRemaining: 9 }), 'utf8')
+    const nearHit = readLogFile(near)
+    check(
+      'Plan 尾窗默认档：标记在 512KB 内 → 直接命中',
+      !!nearHit && nearHit.lines.length === 1 && nearHit.lines[0].percentRemaining === 9,
+      JSON.stringify(nearHit && nearHit.lines[0])
+    )
+  }
 
   const first = await getJson(port, '/whale/last-turn.json')
   check('启动时对齐历史轮次（seq=0，不弹旧轮次）', first.seq === 0 && first.turn === null, JSON.stringify(first))
@@ -1919,6 +1998,23 @@ try {
     '按压泡泡持久化回读一致',
     bcBack && bcBack.v === 2 && bcBack.steps.length === 12 && bcBack.steps[0].modules[0].text === '第一行\n第二行',
     JSON.stringify(bcBack).slice(0, 120)
+  )
+  // 审查回归：泡泡内容路由此前沿用默认 8KB readBody，合法大模板被拒——
+  // 上限已是 512KB，这里用 ~30KB 的单步请求体钉死（放在回读用例之后，避免覆盖其配置）
+  const bcBig = await fetch('http://127.0.0.1:' + port + '/whale/bubble-content.json', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      v: 2,
+      tapAdvance: true,
+      steps: [{ modules: [{ type: 'text', text: '大模板内容'.repeat(2000), size: 'A' }] }],
+    }),
+  })
+  const bcBigBody = await bcBig.json()
+  check(
+    '泡泡内容 ~30KB 请求体被接受（路由上限 512KB，非旧 8KB）',
+    bcBig.ok && bcBigBody.ok === true && bcBigBody.steps.length === 1,
+    JSON.stringify({ status: bcBig.status, ok: bcBigBody.ok })
   )
   // 「内置视图」模块（v1.5.2）：整泡语义，既不被当空模块过滤、也不被当空步丢弃
   const bcView = await fetch('http://127.0.0.1:' + port + '/whale/bubble-content.json', {
@@ -2823,6 +2919,74 @@ try {
       '余额校正公式：重复校正按新参数重算（100 + 1 − 0 − 80 = 21）',
       fix2 && fix2.ok === true && fix2.todayUsage === 21,
       JSON.stringify(fix2)
+    )
+  }
+
+  {
+    // 账本状态机（审查 P2-3：recordLedgerUsage / freshDay / effectiveTodayUsage 此前
+    // 零覆盖）。这几个函数把 LEDGER_FILE 绑死在 ZCODE_HOME 上、findApiKey 又会读
+    // 真实配置——所以用 spawnSync 起一个 ZCODE_HOME 指向独立目录的子进程，在里面
+    // 按顺序跑完整场景（开户 → 降 → 升 → 校正 → 校正后再消费 → 跨天 → 换币种 →
+    // 换 key），把每步的账本快照吐回来断言。
+    const lab = path.join(tmpHome, 'ledger-lab')
+    fs.mkdirSync(path.join(lab, 'whale'), { recursive: true })
+    const balUrl = 'file:///' + path.join(PLUGIN_ROOT, 'lib', 'balance.mjs').replace(/\\/g, '/')
+    const labScript = [
+      "import fs from 'node:fs'",
+      "import path from 'node:path'",
+      "import { recordLedgerUsage, applyBalanceCorrection, balanceAdjustmentSummary } from '" + balUrl + "'",
+      "const file = path.join(process.env.ZCODE_HOME, 'whale', 'usage-ledger.json')",
+      "const cfg = path.join(process.env.ZCODE_HOME, 'whale', 'config.json')",
+      "const snap = () => { const l = JSON.parse(fs.readFileSync(file, 'utf8')); return { lastBalance: l.lastBalance, todayUsage: l.todayUsage, dayOpening: l.dayOpening, pendingCredit: l.pendingCredit, needsReview: l.needsReview === true, lastCurrency: l.lastCurrency, history: l.history, books: (l.previousBooks || []).length } }",
+      "const out = []",
+      "fs.writeFileSync(cfg, JSON.stringify({ apiKey: 'key-a' }))",
+      "recordLedgerUsage(50, 'CNY'); out.push({ step: 'open', ...snap() })",
+      "recordLedgerUsage(45, 'CNY'); out.push({ step: 'down', ...snap() })",
+      "recordLedgerUsage(55, 'CNY'); out.push({ step: 'up', ...snap() })",
+      "out.push({ step: 'correct', todayUsage: applyBalanceCorrection(10, 0).todayUsage })",
+      "recordLedgerUsage(40, 'CNY'); out.push({ step: 'spend-after-correct', ...snap(), formula: balanceAdjustmentSummary().todayUsage })",
+      "const led = JSON.parse(fs.readFileSync(file, 'utf8'))",
+      "led.date = '2000-01-01'; led.todayUsage = 33; led.credits = 0; led.correctedAt = null",
+      "fs.writeFileSync(file, JSON.stringify(led, null, 2))",
+      "recordLedgerUsage(35, 'CNY'); out.push({ step: 'day-roll', ...snap() })",
+      "recordLedgerUsage(30, 'USD'); out.push({ step: 'currency', ...snap() })",
+      "fs.writeFileSync(cfg, JSON.stringify({ apiKey: 'key-b' }))",
+      "recordLedgerUsage(28, 'CNY'); out.push({ step: 'key-change', ...snap() })",
+      "console.log('LEDGER_LAB:' + JSON.stringify(out))",
+    ].join('\n')
+    const scriptFile = path.join(lab, 'lab.mjs')
+    fs.writeFileSync(scriptFile, labScript, 'utf8')
+    const run = spawnSync(process.execPath, [scriptFile], {
+      encoding: 'utf8',
+      env: { ...process.env, ZCODE_HOME: lab, DEEPSEEK_API_KEY: '' },
+    })
+    let steps = []
+    try {
+      steps = JSON.parse(((run.stdout || '').split('LEDGER_LAB:').pop() || '[]').trim())
+    } catch (err) {}
+    const by = (s) => steps.find((x) => x.step === s) || {}
+    check(
+      '账本状态机：开户建本（dayOpening=50）→ 降计消费（todayUsage=5）→ 升记待核对（pendingCredit=55−45=10，不冲减）',
+      by('open').dayOpening === 50 && by('open').todayUsage === 0 &&
+        by('down').todayUsage === 5 && by('down').lastBalance === 45 &&
+        by('up').pendingCredit === 10 && by('up').needsReview === true && by('up').todayUsage === 5,
+      JSON.stringify({ steps, err: (run.stderr || '').slice(0, 300) })
+    )
+    check(
+      '账本状态机：校正公式（50 + 10 − 0 − 55 = 5）→ 校正后当日再消费按公式重算（50 + 10 − 0 − 40 = 20）',
+      by('correct').todayUsage === 5 && by('spend-after-correct').formula === 20 && by('spend-after-correct').lastBalance === 40,
+      JSON.stringify({ steps })
+    )
+    check(
+      '账本状态机：跨天把旧日余额归档进 history、新本从新基准起算；换币种只重置基准不记差值',
+      by('day-roll').history && by('day-roll').history['2000-01-01'] === 33 && by('day-roll').todayUsage === 0 && by('day-roll').dayOpening === 35 &&
+        by('currency').lastCurrency === 'USD' && by('currency').lastBalance === 30 && by('currency').todayUsage === 0,
+      JSON.stringify({ steps })
+    )
+    check(
+      '账本状态机：换 key 整本归档（previousBooks +1）并另起新本',
+      by('key-change').books === 1 && by('key-change').todayUsage === 0 && by('key-change').lastBalance === 28 && by('key-change').dayOpening === 28,
+      JSON.stringify({ steps })
     )
   }
 

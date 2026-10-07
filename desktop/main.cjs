@@ -9,7 +9,7 @@
 //   - **默认鼠标穿透**：不在鲸鱼/气泡/菜单上时点击落到下面的 ZCode，不挡操作
 //
 // 非 Windows 平台拿不到窗口信息，退回「覆盖整个工作区」的静态浮层。
-const { app, BrowserWindow, ipcMain, screen } = require('electron')
+const { app, BrowserWindow, ipcMain, screen, shell } = require('electron')
 const { spawn } = require('node:child_process')
 const path = require('node:path')
 const fs = require('node:fs')
@@ -187,6 +187,24 @@ function createWindow() {
   win.setIgnoreMouseEvents(true, { forward: true })
 
   win.loadURL(TARGET_URL)
+
+  // 气泡 link 模块是 target="_blank"（widget.js 受控渲染，href 仅 http/https）。
+  // Electron 未注册 setWindowOpenHandler 时，_blank 的默认行为是新建一个同
+  // webPreferences 的裸 BrowserWindow——无边框控制、不受 overlay.json 管理、
+  // 浮层退出后残留。外链一律交给系统浏览器，其余 scheme 直接拒绝；
+  // will-navigate 阻断主窗口自身被导航离开挂件页面。
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) {
+      shell.openExternal(url).catch(() => {})
+    }
+    return { action: 'deny' }
+  })
+  win.webContents.on('will-navigate', (event, url) => {
+    event.preventDefault()
+    if (/^https?:\/\//i.test(url) && url !== TARGET_URL) {
+      shell.openExternal(url).catch(() => {})
+    }
+  })
 
   // 页面加载完成后补发一次视口，避免启动早期的 rect 消息丢失
   win.webContents.on('did-finish-load', () => {
