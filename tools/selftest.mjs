@@ -14,7 +14,7 @@ import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
-import { costOfUsage, priceFor, isPeakTime, resolveVendor, resolvePricing, normalizeModelId } from '../lib/pricing.mjs'
+import { costOfUsage, priceFor, isPeakTime, nextPeakChange, resolveVendor, resolvePricing, normalizeModelId } from '../lib/pricing.mjs'
 import { shapePlanPayload, turnPlanUsage, extraAmountsOfTurn, quotaBucketForModel, readPlanBalance, readLogFile } from '../lib/plan-balance.mjs'
 import { getPath, TEMPLATES, fetchFromTemplate, pickVendorBalance } from '../lib/vendors.mjs'
 import { isBlockedHost } from '../lib/blocked-host.mjs'
@@ -1438,6 +1438,34 @@ try {
         sunMorning: isPeakTime(from + 10 * 3600),
         sunAfternoon: isPeakTime(from + 15 * 3600),
         monday: isPeakTime(from + 34 * 3600),
+      })
+    )
+  }
+  // 峰谷倒计时的切换点推算（pricing.nextPeakChange）：与 isPeakTime 同口径，
+  // 边界点 = 北京 0/9/12/14/18 点整。周五晚/周六都要跨过周末找到周一 9:00
+  {
+    const mon10 = Math.floor(Date.UTC(2026, 9, 12, 2, 0, 0) / 1000) // 周一 10:00+08（高峰）
+    const mon13 = mon10 + 3 * 3600 // 13:00（12–14 谷段）
+    const mon12 = mon10 + 2 * 3600 // 12:00:00 整（恰在边界，谷侧）
+    const fri19 = Math.floor(Date.UTC(2026, 9, 16, 11, 0, 0) / 1000) // 周五 19:00+08（谷）
+    const sat10 = Math.floor(Date.UTC(2026, 9, 17, 2, 0, 0) / 1000) // 周六 10:00+08（谷）
+    const mon09 = Math.floor(Date.UTC(2026, 9, 19, 1, 0, 0) / 1000) // 下周一 09:00+08
+    const tue09 = Math.floor(Date.UTC(2026, 9, 13, 1, 0, 0) / 1000) // 次日 09:00+08
+    check(
+      'nextPeakChange：峰中→当天 12:00；12:00 整→14:00；谷段→14:00；深夜→次日 9:00；周五晚/周六跨周末→周一 9:00',
+      nextPeakChange(mon10) === mon10 + 2 * 3600 &&
+        nextPeakChange(mon12) === mon12 + 2 * 3600 &&
+        nextPeakChange(mon13) === mon13 + 3600 &&
+        nextPeakChange(fri19) === mon09 &&
+        nextPeakChange(sat10) === mon09 &&
+        nextPeakChange(mon10 + 13 * 3600) === tue09,
+      JSON.stringify({
+        peakToNoon: nextPeakChange(mon10) - mon10,
+        noonEdge: nextPeakChange(mon12) - mon12,
+        valleyTo14: nextPeakChange(mon13) - mon13,
+        friToMon: Math.round((nextPeakChange(fri19) - fri19) / 3600),
+        satToMon: Math.round((nextPeakChange(sat10) - sat10) / 3600),
+        nightTo9: Math.round((nextPeakChange(mon10 + 13 * 3600) - (mon10 + 13 * 3600)) / 3600),
       })
     )
   }

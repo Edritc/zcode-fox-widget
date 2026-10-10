@@ -1390,6 +1390,63 @@ try {
     typeof dsPeriod === 'string' && (dsPeriod.indexOf('高峰时段') !== -1 || dsPeriod.indexOf('空闲时段') !== -1),
     'text=' + JSON.stringify(dsPeriod)
   )
+  // ⑪+ 峰谷倒计时 + 流光（对齐上游「时段倒计时」）：{countdown} 占位符出
+  // HH:MM:SS，行挂红/绿系流光渐变，活动行 ticker 逐秒原地走字
+  const dsCount = typeof dsPeriod === 'string' ? (dsPeriod.match(/\d{2}:\d{2}:\d{2}/) || [null])[0] : null
+  check('峰谷倒计时：时段行带 HH:MM:SS（{countdown} 占位符）', !!dsCount, 'text=' + JSON.stringify(dsPeriod))
+  const flowCls = await cdp.eval(
+    "(function(){var n=document.querySelector('.zcwv-text .zcwv-flow');if(!n)return null;" +
+      "return n.className.indexOf('zcwv-flow-peak')!==-1?'peak':(n.className.indexOf('zcwv-flow-off')!==-1?'off':'?')})()"
+  )
+  check('峰谷流光：倒计时行挂红/绿系流光渐变（zcwv-flow-peak/off）', flowCls === 'peak' || flowCls === 'off', JSON.stringify(flowCls))
+  const cd1 = await cdp.eval("(function(){var n=document.querySelector('.zcwv-text .zcwv-flow');return n?n.textContent:null})()")
+  await new Promise((r) => setTimeout(r, 1300))
+  const cd2 = await cdp.eval("(function(){var n=document.querySelector('.zcwv-text .zcwv-flow');return n?n.textContent:null})()")
+  check('峰谷倒计时逐秒走字（1.3s 后读数变化，原地改写）', !!cd1 && !!cd2 && cd1 !== cd2, JSON.stringify({ t1: cd1, t2: cd2 }))
+  // ⑪c 图挂降级：gif error 置 gifFailed 后，纯图步（r=0.99 确定性命中权重 5 的
+  // 图片变体）降级成一句备胎文案，不再渲染破图
+  await cdp.eval(
+    'Math.random=function(){return 0.99};' +
+      "(function(){var g=document.querySelector('.zcwv-gif');if(g)g.dispatchEvent(new Event('error'));return true})()"
+  )
+  await clickWhale()
+  await clickBubble()
+  const gifFailText = await bubbleText()
+  const gifHidden = await cdp.eval("(function(){var g=document.querySelector('.zcwv-gif');return g?g.style.display==='none':false})()")
+  check(
+    '图挂降级：纯图步出备胎文案（gif 加载失败/没有动图给你看/动图不见了），不再渲染破图',
+    typeof gifFailText === 'string' &&
+      (gifFailText.indexOf('gif 加载失败') !== -1 ||
+        gifFailText.indexOf('没有动图给你看') !== -1 ||
+        gifFailText.indexOf('动图不见了') !== -1) &&
+      gifHidden === true,
+    JSON.stringify({ text: gifFailText, hidden: gifHidden })
+  )
+  // ⑪d 点角色续时（对齐上游 whaleClick 第 1 泡语义）：第 1 泡显示中再点角色只
+  // 重置计时，不重置队列不重绘——label 上打的标记必须原样保留。balance/usage
+  // 两个桩都慢 2 秒返回：第二次点击时 refresh 与 refreshUsageSummary（点角色
+  // 都会触发）仍 busy/在途，窗口内没有任何重绘来源；两拍成功渲染写的都是
+  // 同一份内容，生产里视觉无感，与续时分支无关。
+  await cdp.eval(
+    '(function(){var real=window.fetch;var slow=function(obj){return new Promise(function(res){' +
+      'setTimeout(function(){res(new Response(JSON.stringify(obj),{status:200,headers:{"Content-Type":"application/json"}}))},2000)})};' +
+      'window.fetch=function(u,o){var s=String(u&&u.url?u.url:u);' +
+      "if(s.indexOf('/whale/balance.json')!==-1)return slow({ok:true,totalBalance:1.23,currency:'CNY',todayUsage:0.45,isPeak:false,peakNextChangeAt:9999999999});" +
+      "if(s.indexOf('/whale/usage-records.json')!==-1)return slow({ok:false,error:'stub'});" +
+      'return real.apply(this,arguments)};return true})()'
+  )
+  await clickWhale() // 正在引语/降级步（index 1）→ 回到序列开头（视图步）
+  await cdp.eval("(function(){document.querySelector('.zcwv-label').textContent='TTL续时标记';return true})()")
+  await clickWhale() // 第 1 泡显示中再点 → 仅续时
+  const markNow = await cdp.eval(
+    "(function(){return {t:document.querySelector('.zcwv-label').textContent," +
+      "open:document.querySelector('.zcwv-bubble').classList.contains('zcwv-bubble-open')}})()"
+  )
+  check(
+    '点角色续时：第 1 泡显示中再点角色不重绘（标记原样保留）且气泡仍开着',
+    !!markNow && markNow.t === 'TTL续时标记' && markNow.open === true,
+    JSON.stringify(markNow)
+  )
   if (stubA && stubA.identifier) await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: stubA.identifier })
 
   // ⑪b 厂商余额进气泡小字（v1.8.8）：有官方余额模板的按量厂商（Kimi/Moonshot），
