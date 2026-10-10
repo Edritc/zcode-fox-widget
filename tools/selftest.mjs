@@ -495,16 +495,68 @@ function check(name, ok, detail) {
       cyberLo.cw[0] === 15.625,
     JSON.stringify({ lo: cyberLo.miss, hi: cyberHi.miss })
   )
-  // Kimi 官网补齐（2026-10-03）：k2.5 / kimi-latest 与快照版 / moonshot-v1 按长度定档
-  const km25 = costOfUsage('kimi-k2.5', { input_tokens: 1_000_000, output_tokens: 0 }, at)
+  // Kimi 下线模型清除（2026-10-10 复核，docs/models：kimi-latest / k2.5 /
+  // 快照版 / moonshot-v1 系均下线迁移 k3）——旧名按「无价目、仅统计 tokens」
+  const kmDead = costOfUsage('kimi-k2.5', { input_tokens: 1_000_000, output_tokens: 0 }, at)
   check(
-    'Kimi 补齐条目：k2.5 ¥4.17/M；kimi-latest 与快照版同 k3；v1 系按长度定档',
-    Math.abs(km25.amount - 4.17) < 1e-9 &&
-      resolvePricing({ model: 'kimi-latest' }).miss[0] === 20 &&
-      resolvePricing({ model: 'kimi-2150622' }).miss[0] === 20 &&
-      resolvePricing({ model: 'moonshot-v1-8k' }).miss[0] === 12 &&
-      resolvePricing({ model: 'moonshot-v1-128k-vision-preview' }).miss[0] === 60,
-    'k25=' + km25.amount
+    'Kimi 下线条目移除：旧名不计价，k3/k2.7-code/k2.6 保留',
+    kmDead && kmDead.billable === false &&
+      resolvePricing({ model: 'kimi-latest' }).kind === 'none' &&
+      resolvePricing({ model: 'moonshot-v1-128k' }).kind === 'none' &&
+      resolvePricing({ model: 'kimi-k3' }).miss[0] === 20 &&
+      resolvePricing({ model: 'kimi-k2.7-code' }).miss[0] === 6.5 &&
+      resolvePricing({ model: 'kimi-k2.6' }).out[0] === 27,
+    'k25 billable=' + (kmDead && kmDead.billable)
+  )
+  // DeepSeek V4.1-Flash 调价（2026-10-10 官网）：flash 输入 1/2、输出 4/8、
+  // 命中 0.02/0.04（空闲/高峰）；旧名 v4-flash 同价承接；pro 不变
+  const dsP = priceFor('deepseek-flash')
+  check(
+    'DeepSeek flash 调价（miss 1/2、out 4/8、hit 0.02/0.04），旧名同价，pro 不变',
+    dsP.miss[0] === 1 && dsP.miss[1] === 2 && dsP.out[0] === 4 && dsP.out[1] === 8 &&
+      dsP.hit[0] === 0.02 && dsP.hit[1] === 0.04 &&
+      priceFor('deepseek-v4-flash').miss[1] === 2 &&
+      priceFor('deepseek-v4-pro').miss[1] === 9.0,
+    JSON.stringify({ miss: dsP.miss, out: dsP.out, hit: dsP.hit })
+  )
+  // OpenAI 2026-10-10 增补：gpt-6-sol（6.0 旗舰）/ gpt-5.3 / gpt-5.5-pro / gpt-5.5-cyber
+  check(
+    'OpenAI 增补条目：6-sol $2/$10；5.3 $1.75/$14；5.5-pro $30/$180；5.5-cyber 272K 分档',
+    resolvePricing({ model: 'gpt-6-sol', inTokens: 100000 }).miss[0] === 2 &&
+      resolvePricing({ model: 'gpt-6-sol', inTokens: 100000 }).out[0] === 10 &&
+      resolvePricing({ model: 'gpt-6-sol', inTokens: 300000 }).miss[0] === 4 &&
+      resolvePricing({ model: 'gpt-5.3-codex' }).miss[0] === 1.75 &&
+      resolvePricing({ model: 'gpt-5.5-pro' }).out[0] === 180 &&
+      resolvePricing({ model: 'gpt-5.5-cyber', inTokens: 100000 }).miss[0] === 12.5 &&
+      resolvePricing({ model: 'gpt-5.5-cyber', inTokens: 300000 }).out[0] === 112.5,
+    JSON.stringify({
+      sol: resolvePricing({ model: 'gpt-6-sol', inTokens: 100000 }).miss,
+      pro: resolvePricing({ model: 'gpt-5.5-pro' }).out,
+    })
+  )
+  // Claude 2026-10-10：sonnet-5-5 缓存读修正 0.1；haiku-5-5 按 100K 输入整单
+  // 分档（>100K ×5）；mythos 系与 fable 同价
+  const haikuLo = resolvePricing({ model: 'claude-haiku-5-5', inTokens: 50000 })
+  const haikuHi = resolvePricing({ model: 'claude-haiku-5-5', inTokens: 200000 })
+  check(
+    'Claude 增补与修正：sonnet-5-5 读 0.1；haiku-5-5 100K 分档（$0.1→$0.5）；mythos 同 fable',
+    resolvePricing({ model: 'claude-sonnet-5-5' }).hit[0] === 0.1 &&
+      haikuLo.tier === '<=100K' && haikuLo.miss[0] === 0.1 && haikuLo.out[0] === 0.5 &&
+      haikuHi.tier === '>100K' && haikuHi.miss[0] === 0.5 && haikuHi.out[0] === 2.5 &&
+      resolvePricing({ model: 'claude-mythos-5-1' }).miss[0] === 10 &&
+      resolvePricing({ model: 'claude-mythos-5' }).hit[0] === 1,
+    JSON.stringify({ lo: haikuLo.miss, hi: haikuHi.miss })
+  )
+  // Qwen 2026-10-10 补齐：qwen3.6-plus / qwen3.6-flash / qwen3.5-flash 分档
+  const q36p = resolvePricing({ model: 'qwen3.6-plus', inTokens: 100000 })
+  const q36f = resolvePricing({ model: 'qwen3.6-flash', inTokens: 300000 })
+  const q35f = resolvePricing({ model: 'qwen3.5-flash', inTokens: 200000 })
+  check(
+    'Qwen 补齐：3.6-plus ≤256K ¥2/¥12；3.6-flash >256K ¥4.8/¥28.8；3.5-flash 128K-256K ¥0.8/¥8',
+    q36p.miss[0] === 2 && q36p.out[0] === 12 &&
+      q36f.tier === '256K-1M' && q36f.miss[0] === 4.8 && q36f.out[0] === 28.8 &&
+      q35f.tier === '128K-256K' && q35f.miss[0] === 0.8 && q35f.out[0] === 8,
+    JSON.stringify({ p: q36p.miss, f: q36f.miss, f35: q35f.miss })
   )
   // 未知模型不套任何价目（含「仅 provider 名沾 DeepSeek」的误配场景）
   const unknown = costOfUsage('mystery-9000', { input_tokens: 1000, output_tokens: 10 }, at, 'weird-corp')
