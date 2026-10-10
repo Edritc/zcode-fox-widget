@@ -1802,6 +1802,55 @@ try {
     JSON.stringify(cmdgoLegacyBack.alerts)
   )
 
+  // 角色气泡配色覆盖（inkOverrides）：形状收敛——十六进制统一小写 6 位（3 位扩位）、
+  // 非法色值/非法 roleId/两档全空的条目丢弃；整张映射替换，条目缺失 = 删除
+  const inkPut = await fetch('http://127.0.0.1:' + port + '/whale/size.json', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      scale: 1.5,
+      inkOverrides: {
+        fox: { light: '#AABBCC', dark: '#5d8dde' },
+        gpt: { light: 'abc' },
+        kimi: { light: 'not-a-color', dark: 'rgb(1,2,3)' },
+        whale: { light: '', dark: '' },
+        ['x'.repeat(41)]: { light: '#112233' },
+      },
+    }),
+  })
+  const inkBody = await inkPut.json()
+  check(
+    '角色配色覆盖写入并收敛（大写归一/3 位扩 6 位/非法条目丢弃）',
+    inkPut.ok &&
+      inkBody.inkOverrides &&
+      inkBody.inkOverrides.fox &&
+      inkBody.inkOverrides.fox.light === '#aabbcc' &&
+      inkBody.inkOverrides.fox.dark === '#5d8dde' &&
+      inkBody.inkOverrides.gpt &&
+      inkBody.inkOverrides.gpt.light === '#aabbcc' &&
+      inkBody.inkOverrides.kimi === undefined &&
+      inkBody.inkOverrides.whale === undefined &&
+      inkBody.inkOverrides['x'.repeat(41)] === undefined,
+    JSON.stringify(inkBody.inkOverrides)
+  )
+  const inkBack = await getJson(port, '/whale/size.json')
+  check(
+    '角色配色覆盖持久化回读',
+    inkBack && inkBack.inkOverrides && inkBack.inkOverrides.fox && inkBack.inkOverrides.fox.light === '#aabbcc',
+    JSON.stringify(inkBack && inkBack.inkOverrides)
+  )
+  await fetch('http://127.0.0.1:' + port + '/whale/size.json', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scale: 1.5, inkOverrides: {} }),
+  })
+  const inkClearBack = await getJson(port, '/whale/size.json')
+  check(
+    '角色配色覆盖整张替换（空映射 = 全部清除）',
+    inkClearBack && inkClearBack.inkOverrides && Object.keys(inkClearBack.inkOverrides).length === 0,
+    JSON.stringify(inkClearBack && inkClearBack.inkOverrides)
+  )
+
   // 角色库：内置小狐娘（默认）/小鲸鱼固定在前，上传件自动启用；未指定时默认小狐娘
   const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
   const upRes = await fetch('http://127.0.0.1:' + port + '/whale/role-upload.json', {
