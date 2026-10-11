@@ -6,16 +6,27 @@
 
 ---
 
-## v1.9.1 调价：DeepSeek V4.1-Flash 降价 + 全厂商 2026-10-10 快照复核
+## v1.10.0 新增：角色气泡配色自定义（调色板 / HEX·RGB）+ 气泡体验批次（倒计时流光 / 续时 / TTL 兜底）+ 全厂商调价复核
 
-> 官网全量复核（每家官方价目页 + LiteLLM 注册表交叉）。GLM / MiniMax / MiMo 现值与官方一致，未动。
+- **角色气泡配色自定义（issue #1）**：角色菜单每行新增配色入口（圆点显示当前生效浅色墨色），点开「气泡配色」弹层——浅/深两档独立可调，内嵌 **HSV 调色板**（彩虹色相条 + 饱和度/明度渐变面，拖拽实时生效；浮层是无边框置顶窗口、系统取色弹窗弹不出来，故页内自绘），同时支持输入 `#1A2B3C` / `26,43,60` / `rgb(26,43,60)`；五套内置配色一键整套套用、恢复默认一键清除。覆盖写入 `widget-state.json` 的 `inkOverrides`（服务端做颜色形状收敛：统一小写 6 位、3 位扩位、非法条目丢弃），任一档缺省回落内置配色；浅色档整套界面着色（设置按钮/二级页/控件）跟随生效。
+- **峰谷倒计时 + 流光**：服务端余额载荷新增 `peakNextChangeAt`（`pricing.nextPeakChange`，与 `isPeakTime` 同口径、含周末谷价规则）；气泡新增 `{countdown}` 占位符，出厂时段行升级为「空闲时段 02:13:45」，活动行 1 秒 ticker 逐秒原地走字、跨过切换点当场换文案换色（修掉「泡开着跨切换点停在旧状态」的滞留缺陷）；时段/倒计时行按峰谷状态挂红系/绿系渐变流光（`zcwv-flow-peak/off`），`prefers-reduced-motion` 下退化为静态；编辑器新增「峰谷倒计时」预设模块。MiMo 夜间配额（0–8 点）同样有倒计时（下一个 0:00/8:00 边界）。
+- **点角色续时**：第 1 泡（内置视图）显示中再点角色只重置留存计时，不再重置队列重绘内容；第 2 步及以后仍回序列开头（对齐上游 whaleClick 语义）。
+- **气泡自动收起的后台节流兜底**：浮层被遮挡/最小化时 `setTimeout` 被节流甚至挂起，「5 秒收起」可能变成永不收——每次武装计时器同时记截止时刻，页面重新可见 / 拿到焦点 / 每秒巡检三路补收（对齐上游 v789）；余额 / 消耗 / 预警泡全部接入。
+- **点角色唤起气泡提速**：点角色不再强制把视图打成「加载中」等网络回来重绘（拖沓主因）——已有缓存就保持现状、数据回来无缝重绘；点击推进的换内容节奏对齐上游（淡出 .18s/190ms → .12s/120ms、淡入 .16s）；gif 显现移除 .26s 开启延迟。
+- **图挂降级扩展**：图片模块加载失败时，纯图步降级为一句备胎文案（「gif 加载失败了…」等三选一），图文混排步只藏图保文字（gif 台词组路径原有同类降级）。
+- **修复：配色色块与取色面边缘细线**——内联 `background` 简写把 `origin` 重置回 `padding-box`、`repeat` 重置回 `repeat`，渐变瓦片在半透明描边区平铺出「相邻瓦片末色」的细线（预设色块左缘、取色面左列与底行）；改设 `backgroundImage` 并把 origin/clip 收敛到 border-box + no-repeat。
+- **调价复核（官网全量 + LiteLLM 交叉，2026-10-10 快照）**：
+  - **DeepSeek**：在售收敛为 `deepseek-flash`（V4.1-Flash）与 `deepseek-v4-pro`。V4.1-Flash 输入（未命中）空闲/高峰 ¥1.5/¥3.0 → **¥1/¥2**、输出 ¥4.5/¥9.0 → **¥4/¥8**、缓存命中 → **¥0.02/¥0.04**；v4-pro 不变。旧名 `deepseek-v4-flash` / `-vision-exp` 退役、由 V4.1-Flash 承接同价；`deepseek-chat` / `deepseek-reasoner` 退出在售清单（条目按 Flash 价兜底）。峰谷时段与周末规则未变。
+  - **OpenAI**：新增 `gpt-6-sol`（$2/$10）、`gpt-5.3`（$1.75/$14）、`gpt-5.5-pro`（$30/$180）、`gpt-5.5-cyber`（$12.5/$75 分档）；既有 5.6/6.x 全系逐项一致。
+  - **Claude**：新增 `claude-haiku-5-5`（100K 输入整单分档）与 `claude-mythos-5(-1)`；修正 `claude-sonnet-5-5` 缓存读 $0.2 → **$0.1**（官方显式公布）。
+  - **Qwen**：新增 `qwen3.6-plus` / `qwen3.6-flash` / `qwen3.5-flash`；`qwen3-max` 退出官方价目页（3.5–3.8 系接替，按旧快照保留）；3.8/3.7 系一致。
+  - **Kimi**：`kimi-latest`、`kimi-k2.5`、快照版与 `moonshot-v1` 系下线（迁移 k3），条目移除；在售 k3 / k2.7-code(+highspeed) / k2.6 一致。
+  - **GLM / MiniMax / MiMo**：复核无变化。
+- **测试**：selftest 259→263（inkOverrides 三组、nextPeakChange 边界、价目增删各一组）、smoke-ui 82→87（倒计时占位符 / 流光挂色 / 逐秒走字 / 图挂降级 / 点角色续时）；调色板真实鼠标拖拽探针 12/12。
 
-- **DeepSeek 调价（api-docs.deepseek.com，2026-10-10）**：在售模型收敛为 `deepseek-flash`（DeepSeek-V4.1-Flash）与 `deepseek-v4-pro`。V4.1-Flash 输入（未命中）空闲/高峰 ¥1.5/¥3.0 → **¥1/¥2**、输出 ¥4.5/¥9.0 → **¥4/¥8**、缓存命中 ¥0.05/¥0.1 → **¥0.02/¥0.04**；v4-pro 现值不变。旧名 `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` 官方标注退役、由 V4.1-Flash 承接并按 Flash 价计费（表内同价）；`deepseek-chat` / `deepseek-reasoner` 已不在官方在售清单，条目保留按 Flash 价兜底。峰谷时段定义与周末谷价规则未变。
-- **OpenAI（USD，LiteLLM + 官方页搜索摘要双源）**：新增 `gpt-6-sol`（6.0 旗舰，$2/$10，>272K 档 ×2/×1.5）、`gpt-5.3`（chat-latest/codex，与 5.2 同价 $1.75/$14）、`gpt-5.5-pro`（$30/$180）、`gpt-5.5-cyber`（$12.5/$75 分档）。既有 GPT-5.6/6.x 全系现值逐项核对一致。
-- **Claude（claude.com/pricing）**：新增 `claude-haiku-5-5`——官方按「单次请求输入是否超 100K」整单取档（$0.1/$0.5 → $0.5/$2.5，缓存读 $0.01/$0.05、写 1.25×）；新增 `claude-mythos-5` / `claude-mythos-5-1`（官方页未列 API 价，LiteLLM 与 fable 同价）；修正 `claude-sonnet-5-5` 缓存读 $0.2 → **$0.1**（官方显式公布）。其余全表现值一致。
-- **Qwen（help.aliyun.com 华北2北京）**：新增 `qwen3.6-plus`（¥2/¥12，>256K ¥8/¥48）、`qwen3.6-flash`（¥1.2/¥7.2，>256K ¥4.8/¥28.8）、`qwen3.5-flash`（三档）；qwen3.8/3.7 系现值逐项一致；`qwen3-max` 已不在官方价目页（3.5–3.8 系接替），条目按旧快照保留；qwen3.7-plus 注释更正为「表内即官方现行 8 折价」。
-- **Kimi（platform.kimi.com docs/models + pricing/chat）**：`kimi-latest`、`kimi-k2.5`、快照版 `kimi-2150422/2150622` 与 `moonshot-v1` 系均已下线（统一迁移 kimi-k3），条目移除——调用旧名按「无价目、仅统计 tokens」处理；在售 k3 / k2.7-code(+highspeed) / k2.6 现值一致。
-- **测试**：selftest 259→263（DeepSeek 新价、OpenAI 增补四条、Claude 分档与修正、Qwen 补齐、Kimi 下线清除各一组）。
+---
+
+## v1.9.0 新增：泡泡 v2.1 移植 + 多角色体系（五套内置角色 / 专属台词 / 浅色配色全套跟随）
 
 ---
 
