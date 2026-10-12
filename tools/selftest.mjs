@@ -1406,6 +1406,8 @@ const serverEnv = {
   ZCODE_DATA_BASE_DIR: tmpHome,
   // CommandCode 额度读取隔离：指向空目录，绝不读真实反代凭据、绝不真出网
   CMDGO_DIR: path.join(tmpHome, 'cmdgo-empty'),
+  // 版本自检会向镜像发真实请求：测试环境整个关掉（见 lib/update.mjs 的 startAutoCheck）
+  WHALE_DISABLE_UPDATE_CHECK: '1',
 }
 let childLog = ''
 function spawnServer() {
@@ -1930,6 +1932,73 @@ try {
     inkClearBack && inkClearBack.inkOverrides && Object.keys(inkClearBack.inkOverrides).length === 0,
     JSON.stringify(inkClearBack && inkClearBack.inkOverrides)
   )
+
+  // 版本更新路由：GET 状态 + POST skip/unskip（状态文件直接写进测试数据目录，
+  // 因为「跳过」记的是「当前最新版本」，没有远端检查结果时本就没有可跳过的目标）。
+  // 不做 POST check / update：那会真的向镜像发请求与落盘，测试环境已用
+  // WHALE_DISABLE_UPDATE_CHECK 关掉自动检查，这里也不主动触发。
+  const upGet = await getJson(port, '/whale/update.json')
+  check(
+    '更新状态路由：GET 返回版本与状态字段（未检查时 available=false）',
+    upGet && upGet.ok === true && typeof upGet.version === 'string' && upGet.busy === false &&
+      upGet.available === false && upGet.skipped === null && upGet.version === pluginJson.version,
+    JSON.stringify(upGet && { version: upGet.version, available: upGet.available, skipped: upGet.skipped })
+  )
+  fs.writeFileSync(
+    path.join(dataDir, 'update-state.json'),
+    JSON.stringify({ latest: '9.9.9', available: true, busy: false, phase: null, checkedAt: Date.now(), source: 'test' }),
+    'utf8'
+  )
+  const upAvail = await getJson(port, '/whale/update.json')
+  check(
+    '更新状态路由：有新版本时 available=true 且带 latest',
+    upAvail && upAvail.available === true && upAvail.latest === '9.9.9' && upAvail.skipActive === false,
+    JSON.stringify(upAvail && { latest: upAvail.latest, skipActive: upAvail.skipActive })
+  )
+  const skipRes = await fetch('http://127.0.0.1:' + port + '/whale/update.json', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'skip' }),
+  })
+  const skipBody = await skipRes.json()
+  const skipState = JSON.parse(fs.readFileSync(path.join(dataDir, 'widget-state.json'), 'utf8'))
+  check(
+    '更新路由：跳过此版本 → 写入 widget-state.updateSkip 并回报 skipActive',
+    skipRes.ok && skipBody.skipActive === true && skipBody.skipped === '9.9.9' && skipState.updateSkip === '9.9.9',
+    JSON.stringify({ skipped: skipBody.skipped, skipActive: skipBody.skipActive, state: skipState.updateSkip })
+  )
+  const unskipRes = await fetch('http://127.0.0.1:' + port + '/whale/update.json', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'unskip' }),
+  })
+  const unskipBody = await unskipRes.json()
+  const unskipState = JSON.parse(fs.readFileSync(path.join(dataDir, 'widget-state.json'), 'utf8'))
+  check(
+    '更新路由：取消跳过 → updateSkip 清空、skipActive 归 false',
+    unskipRes.ok && unskipBody.skipActive === false && unskipState.updateSkip === null,
+    JSON.stringify({ skipActive: unskipBody.skipActive, state: unskipState.updateSkip })
+  )
+  const badAction = await fetch('http://127.0.0.1:' + port + '/whale/update.json', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'nope' }),
+  })
+  check('更新路由：未知动作 400（不误触发任何流程）', badAction.status === 400, 'status=' + badAction.status)
+
+  // 版本更新内核单测：独立子进程（隔离 ZCODE_HOME，避免写到真实数据目录）
+  {
+    const run = spawnSync(process.execPath, [path.join(PLUGIN_ROOT, 'tools', 'selftest-update.mjs')], {
+      encoding: 'utf8',
+      env: { ...process.env, ZCODE_HOME: tmpHome, WHALE_DISABLE_UPDATE_CHECK: '1' },
+    })
+    const m = /更新内核自检：(\d+)\/(\d+) 通过/.exec(String(run.stdout || ''))
+    check(
+      '版本更新内核单测全绿（版本比较 / 出站守卫 / tar 解包 / 落盘清理 / 检查回退 / 整包更新 / 防重入）',
+      run.status === 0 && !!m && m[1] === m[2] && Number(m[2]) >= 28,
+      m ? m[0] + '（共 ' + m[2] + ' 项）' : (((run.stderr || '') + (run.stdout || '')).slice(-260) || '无输出')
+    )
+  }
 
   // 角色库：内置小狐娘（默认）/小鲸鱼固定在前，上传件自动启用；未指定时默认小狐娘
   const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='

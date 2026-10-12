@@ -186,6 +186,8 @@ const server = spawn(process.execPath, [path.join(PLUGIN_ROOT, 'lib', 'server.mj
     ZCODE_DATA_BASE_DIR: tmpHome,
     // CommandCode 额度读取隔离：指向空目录，绝不读真实反代凭据、绝不真出网
     CMDGO_DIR: path.join(tmpHome, 'cmdgo-empty'),
+    // 版本自检会向镜像发真实请求：冒烟环境关掉，更新面板改用 fetch 桩驱动
+    WHALE_DISABLE_UPDATE_CHECK: '1',
   },
   stdio: 'ignore',
 })
@@ -2071,6 +2073,88 @@ try {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ v: 2, tapAdvance: true, steps: [] }),
   })
+
+  // ⑬ 版本更新面板 + 新版本提醒（v1.11.0 引入）：用 fetch 桩喂「有新版本」状态，
+  //    走真实交互（菜单在，点按钮开面板、点跳过、点返回）。桩随 reload 生效，
+  //    检查放在最后，免得重置前面的用例状态。
+  const updateStub =
+    '(function(){var real=window.fetch;window.__upSkip=false;window.fetch=function(u,o){' +
+    "var s=String(u&&u.url?u.url:u);if(s.indexOf('/whale/update.json')!==-1){" +
+    "if(o&&o.method==='POST'){try{var a=JSON.parse(o.body||'{}');if(a.action==='skip')window.__upSkip=true;if(a.action==='unskip')window.__upSkip=false}catch(e){}}" +
+    "var b={ok:true,version:'1.10.0',latest:'9.9.9',available:true,skipped:window.__upSkip?'9.9.9':null," +
+    "skipActive:window.__upSkip,busy:false,phase:null,progress:0,message:null,source:'stub'};" +
+    "return Promise.resolve(new Response(JSON.stringify(b),{status:200,headers:{'Content-Type':'application/json'}}))}" +
+    'return real.apply(this,arguments)}})()'
+  const stubUp = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: updateStub })
+  await cdp.send('Page.reload')
+  await new Promise((r) => setTimeout(r, 3000))
+  await pollEval(cdp, "document.readyState === 'complete' && !!document.querySelector('.zcwv-hint')", 12000)
+  // 新版本提醒：boot 后的第一次轮询就应弹一次提醒气泡
+  const upNotify = await pollEval(
+    cdp,
+    "(function(){var l=document.querySelector('.zcwv-label');var open=document.querySelector('.zcwv-bubble').classList.contains('zcwv-bubble-open');" +
+      "return (open&&l&&l.textContent.indexOf('\\u53d1\\u73b0\\u65b0\\u7248\\u672c')===0)?l.textContent:null})()",
+    8000
+  )
+  check('发现新版本时弹一次提醒气泡', upNotify === '发现新版本 v9.9.9', JSON.stringify(upNotify))
+
+  // 打开菜单 → 更新行状态文字 + 入口按钮
+  await cdp.eval("(function(){document.querySelector('.zcwv-menu-btn').click();return true})()")
+  await new Promise((r) => setTimeout(r, 600))
+  const upMenu = JSON.parse(
+    await cdp.eval(
+      "(function(){var st=document.querySelector('.zcwv-update-state');var bs=document.querySelectorAll('.zcwv-menu-row button');var btn=null;" +
+        "for(var i=0;i<bs.length;i++){if(bs[i].textContent.indexOf('\\u68c0\\u67e5\\u66f4\\u65b0')===0)btn=bs[i]}" +
+        "return JSON.stringify({state:st?st.textContent:null,hasBtn:!!btn})})()"
+    )
+  )
+  check(
+    '菜单「更新」行：入口在 + 状态显示有新版本',
+    !!upMenu && upMenu.hasBtn === true && upMenu.state === '有新版本 v9.9.9',
+    JSON.stringify(upMenu)
+  )
+  const upPanel = JSON.parse(
+    await cdp.eval(
+      "(function(){var bs=document.querySelectorAll('.zcwv-menu-row button');var btn=null;" +
+        "for(var i=0;i<bs.length;i++){if(bs[i].textContent.indexOf('\\u68c0\\u67e5\\u66f4\\u65b0')===0)btn=bs[i]}" +
+        "if(!btn)return JSON.stringify({err:'no-btn'});btn.click();" +
+        "var p=document.querySelector('.zcwv-update');if(!p)return JSON.stringify({err:'no-panel'});" +
+        "var vers=p.querySelectorAll('.zcwv-update-ver');var bs2=p.querySelectorAll('button');var labels=[];" +
+        "for(var j=0;j<bs2.length;j++)labels.push(bs2[j].textContent);" +
+        "return JSON.stringify({open:p.classList.contains('zcwv-panel-open'),cur:vers[0]?vers[0].textContent:null," +
+        'latest:vers[1]?vers[1].textContent:null,labels:labels})})()'
+    )
+  )
+  check(
+    '更新面板：打开显示当前 / 最新版本，主按钮为「立即更新」',
+    !!upPanel && upPanel.open === true && upPanel.cur === 'v1.10.0' && upPanel.latest === 'v9.9.9' &&
+      (upPanel.labels || []).indexOf('立即更新') !== -1 && (upPanel.labels || []).indexOf('跳过此版本') !== -1,
+    JSON.stringify(upPanel)
+  )
+  const upSkipped = JSON.parse(
+    await cdp.eval(
+      "(function(){var p=document.querySelector('.zcwv-update');var bs=p.querySelectorAll('button');" +
+        "for(var i=0;i<bs.length;i++){if(bs[i].textContent==='\\u8df3\\u8fc7\\u6b64\\u7248\\u672c'){bs[i].click();" +
+        "return JSON.stringify({clicked:true})}}return JSON.stringify({clicked:false})})()"
+    )
+  )
+  const upAfterSkip = await pollEval(
+    cdp,
+    "(function(){var p=document.querySelector('.zcwv-update');if(!p)return null;var bs=p.querySelectorAll('button');var labels=[];" +
+      "for(var i=0;i<bs.length;i++)labels.push(bs[i].textContent);" +
+      "return labels.indexOf('\\u53d6\\u6d88\\u8df3\\u8fc7')!==-1?labels.join(','):null})()",
+    6000
+  )
+  check('更新面板：跳过此版本 → 按钮变「取消跳过」（状态回报 skipActive）', !!upSkipped.clicked && !!upAfterSkip, JSON.stringify(upAfterSkip))
+  const upClosed = JSON.parse(
+    await cdp.eval(
+      "(function(){var p=document.querySelector('.zcwv-update');var bs=p.querySelectorAll('button');" +
+        "for(var i=0;i<bs.length;i++){if(bs[i].textContent==='\\u8fd4\\u56de'){bs[i].click();" +
+        "return JSON.stringify({open:p.classList.contains('zcwv-panel-open')})}}return JSON.stringify({err:'no-back'})})()"
+    )
+  )
+  check('更新面板：返回按钮收起面板', !!upClosed && upClosed.open === false, JSON.stringify(upClosed))
+  if (stubUp && stubUp.identifier) await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: stubUp.identifier })
 } catch (err) {
   check('冒烟过程未抛异常', false, String((err && err.message) || err))
 } finally {
