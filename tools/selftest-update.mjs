@@ -282,6 +282,38 @@ function mkRoot(name, entries) {
     },
   })
   check('checkForUpdate：全部源失败写 error（不抛异常）', !!st4.error && st4.error.includes('检查失败'), String(st4.error).slice(0, 60))
+
+  // 镜像缓存陈旧（实测：刚发版后 ghproxy 代理的 raw 仍返回上一版）——不能只看
+  // 第一个成功的响应，要取所有候选里的最高版本；旧值不得把新版本盖掉
+  const staleEps = [
+    { name: 'stale-mirror', url: 'https://ghproxy.net/x', pick: U.parsePluginJsonVersion },
+    { name: 'fresh-api', url: 'https://api.github.com/x', pick: U.parsePluginJsonVersion },
+  ]
+  const staleFirst = await U.checkForUpdate({
+    current: '1.10.0',
+    endpoints: staleEps,
+    fetchImpl: async (url) => fakeRes(String(url).includes('ghproxy.net') ? '{"version":"1.10.0"}' : '{"version":"1.11.0"}'),
+  })
+  check(
+    'checkForUpdate：镜像返回缓存旧版本时不会被当成「已是最新」（取最高版本）',
+    staleFirst.latest === '1.11.0' && staleFirst.available === true && staleFirst.source === 'fresh-api',
+    JSON.stringify({ latest: staleFirst.latest, source: staleFirst.source })
+  )
+  const allStale = await U.checkForUpdate({
+    current: '1.11.0',
+    endpoints: staleEps,
+    fetchImpl: async (url) => fakeRes(String(url).includes('ghproxy.net') ? '{"version":"1.10.0"}' : '{"version":"1.11.0"}'),
+  })
+  check(
+    'checkForUpdate：陈旧值 + 权威值并存时以高者为准（available=false，latest 不回退）',
+    allStale.latest === '1.11.0' && allStale.available === false,
+    JSON.stringify({ latest: allStale.latest, available: allStale.available })
+  )
+  check(
+    '探测地址带时间戳防缓存参数（镜像 CDN 缓存键不命中）',
+    U.buildVersionEndpoints().every((e) => e.url.includes('?t=')),
+    U.buildVersionEndpoints().map((e) => e.name).join(',')
+  )
 }
 
 // ---------- 8. 整包更新编排（注入 files，不出网） ----------
