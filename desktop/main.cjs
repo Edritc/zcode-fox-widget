@@ -90,8 +90,15 @@ function kickPresentation(reason) {
   if (!win || win.isDestroyed()) return
   try {
     win.webContents.invalidate()
-    win.moveTop()
-    log('kick', reason)
+    // moveTop 会重排 z 序：宿主（ZCode）一旦被判成「被遮挡」，Chromium 会停止
+    // 给它出帧，表现就是「点了角色之后 ZCode 画面不刷新，点一下才恢复」
+    //（issue #2）。周期性保险只在**真的丢了置顶**时才重申层级，平时只补一帧。
+    if (reason !== 'periodic' || !win.isAlwaysOnTop()) {
+      win.moveTop()
+      log('kick', reason)
+    } else {
+      log('kick', reason + ' no-movetop')
+    }
   } catch (err) {}
 }
 
@@ -397,6 +404,15 @@ function noteZCodeIdentity(msg) {
   zcodePid = pid
   zcodePidStart = start
   uiReady = false
+  // 换了宿主进程（ZCode 重启 / 更新）：立刻交还鼠标并隐身。留着接管态会让
+  // 透明置顶窗口继续盖在新起来的宿主（或其安装程序）上吃点击——issue #2
+  // 的「更新程序无法关闭 ZCode」正是这个形态。
+  try {
+    if (interactive) applyInteractive(false, true)
+  } catch (err) {}
+  try {
+    if (win && !win.isDestroyed()) hideOverlay('zcode-identity-changed')
+  } catch (err) {}
 }
 
 // ---------- ZCode 当前主题的观测 ----------
@@ -453,6 +469,10 @@ function refreshUiReady() {
   return uiReady
 }
 
+// 空窗看门狗：宿主窗口消失超过 MISSING_QUIT_MS 就一起退出，别赖在桌面上。
+// 只统计「窗口不存在」这一段（window-missing / 宿主换了进程），被盖住与加载中都不算。
+const MISSING_QUIT_MS = 30000
+let missingSince = 0
 function hideOverlay(reason) {
   if (overlayShown) {
     overlayShown = false
@@ -460,8 +480,25 @@ function hideOverlay(reason) {
     win.setIgnoreMouseEvents(true) // 无 forward：隐身期间页面不许再驱动接管
     win.setOpacity(0)
   }
+  // 宿主窗口「不存在了」（不是被盖住、也不是在加载）超过一段时间就退出：
+  // 更新 ZCode 时旧进程退、新进程还没起来，会出现一段「目标进程还在、窗口没了」
+  // 的空窗；此时浮层是一块不该存在的透明置顶窗口，盖在安装程序上会吃点击
+  //（issue #2「无法关闭 ZCode」）。被盖住 / 加载中都不算（那是正常状态）。
+  if (reason === 'window-missing' || reason === 'zcode-identity-changed') {
+    if (!missingSince) missingSince = Date.now()
+  }
   log('hidden', reason)
 }
+
+// 空窗看门狗：宿主窗口消失超过 MISSING_QUIT_MS 就一起退出，别赖在桌面上
+setInterval(() => {
+  if (!missingSince) return
+  if (petMode) return // 桌宠模式只关心宿主进程存活（msg.gone 才退）
+  if (Date.now() - missingSince < MISSING_QUIT_MS) return
+  missingSince = 0
+  log('quit-window-missing', String(MISSING_QUIT_MS) + 'ms')
+  app.quit()
+}, 10000)
 
 // 加载期挂一个轻量轮询：就绪后立刻补一次显示（跟随脚本只在状态变化时发消息，
 // 加载期间不会有新的 show 消息到来）
@@ -550,6 +587,7 @@ function applyZCodeBounds(msg) {
 // 视口（页面端 settle 会自动按新视口重钳位置记忆，锚点语义无需迁移）。
 function applyFrame(frame) {
   lastViewport = frame
+  missingSince = 0 // 有可用视口 = 宿主窗口在（空窗看门狗据此复位）
 
   let reshowTransition = false
   if (!win.isVisible()) {
@@ -584,19 +622,21 @@ function applyFrame(frame) {
 }
 
 // ---------- 鼠标接管切换 ----------
-function applyInteractive(next) {
+// 注意 `force`：页面的接管去抖（120ms）会把「刚接管就要收」压平；宿主重启、
+// 窗口丢失这类必须立刻交还的场合要能跳过它（issue #2 的点击被吃掉正是这个形态）。
+function applyInteractive(next, force) {
   if (!win || win.isDestroyed()) {
     log('interactive-ignored', String(next))
     return
   }
   // 隐身期间页面不许驱动接管：invisible 窗口一旦接管会把本该落到 ZCode
   // 的点击整个吃掉（页面在透明度 0 下照常运行，会拿陈旧指针位置翻状态）
-  if (!overlayShown) {
+  if (!overlayShown && next) {
     log('interactive-ignored-hidden', String(next))
     return
   }
   const want = !!next
-  if (want === interactive) {
+  if (want === interactive && !force) {
     log('interactive-same', String(want))
     return
   }
@@ -606,7 +646,7 @@ function applyInteractive(next) {
   } else {
     win.setIgnoreMouseEvents(true, { forward: true })
   }
-  log('interactive-applied', String(want))
+  log('interactive-applied', String(want) + (force ? ' force' : ''))
 }
 
 ipcMain.on('whale:interactive', (_event, value) => {

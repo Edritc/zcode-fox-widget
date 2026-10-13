@@ -22,6 +22,7 @@ import { matchTemplateId, buildProviderEntries, invalidateDiscoverCache } from '
 import { computeTodayUsage, resolveTodayUsage, pickBalanceInfo, platformUsageUrl } from '../lib/balance.mjs'
 import { mapZcodeTheme, themeOfConfig, resolveZcodeTheme } from '../lib/zcode-theme.mjs'
 import { safeMirrorUrl } from '../lib/overlay.mjs'
+import { MODEL_ROLE_RULES, roleIdForModel } from '../lib/paths.mjs'
 import { findApiKey, readPluginConfig } from '../lib/credentials.mjs'
 import { resolveBillingSource, isNightOffpeak } from '../lib/source.mjs'
 
@@ -1997,6 +1998,233 @@ try {
       '版本更新内核单测全绿（版本比较 / 出站守卫 / tar 解包 / 落盘清理 / 检查回退 / 整包更新 / 防重入）',
       run.status === 0 && !!m && m[1] === m[2] && Number(m[2]) >= 28,
       m ? m[0] + '（共 ' + m[2] + ' 项）' : (((run.stderr || '') + (run.stdout || '')).slice(-260) || '无输出')
+    )
+  }
+
+  // 模型名 → 内置角色（「按模型自动换角色」）：ZCode 的模型标识是
+  // `<provider>/<model>` 拼串，既有网关前缀也有套餐前缀，必须子串匹配
+  {
+    check(
+      'roleIdForModel：五个族各自的代表写法（含网关/套餐前缀）',
+      roleIdForModel('deepseek/deepseek-flash') === 'whale' &&
+        roleIdForModel('account:zai-start-plan/GLM-5.3-Flash') === 'fox' &&
+        roleIdForModel('cmdgo-bridge/claude-sonnet-5-5') === 'xiaoke' &&
+        roleIdForModel('cmdgo-bridge/moonshotai/Kimi-K3') === 'kimi' &&
+        roleIdForModel('zai-org/GLM-5.3') === 'fox' &&
+        roleIdForModel('openai/gpt-5.6-terra') === 'gpt' &&
+        roleIdForModel('anthropic/claude-opus-5') === 'xiaoke',
+      [roleIdForModel('deepseek/deepseek-flash'), roleIdForModel('zai-org/GLM-5.3')].join(',')
+    )
+    check(
+      'roleIdForModel：认不出的模型返回 null（不动当前角色，不乱换人）',
+      roleIdForModel('qwen3.8-max') === null &&
+        roleIdForModel('MiniMax-M3') === null &&
+        roleIdForModel('mimo-v2.6-pro') === null &&
+        roleIdForModel('gemini-3-pro') === null &&
+        roleIdForModel('') === null &&
+        roleIdForModel(null) === null
+    )
+    // 前端不引 ESM，映射表在 widget.js 里各存一份——两边关键词必须一致（防漂移）
+    const widgetSrc = fs.readFileSync(path.join(PLUGIN_ROOT, 'lib', 'widget.js'), 'utf8')
+    const flat = (rules) => JSON.stringify(rules.map((r) => [r.roleId, [...r.keywords].sort()]).sort())
+    const frontendRules = (() => {
+      const m = /var rules = \[([\s\S]*?)\]\s*\n\s*for \(var i = 0; i < rules\.length/.exec(widgetSrc)
+      if (!m) return null
+      const rules = []
+      const re = /\['([a-z]+)', \[([^\]]*)\]\]/g
+      let hit
+      while ((hit = re.exec(m[1])) !== null) {
+        rules.push({ roleId: hit[1], keywords: hit[2].split(',').map((s) => s.trim().replace(/^'|'$/g, '')) })
+      }
+      return rules.length ? rules : null
+    })()
+    check(
+      '按模型换角色：前后端映射表一致（widget.js 的副本与 paths.mjs 的单一来源同口径）',
+      !!frontendRules && flat(frontendRules) === flat(MODEL_ROLE_RULES),
+      frontendRules ? flat(frontendRules) === flat(MODEL_ROLE_RULES) ? '一致' : '不一致：' + flat(frontendRules) : '未从 widget.js 解析到规则表'
+    )
+  }
+
+  // 钩子接线契约：只挂 SessionStart + 两个低频事件。PreToolUse/PostToolUse 每次
+  // 工具调用都要起一个 node（钩子内联执行），会给用户每次调用都加延迟——这条断言
+  // 就是把这个取舍钉住，避免以后「顺手」把工具事件加回来。
+  {
+    const hooksJson = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, 'hooks', 'hooks.json'), 'utf8'))
+    const events = Object.keys((hooksJson.hooks || {}))
+    const scripts = []
+    for (const ev of events) {
+      for (const group of hooksJson.hooks[ev] || []) {
+        for (const h of group.hooks || []) {
+          const arg = (h.args || [])[0] || ''
+          scripts.push(String(arg).replace('${ZCODE_PLUGIN_ROOT}/', ''))
+        }
+      }
+    }
+    check(
+      '钩子接线：SessionStart + UserPromptSubmit + PermissionRequest（不挂工具事件，避免每次调用加延迟）',
+      events.length === 3 &&
+        events.indexOf('SessionStart') !== -1 &&
+        events.indexOf('UserPromptSubmit') !== -1 &&
+        events.indexOf('PermissionRequest') !== -1 &&
+        events.indexOf('PreToolUse') === -1 &&
+        events.indexOf('PostToolUse') === -1 &&
+        events.indexOf('Stop') === -1,
+      events.join(',')
+    )
+    check(
+      '钩子接线：脚本都在仓库里（autostart.mjs / hook-event.mjs）',
+      scripts.indexOf('lib/autostart.mjs') !== -1 &&
+        scripts.indexOf('lib/hook-event.mjs') !== -1 &&
+        scripts.every((s) => fs.existsSync(path.join(PLUGIN_ROOT, s))),
+      scripts.join(',')
+    )
+  }
+
+  // hook-event.mjs：真跑一遍（隔离 ZCODE_HOME 的子进程），验状态文件与 waiting 语义
+  {
+    const lab = fs.mkdtempSync(path.join(os.tmpdir(), 'fox-hook-'))
+    const runHook = (payload) =>
+      spawnSync(process.execPath, [path.join(PLUGIN_ROOT, 'lib', 'hook-event.mjs')], {
+        input: JSON.stringify(payload),
+        encoding: 'utf8',
+        env: { ...process.env, ZCODE_HOME: lab },
+      })
+    let r = runHook({ hook_event_name: 'UserPromptSubmit', session_id: 's1' })
+    let st = JSON.parse(fs.readFileSync(path.join(lab, 'whale', 'hook-state.json'), 'utf8'))
+    check(
+      'hook-event：UserPromptSubmit 写事件名/会话/时间戳，waiting=false，计数累加',
+      r.status === 0 && st.event === 'UserPromptSubmit' && st.sessionId === 's1' && st.waiting === false &&
+        st.ts > 0 && st.counts.UserPromptSubmit === 1,
+      JSON.stringify(st)
+    )
+    r = runHook({ hook_event_name: 'PermissionRequest', session_id: 's1', tool_name: 'Bash' })
+    st = JSON.parse(fs.readFileSync(path.join(lab, 'whale', 'hook-state.json'), 'utf8'))
+    check(
+      'hook-event：PermissionRequest → waiting=true（等确认），计数各自累加',
+      r.status === 0 && st.waiting === true && st.counts.PermissionRequest === 1 && st.counts.UserPromptSubmit === 1,
+      JSON.stringify({ waiting: st.waiting, counts: st.counts })
+    )
+    r = runHook({ hook_event_name: 'UserPromptSubmit', session_id: 's2' })
+    st = JSON.parse(fs.readFileSync(path.join(lab, 'whale', 'hook-state.json'), 'utf8'))
+    check(
+      'hook-event：下一轮提问清掉等确认标记（等待已过去）',
+      st.waiting === false && st.counts.UserPromptSubmit === 2,
+      JSON.stringify({ waiting: st.waiting, counts: st.counts })
+    )
+    // 坏输入（空 stdin / 非 JSON）不能抛、不能写坏文件、退出码必须 0
+    const empty = spawnSync(process.execPath, [path.join(PLUGIN_ROOT, 'lib', 'hook-event.mjs')], {
+      input: '',
+      encoding: 'utf8',
+      env: { ...process.env, ZCODE_HOME: lab },
+    })
+    const bad = spawnSync(process.execPath, [path.join(PLUGIN_ROOT, 'lib', 'hook-event.mjs')], {
+      input: 'not json at all',
+      encoding: 'utf8',
+      env: { ...process.env, ZCODE_HOME: lab },
+    })
+    const after = JSON.parse(fs.readFileSync(path.join(lab, 'whale', 'hook-state.json'), 'utf8'))
+    check(
+      'hook-event：空输入 / 坏 JSON 都以 0 退出且不改坏已有状态（钩子失败绝不能影响 ZCode）',
+      empty.status === 0 && bad.status === 0 && after.event === 'UserPromptSubmit' && after.ts > 0,
+      JSON.stringify({ empty: empty.status, bad: bad.status, event: after.event })
+    )
+    fs.rmSync(lab, { recursive: true, force: true })
+  }
+
+  // 钩子状态路由 + 新 widget-state 字段
+  {
+    const hookNotYet = await getJson(port, '/whale/hook.json')
+    check(
+      '钩子状态路由：没有事件文件时 configured=false（菜单显示「未接入」）',
+      hookNotYet && hookNotYet.ok === true && hookNotYet.configured === false && hookNotYet.waiting === false,
+      JSON.stringify(hookNotYet)
+    )
+    const nowSec = Math.floor(Date.now() / 1000)
+    fs.writeFileSync(
+      path.join(dataDir, 'hook-state.json'),
+      JSON.stringify({ event: 'PermissionRequest', tool: 'Bash', sessionId: 's9', ts: nowSec, waiting: true, counts: { PermissionRequest: 3 } }),
+      'utf8'
+    )
+    const hookFresh = await getJson(port, '/whale/hook.json')
+    check(
+      '钩子状态路由：新鲜事件 → event/tool/ts/waiting 透出，计数保留',
+      hookFresh && hookFresh.configured === true && hookFresh.event === 'PermissionRequest' && hookFresh.tool === 'Bash' &&
+        hookFresh.fresh === true && hookFresh.waiting === true && hookFresh.counts.PermissionRequest === 3,
+      JSON.stringify(hookFresh)
+    )
+    fs.writeFileSync(
+      path.join(dataDir, 'hook-state.json'),
+      JSON.stringify({ event: 'PermissionRequest', ts: nowSec - 600, waiting: true, counts: {} }),
+      'utf8'
+    )
+    const hookStale = await getJson(port, '/whale/hook.json')
+    check(
+      '钩子状态路由：等确认带时效（超过 120 秒未更新 → waiting=false，不会一直提醒）',
+      hookStale && hookStale.waiting === false && hookStale.ageSec >= 600,
+      JSON.stringify({ waiting: hookStale && hookStale.waiting, age: hookStale && hookStale.ageSec })
+    )
+    const autoPut = await fetch('http://127.0.0.1:' + port + '/whale/size.json', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scale: 1, autoRole: false, askAlert: true }),
+    })
+    const autoBody = await autoPut.json()
+    check(
+      'widget-state：autoRole / askAlert 写入并回读（默认 autoRole=true、askAlert=false）',
+      autoBody.autoRole === false && autoBody.askAlert === true &&
+        (await getJson(port, '/whale/size.json')).autoRole === false,
+      JSON.stringify({ autoRole: autoBody.autoRole, askAlert: autoBody.askAlert })
+    )
+    const keepPut = await fetch('http://127.0.0.1:' + port + '/whale/size.json', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scale: 1.2 }),
+    })
+    const keepBody = await keepPut.json()
+    check(
+      'widget-state：只改别的字段时不丢 autoRole / askAlert（白名单透传）',
+      keepBody.autoRole === false && keepBody.askAlert === true,
+      JSON.stringify({ autoRole: keepBody.autoRole, askAlert: keepBody.askAlert })
+    )
+    await fetch('http://127.0.0.1:' + port + '/whale/size.json', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scale: 1, autoRole: true, askAlert: false }),
+    })
+  }
+
+  // issue #2 修复点（浮层主进程没法在自检里真跑 Electron，这里按源码钉住关键分支，
+  // 防止后续重构把修复悄悄改掉；行为验证见 smoke 的接管看门狗用例与真机日志）
+  {
+    const mainSrc = fs.readFileSync(path.join(PLUGIN_ROOT, 'desktop', 'main.cjs'), 'utf8')
+    check(
+      'issue#2：周期性出帧保险不再无条件 moveTop（只在丢了置顶时重申层级）',
+      /reason !== 'periodic' \|\| !win\.isAlwaysOnTop\(\)/.test(mainSrc) && mainSrc.indexOf('no-movetop') !== -1,
+      ''
+    )
+    check(
+      'issue#2：宿主窗口长时间不存在时浮层自退（空窗看门狗，桌宠模式豁免）',
+      mainSrc.indexOf('MISSING_QUIT_MS') !== -1 &&
+        /reason === 'window-missing' \|\| reason === 'zcode-identity-changed'/.test(mainSrc) &&
+        /if \(petMode\) return/.test(mainSrc) &&
+        /log\('quit-window-missing'/.test(mainSrc),
+      ''
+    )
+    check(
+      'issue#2：宿主进程更换时立刻交还鼠标并隐身（更新/重启不再留下吃点击的透明窗口）',
+      /function applyInteractive\(next, force\)/.test(mainSrc) &&
+        /interactive\) applyInteractive\(false, true\)/.test(mainSrc) &&
+        /hideOverlay\('zcode-identity-changed'\)/.test(mainSrc),
+      ''
+    )
+    const widgetSrc2 = fs.readFileSync(path.join(PLUGIN_ROOT, 'lib', 'widget.js'), 'utf8')
+    check(
+      'issue#2：页面侧接管看门狗（接管中 6 秒无真实指针活动就强制交还穿透）',
+      widgetSrc2.indexOf('capture watchdog release') !== -1 &&
+        /Date\.now\(\) - last <= 6000/.test(widgetSrc2) &&
+        /setOverlayInteractive\(false, true\)/.test(widgetSrc2) &&
+        widgetSrc2.indexOf('if (v) {\n      lastInteractiveOnAt') !== -1,
+      ''
     )
   }
 

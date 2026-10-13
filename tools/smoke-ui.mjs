@@ -120,8 +120,16 @@ class Cdp {
     this.ws = new WebSocket(wsUrl)
     this.nextId = 1
     this.pending = new Map()
+    // 页面内未捕获异常也收集起来：用例里的交互若触发了页面侧报错，assert 往往只看到
+    // 「undefined 不是合法 JSON」这种间接症状，把真正的异常描述带出来便于定位
+    this.exceptions = []
     this.ws.addEventListener('message', (ev) => {
       const msg = JSON.parse(typeof ev.data === 'string' ? ev.data : String(ev.data))
+      if (msg.method === 'Runtime.exceptionThrown') {
+        const d = msg.params && msg.params.exceptionDetails
+        const text = (d && (d.exception && d.exception.description || d.text)) || ''
+        if (text) this.exceptions.push(String(text).split('\n').slice(0, 3).join(' | ').slice(0, 300))
+      }
       if (msg.id && this.pending.has(msg.id)) {
         const { resolve, reject } = this.pending.get(msg.id)
         this.pending.delete(msg.id)
@@ -2159,6 +2167,238 @@ try {
   )
   check('更新面板：返回按钮收起面板', !!upClosed && upClosed.open === false, JSON.stringify(upClosed))
   if (stubUp && stubUp.identifier) await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: stubUp.identifier })
+
+  // ⑭ 按模型换角色 + 钩子状态 + 等确认提醒（v-next）
+  // 桩直接在当前页面里覆盖 fetch（不 reload）：模型/钩子状态由 window.__model、
+  // window.__hook 两个旋钮驱动，页面自己的 3s（会话）/5s（钩子）轮询会跟着变。
+  const stubAuto = await cdp.eval(
+    "(function(){if(window.__stubInstalled)return 'already';window.__stubInstalled=1;" +
+      'window.__model="deepseek/deepseek-flash";window.__hook={ts:0,waiting:false,event:""};var real=window.fetch;' +
+      "function json(o){return Promise.resolve(new Response(JSON.stringify(o),{status:200,headers:{'Content-Type':'application/json'}}))}" +
+      'var U={ok:true,today:{total:0,tokens:0,totals:{},models:[]}};' +
+      'window.fetch=function(u,o){var s=String(u&&u.url?u.url:u);' +
+      "if(s.indexOf('/whale/session.json')!==-1)return json({ok:true,source:'stub',vendor:'stub',label:'Stub',timeMode:'none',modelId:window.__model,currency:'CNY',from:'selection'});" +
+      "if(s.indexOf('/whale/usage-records.json')!==-1)return json(U);" +
+      "if(s.indexOf('/whale/hook.json')!==-1)return json({ok:true,configured:window.__hook.ts>0,event:window.__hook.event,tool:'',ts:window.__hook.ts,ageSec:0,fresh:true,waiting:window.__hook.waiting,counts:{}});" +
+      'return real.apply(this,arguments)};return "ok"})()'
+  )
+  check('测试桩已生效（fetch 桩覆盖成功；桩失效会让下面的断言给出误导性结果）', stubAuto === 'ok', String(stubAuto))
+  const roleNow = async () =>
+    cdp.eval(
+      "(function(){var ts=document.querySelectorAll('.zcwv-role-trigger'),n=null;" +
+        "for(var i=0;i<ts.length;i++){if((ts[i].title||'').indexOf('\\u9009\\u62e9\\u5f62\\u8c61')===0){n=ts[i].querySelector('.zcwv-role-name')}}" +
+        'return n?n.textContent:null})()'
+    )
+  // 页面断言统一走容错解析：eval 里若抛异常会返回 undefined，直接 JSON.parse 会把
+  // 症状掩盖成「undefined 不是合法 JSON」（本次新增用例踩过这个坑）
+  const parseJsonSafe = (raw) => {
+    try {
+      return JSON.parse(raw)
+    } catch (err) {
+      return { err: 'bad-json:' + String(raw).slice(0, 80) }
+    }
+  }
+  // 菜单行结构：按模型换角色（默认勾选）+ 钩子（状态 + 等确认提醒，默认不勾）
+  const menuNewRows = parseJsonSafe(
+    await cdp.eval(
+      "(function(){var rows=document.querySelectorAll('.zcwv-menu-row');var out={auto:null,hook:null};" +
+        "for(var i=0;i<rows.length;i++){var t=rows[i].textContent;" +
+        "if(t.indexOf('\\u6309\\u6a21\\u578b\\u6362\\u89d2\\u8272')!==-1){var cb=rows[i].querySelector('.zcwv-check');out.auto=cb?cb.checked:null}" +
+        "if(t.indexOf('\\u94a9\\u5b50')!==-1){var st=rows[i].querySelector('.zcwv-update-state'),cb2=rows[i].querySelector('.zcwv-check');" +
+        "out.hook={state:st?st.textContent:null,ask:cb2?cb2.checked:null,hasLabel:t.indexOf('\\u7b49\\u786e\\u8ba4\\u63d0\\u9192')!==-1}}}" +
+        'return JSON.stringify(out)})()'
+    )
+  )
+  const autoSwitch = async () =>
+    parseJsonSafe(
+      await cdp.eval(
+        "(function(){try{var rows=document.querySelectorAll('.zcwv-menu-row');" +
+          "for(var i=0;i<rows.length;i++){if(rows[i].textContent.indexOf('\\u6309\\u6a21\\u578b\\u6362\\u89d2\\u8272')!==-1){" +
+          "var cb=rows[i].querySelector('.zcwv-check');return JSON.stringify({checked:cb?cb.checked:null})}}return '{}'}catch(e){return JSON.stringify({err:String(e)})}})()"
+      )
+    )
+  const clickAutoSwitch = () =>
+    cdp.eval(
+      "(function(){var rows=document.querySelectorAll('.zcwv-menu-row');for(var i=0;i<rows.length;i++){" +
+        "if(rows[i].textContent.indexOf('\\u6309\\u6a21\\u578b\\u6362\\u89d2\\u8272')!==-1){rows[i].querySelector('.zcwv-check').click();return true}}return false})()"
+    )
+  const menuIsOpen = () => cdp.eval("(function(){return !!document.querySelector('.zcwv-menu.zcwv-menu-open')})()")
+  const ensureMenuOpen = async () => {
+    if (!(await menuIsOpen())) await cdp.eval("(function(){document.querySelector('.zcwv-menu-btn').click();return true})()")
+    await new Promise((r) => setTimeout(r, 800))
+  }
+  check(
+    '菜单新增两行：按模型换角色 + 钩子状态（等确认提醒默认不勾）',
+    typeof menuNewRows.auto === 'boolean' && !!menuNewRows.hook && menuNewRows.hook.ask === false && menuNewRows.hook.hasLabel === true,
+    JSON.stringify(menuNewRows)
+  )
+  // 开关初值必须与 widget-state 一致：本次实现踩过「变量声明落在 buildMenu 调用之后，
+  // 初始化时把引用又置回 null/undefined」的坑——那时复选框初值就不对、点它还抛异常
+  const wsAuto = await (await fetch('http://127.0.0.1:' + PORT + '/whale/size.json')).json()
+  check(
+    '按模型换角色：开关初值与 widget-state 一致（防声明顺序类回归）',
+    menuNewRows.auto === (wsAuto.autoRole !== false),
+    JSON.stringify({ ui: menuNewRows.auto, state: wsAuto.autoRole })
+  )
+  // 前面的用例点过角色列表（= 手动表态）把开关关掉了，这里按用户的做法重新打开
+  if (!(await autoSwitch()).checked) await clickAutoSwitch()
+  await new Promise((r) => setTimeout(r, 600))
+  const switchOn = (await autoSwitch()).checked === true
+  check('按模型换角色：开关可重新打开（打开即按当前模型判一次）', switchOn, JSON.stringify(await autoSwitch()))
+  // 按模型换角色：期望值按「实际存在的角色」算——前面的用例删过内置形象，
+  // 这里从 roles.json 现读，避免把测试写成对删除顺序的隐式依赖
+  const rolesNow = await (await fetch('http://127.0.0.1:' + PORT + '/whale/roles.json')).json()
+  const hasRole = (id) => (rolesNow.roles || []).some((r) => r && r.id === id)
+  const nameOf = (id) => {
+    const hit = (rolesNow.roles || []).find((r) => r && r.id === id)
+    return hit ? hit.name : null
+  }
+  const beforeAuto = await roleNow()
+  const expectAfter = (id) => (hasRole(id) ? nameOf(id) : beforeAuto) // 角色缺失时不该换人
+  const snap = async () =>
+    parseJsonSafe(
+      await cdp.eval(
+        "(function(){try{function q(s){var n=document.querySelector(s);return n?n.textContent:null}" +
+          "var rows=document.querySelectorAll('.zcwv-menu-row'),sw=null;" +
+          "for(var i=0;i<rows.length;i++){if(rows[i].textContent.indexOf('\\u6309\\u6a21\\u578b\\u6362\\u89d2\\u8272')!==-1){var cb=rows[i].querySelector('.zcwv-check');sw=cb?cb.checked:null}}" +
+          "return JSON.stringify({model:String(window.__model),stub:!!window.__stubInstalled,auto:q('.zcwv-role-name'),switchOn:sw})}catch(e){return JSON.stringify({err:String(e)})}})()"
+      )
+    )
+  await cdp.eval("window.__model='zai-org/GLM-5.3'")
+  await new Promise((r) => setTimeout(r, 3600))
+  const afterGlm = await roleNow()
+  const snapGlm = await snap()
+  await cdp.eval("window.__model='cmdgo-bridge/moonshotai/Kimi-K3'")
+  await new Promise((r) => setTimeout(r, 3600))
+  const afterKimi = await roleNow()
+  check(
+    '按模型换角色：模型族切换 → 形象跟着换（GLM / Kimi；缺失的角色不换）',
+    beforeAuto === expectAfter('whale') && afterGlm === expectAfter('fox') && afterKimi === expectAfter('kimi') &&
+      afterKimi === nameOf('kimi'),
+    JSON.stringify({ before: beforeAuto, glm: afterGlm, kimi: afterKimi, has: { whale: hasRole('whale'), fox: hasRole('fox'), kimi: hasRole('kimi') }, snap: snapGlm, pageErr: cdp.exceptions.slice(-2) })
+  )
+  // 手动选角色 = 明确表态：开关自动关掉，之后模型再变也不跟随
+  const manual = parseJsonSafe(
+    (await cdp.eval(
+      "(function(){try{var ts=document.querySelectorAll('.zcwv-role-trigger');" +
+        "for(var i=0;i<ts.length;i++){if((ts[i].title||'').indexOf('\\u9009\\u62e9\\u5f62\\u8c61')===0){ts[i].click();break}}" +
+        "var rows=document.querySelectorAll('.zcwv-role-row');" +
+        "for(var i=0;i<rows.length;i++){var p=rows[i].querySelector('.zcwv-role-pick');" +
+        "if(p&&p.textContent!=='\\u5c0f\\u514b'){var nm=p.textContent;p.click();return JSON.stringify({picked:true,name:nm})}}" +
+        'return JSON.stringify({picked:false})}catch(e){return JSON.stringify({err:String(e)})}})()'
+    )) || '{"err":"eval-undefined"}'
+  )
+  await new Promise((r) => setTimeout(r, 700))
+  const autoOff = parseJsonSafe(
+    await cdp.eval(
+      "(function(){var rows=document.querySelectorAll('.zcwv-menu-row');" +
+        "for(var i=0;i<rows.length;i++){if(rows[i].textContent.indexOf('\\u6309\\u6a21\\u578b\\u6362\\u89d2\\u8272')!==-1){" +
+        "var cb=rows[i].querySelector('.zcwv-check');return JSON.stringify({checked:cb?cb.checked:null})}}return '{}'})()"
+    )
+  )
+  await cdp.eval("window.__model='deepseek/deepseek-flash'")
+  await new Promise((r) => setTimeout(r, 3600))
+  const afterManual = await roleNow()
+  check(
+    '手动选角色后「按模型换角色」自动关闭，且模型再变也不跟随（尊重手动选择）',
+    manual.picked === true && autoOff.checked === false && afterManual === manual.name,
+    JSON.stringify({ manual, autoOff, after: afterManual })
+  )
+  // 重新打开开关：模型立即生效，不必等下一拍轮询
+  if (!(await autoSwitch()).checked) await clickAutoSwitch()
+  await new Promise((r) => setTimeout(r, 900))
+  const afterReopen = await roleNow()
+  check(
+    '重新打开「按模型换角色」时立刻按当前模型判一次（不等 3 秒轮询）',
+    afterReopen === expectAfter('whale'),
+    JSON.stringify({ after: afterReopen, expect: expectAfter('whale'), switch: await autoSwitch() })
+  )
+  // 钩子状态行：时间戳新鲜时显示事件名 + 时分
+  const hookTs = Math.floor(Date.now() / 1000)
+  await cdp.eval(
+    '(function(){window.__hook={ts:' + hookTs + ",waiting:false,event:'UserPromptSubmit'};return true})()"
+  )
+  await ensureMenuOpen() // 打开菜单会立刻刷一次钩子状态（诊断行不该看到过期值）
+  const hookLine = await pollEval(
+    cdp,
+    "(function(){var es=document.querySelectorAll('.zcwv-menu-row');for(var i=0;i<es.length;i++){" +
+      "if(es[i].textContent.indexOf('\\u94a9\\u5b50')!==-1){var st=es[i].querySelector('.zcwv-update-state');" +
+      "return st&&st.textContent.indexOf('UserPromptSubmit')===0?st.textContent:null}}return null})()",
+    8000
+  )
+  check(
+    '钩子状态行：显示最近事件名与时间（诊断「接上了但从没收到事件」）',
+    typeof hookLine === 'string' && hookLine.indexOf('UserPromptSubmit') === 0,
+    JSON.stringify(hookLine)
+  )
+  // 等确认提醒：先开启开关，再喂 waiting=true → 弹一次；同 ts 再轮询不重复弹
+  await ensureMenuOpen()
+  await cdp.eval(
+    "(function(){var rows=document.querySelectorAll('.zcwv-menu-row');for(var i=0;i<rows.length;i++){" +
+      "if(rows[i].textContent.indexOf('\\u94a9\\u5b50')!==-1){rows[i].querySelector('.zcwv-check').click();return true}}return false})()"
+  )
+  await cdp.eval(
+    '(function(){window.__hook={ts:' + (hookTs + 1) + ",waiting:true,event:'PermissionRequest'};return true})()"
+  )
+  await ensureMenuOpen() // 再刷一次 → waiting 生效
+  const alertShown = await pollEval(
+    cdp,
+    "(function(){var b=document.querySelector('.zcwv-bubble');var l=document.querySelector('.zcwv-label');" +
+      "return (b&&b.classList.contains('zcwv-bubble-open')&&l&&l.textContent.indexOf('\\u5728\\u7b49\\u4f60\\u786e\\u8ba4')!==-1)?l.textContent:null})()",
+    9000
+  )
+  check('等确认提醒：开启后 ZCode 弹权限确认 → 挂件弹一次提醒气泡', !!alertShown, JSON.stringify(alertShown))
+  // 关掉气泡 → 同一事件时间戳再轮询一次 → 不应再弹（去重按 ts）
+  await cdp.eval(
+    "(function(){var b=document.querySelector('.zcwv-bubble');b.dispatchEvent(new MouseEvent('click',{bubbles:true}));return true})()"
+  )
+  await new Promise((r) => setTimeout(r, 600))
+  await ensureMenuOpen() // 触发 pollHook（同一 ts）
+  await new Promise((r) => setTimeout(r, 1200))
+  const alertAgain = await cdp.eval(
+    "(function(){var b=document.querySelector('.zcwv-bubble');var l=document.querySelector('.zcwv-label');" +
+      "return (b&&b.classList.contains('zcwv-bubble-open')&&l&&l.textContent.indexOf('\\u5728\\u7b49\\u4f60\\u786e\\u8ba4')!==-1)?true:false})()"
+  )
+  check('等确认提醒：同一事件只提醒一次（按事件时间戳去重，不刷屏）', alertAgain === false, JSON.stringify(alertAgain))
+  // 桩是页面内覆盖的（见上），不需要 removeScriptToEvaluateOnNewDocument
+
+  // ⑮ 接管看门狗（issue #2）：用「假浮层桥」让页面以为自己跑在浮层里，从而能驱动
+  // 接管状态。用例：悬停角色 → 接管；静置 8 秒 → 自动交还穿透；持续移动 → 不释放。
+  const bridgeStub =
+    '(function(){window.__bridge=[];function rec(v){window.__bridge.push({v:v,at:Date.now()})}' +
+    'window.whaleDesktop={' +
+    'setInteractive:function(v){rec(!!v)},setKeyboardFocus:function(){},setPetMode:function(){},setFollowInterval:function(){},' +
+    'onCursor:function(){},onViewport:function(){},onWindowBlur:function(){},dismissReplay:function(){}}})()'
+  const stubBridge = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: bridgeStub })
+  await cdp.send('Page.reload')
+  await new Promise((r) => setTimeout(r, 3200))
+  await pollEval(cdp, "document.readyState==='complete' && !!document.querySelector('.zcwv-hint')", 12000)
+  await cdp.eval('window.__bridge=[]')
+  const dogPt = JSON.parse(await cdp.eval(
+    "(function(){var r=document.querySelector('.zcwv-root img').getBoundingClientRect();return JSON.stringify({x:Math.round(r.left+r.width*0.7),y:Math.round(r.top+r.height*0.72)})})()"
+  ))
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: dogPt.x, y: dogPt.y, button: 'none', pointerType: 'mouse' })
+  const tookCapture = await pollEval(cdp, 'window.__bridge.some(function(e){return e.v===true})?true:null', 5000)
+  check('浮层接管：指针压到角色上进入接管（假桥记录 setInteractive(true)）', tookCapture === true, '')
+  // 静置 8 秒：看门狗应在 6 秒无活动后强制交还
+  await new Promise((r) => setTimeout(r, 8000))
+  const released = await cdp.eval(
+    "(function(){var l=window.__bridge.filter(function(e){return e.v===false});return l.length?Math.round((Date.now()-l[0].at)/1000):-1})()"
+  )
+  check(
+    'issue#2 接管看门狗：静置 8 秒后自动交还穿透（6 秒阈值，防窗口一直吃掉鼠标/挡住宿主）',
+    typeof released === 'number' && released >= 0 && released <= 8,
+    'release 在 ' + released + ' 秒前'
+  )
+  // 反向对照：持续移动指针时不得释放（看门狗只治「真的没在动」）
+  await cdp.eval('window.__bridge=[]')
+  for (let i = 0; i < 5; i++) {
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: dogPt.x, y: dogPt.y, button: 'none', pointerType: 'mouse' })
+    await new Promise((r) => setTimeout(r, 1800))
+  }
+  const heldDuringUse = await cdp.eval('window.__bridge.filter(function(e){return e.v===false}).length')
+  check('issue#2 接管看门狗：持续活动时不误释放（只在真的静置时才交还）', heldDuringUse === 0, 'release 次数=' + heldDuringUse)
+  if (stubBridge && stubBridge.identifier) await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: stubBridge.identifier })
 } catch (err) {
   check('冒烟过程未抛异常', false, String((err && err.message) || err))
 } finally {

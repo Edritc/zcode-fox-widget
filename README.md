@@ -279,7 +279,9 @@ node lib/cli.mjs json            # 结构化输出，便于脚本消费
 |---|---|
 | 大小 | 0.6–2.5×，滑块或数字（1–20） |
 | 音效 / 音量 | 内置小黄鸭/音效1，可导入自定义音效（1 个=按压松手共用，2 个=按压+松手）；音量 0 即静音 |
-| 角色 | 选择形象（内置：嘎啦嘛 / 大肥鱼 / GPT娘 / kimi娘 / 小克）；导入的图片可改名（✎）或删除（×）；内置形象也可删（隐藏记在 roles.json 的 hiddenBuiltins，清掉即找回） |
+| 角色 | 选择形象（内置：嘎啦嘛 / 大肥鱼 / GPT娘 / kimi娘 / 小克）；导入的图片可改名（✎）或删除（×）；内置形象也可删（隐藏记在 roles.json 的 hiddenBuiltins，清掉即找回）。在角色菜单里手动选过形象会自动关掉「按模型换角色」，尊重手动选择 |
+| 按模型换角色 | 默认开：按当前模型的厂商族自动切换内置形象（GLM 系→嘎啦嘛、DeepSeek→大肥鱼、GPT 系→GPT娘、Kimi→kimi娘、Claude→小克），连带该角色的配色与台词池一起换；认不出的模型（Qwen / MiniMax / MiMo / Gemini…）保持当前形象不动 |
+| 钩子 | 显示钩子接入状态与最近事件（如「UserPromptSubmit 20:18」；一直显示「未接入」说明还没有会话触发过钩子）。右侧「等确认提醒」默认关：打开后 ZCode 弹出权限确认时挂件提醒一次 |
 | 对账口径 | 大肥鱼记账 / 实时·令牌（v1.7.0 起决定「对账 + 兜底」用哪个账号数字，主显示固定本机库） |
 | 峰谷播报 | 台词里峰谷文案的风格（默认 / 梁文峰谷 / !?强强?!） |
 | 主题 | 浅色模式 / 深色模式 / 跟随 ZCode（三层判定：浮层观测 ZCode 窗口的 DWM 暗色标志 > 配置 ui.theme > 操作系统深浅色） |
@@ -405,7 +407,7 @@ node tools/debug-overlay.mjs   # 连进浮层页面（需以 WHALE_DEBUG_PORT �
 zcode-fox-widget/
 ├─ .zcode-plugin/plugin.json   插件清单：commands / skills / hooks / mcpServers
 ├─ marketplace.json            本地市场声明，便于在客户端添加
-├─ hooks/hooks.json            SessionStart 自启
+├─ hooks/hooks.json            钩子接线：SessionStart 自启 + 两个低频事件（提问 / 权限确认）
 ├─ commands/fox.md             /fox 命令
 ├─ skills/zcode-fox-widget/    使用与排查说明（供 ZCode 内的助手阅读）
 ├─ desktop/                    桌面浮层
