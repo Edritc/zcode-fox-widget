@@ -400,6 +400,7 @@ function noteZCodeIdentity(msg) {
   if (!pid) return
   const start = Number(msg && msg.pidStart) || 0
   if (pid === zcodePid && (!start || start === zcodePidStart)) return
+  const hadPrev = zcodePid > 0 // 首次识别不算「换了进程」（否则白白多一次隐身与空窗计时）
   log('zcode-identity', 'pid=' + pid + ' start=' + (start || 0) + ' prev=' + zcodePid + '/' + (zcodePidStart || 0))
   zcodePid = pid
   zcodePidStart = start
@@ -407,6 +408,7 @@ function noteZCodeIdentity(msg) {
   // 换了宿主进程（ZCode 重启 / 更新）：立刻交还鼠标并隐身。留着接管态会让
   // 透明置顶窗口继续盖在新起来的宿主（或其安装程序）上吃点击——issue #2
   // 的「更新程序无法关闭 ZCode」正是这个形态。
+  if (!hadPrev) return
   try {
     if (interactive) applyInteractive(false, true)
   } catch (err) {}
