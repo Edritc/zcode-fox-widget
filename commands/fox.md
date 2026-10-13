@@ -9,7 +9,7 @@ allowed-tools: Bash, mcp__whale__whale_balance, mcp__whale__whale_widget, mcp__w
 按参数分派：
 
 - 空 / `status`：调用 MCP 工具 `whale_balance`，用中文报告余额、今日已用、当前峰谷时段；再调用 `whale_widget`（`action=status`）报告挂件服务是否在运行、地址是什么。
-- `start`：调用 `whale_widget`（`action=start`），把返回的地址告诉用户，并提示用浏览器打开即可看到小鲸鱼。
+- `start`：调用 `whale_widget`（`action=start`），把返回的地址告诉用户，并提示用浏览器打开即可看到大肥鱼。
 - `stop`：调用 `whale_widget`（`action=stop`）。
 - `url`：调用 `whale_widget`（`action=url`），只回地址。
 - `turn`：调用 `whale_last_turn`，报告上一轮对话消耗的金额、模型、token 数与计价时段。
@@ -17,7 +17,7 @@ allowed-tools: Bash, mcp__whale__whale_balance, mcp__whale__whale_widget, mcp__w
 - `window stop`：调用 `whale_widget`（`action=overlay_stop`）。
 - `window status`：调用 `whale_widget`（`action=overlay_status`）。
 - `key <sk-...>`：调用 `whale_config`（`action=set`，`apiKey=<值>`）写入 DeepSeek API Key。
-- `mode ledger|token`：调用 `whale_config`（`action=set`，`usageMode=...`）切换对账口径（小鲸鱼记账 / 实时·令牌）。
+- `mode ledger|token`：调用 `whale_config`（`action=set`，`usageMode=...`）切换对账口径（大肥鱼记账 / 实时·令牌）。
 
 若 MCP 工具不可用（例如插件刚装好还没重启会话），退回命令行：
 

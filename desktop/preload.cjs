@@ -22,7 +22,7 @@ contextBridge.exposeInMainWorld('whaleDesktop', {
       } catch (err) {}
     })
   },
-  // 跟随探测间隔（毫秒）：值越小鲸鱼跟得越紧
+  // 跟随探测间隔（毫秒）：值越大肥鱼跟得越紧
   setFollowInterval: (ms) => ipcRenderer.send('whale:follow-interval', Number(ms)),
   getFollowInterval: () => ipcRenderer.invoke('whale:follow-interval-get'),
   // 桌宠模式：ZCode 失焦/被别的窗口盖住时也不隐身，并周期性重申置顶层级

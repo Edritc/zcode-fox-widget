@@ -433,7 +433,7 @@ try {
   )
   check('GLM 按量源主显示标题切换', glmView === 'GLM 今日已用', 'label=' + JSON.stringify(glmView))
 
-  // ⑦ 角色：自定义下拉（不再是原生 select）——内置小狐娘/小鲸鱼无删除按钮，
+  // ⑦ 角色：自定义下拉（不再是原生 select）——内置嘎啦嘛/大肥鱼无删除按钮，
   //    导入件行尾带小 × 与改名按钮
   await fetch('http://127.0.0.1:' + PORT + '/whale/role-upload.json', {
     method: 'POST',
@@ -448,12 +448,12 @@ try {
   const roleView = await pollEval(
     cdp,
     // v1.3.2 起通用下拉（音效/主题等）复用 .zcwv-role-trigger 样式，必须按
-    // title「选择形象」锁定角色触发器；列表按内容含「小狐娘」锁定角色列表
+    // title「选择形象」锁定角色触发器；列表按内容含「嘎啦嘛」锁定角色列表
     "(function(){var ts=document.querySelectorAll('.zcwv-role-trigger'),t=null;" +
       "for(var i=0;i<ts.length;i++){if((ts[i].title||'').indexOf('\\u9009\\u62e9\\u5f62\\u8c61')===0){t=ts[i];break}}" +
       'if(!t)return null;t.click();' +
       "var ls=document.querySelectorAll('.zcwv-roles'),list=null;" +
-      "for(var i=0;i<ls.length;i++){if(ls[i].textContent.indexOf('\\u5c0f\\u72d0\\u5a18')!==-1){list=ls[i];break}}" +
+      "for(var i=0;i<ls.length;i++){if(ls[i].textContent.indexOf('\\u560e\\u5566\\u561b')!==-1){list=ls[i];break}}" +
       'var rows=list?list.querySelectorAll(\'.zcwv-role-row\'):[],names=[],del=0,builtin=0;' +
       "for(var i=0;i<rows.length;i++){var p=rows[i].querySelector('.zcwv-role-pick');names.push(p?p.textContent:'');" +
       'if(rows[i].querySelector(\'.zcwv-role-del\'))del++;if(rows[i].querySelector(\'.zcwv-role-builtin\'))builtin++}' +
@@ -464,8 +464,8 @@ try {
   check(
     '角色下拉：每行都有删除（内置形象也可删，v1.6.0）+ 触发器显示当前角色名',
     roleView &&
-      roleView.names.indexOf('小狐娘') !== -1 &&
-      roleView.names.indexOf('小鲸鱼') !== -1 &&
+      roleView.names.indexOf('嘎啦嘛') !== -1 &&
+      roleView.names.indexOf('大肥鱼') !== -1 &&
       roleView.names.indexOf('冒烟角色') !== -1 &&
       roleView.del === 6 &&
       roleView.builtin === 5 &&
@@ -522,23 +522,23 @@ try {
     "(function(){var img=document.querySelector('img[src*=\"image.png\"]');return img?img.naturalWidth:0})()"
   )
   check(
-    '删除当前导入角色后回落默认小狐娘（roles 只剩内置、图片 608px）',
+    '删除当前导入角色后回落默认嘎啦嘛（roles 只剩内置、图片 608px）',
     rolesAfterDelete.roles.length === 5 && rolesAfterDelete.selected === 'fox' && imgAfterDelete === 608,
     JSON.stringify({ n: rolesAfterDelete.roles.length, selected: rolesAfterDelete.selected, nw: imgAfterDelete })
   )
-  // ⑦d 内置形象也能删（v1.6.0）：删掉「小狐娘」→ 列表少一个、选中的不再是它、
+  // ⑦d 内置形象也能删（v1.6.0）：删掉「嘎啦嘛」→ 列表少一个、选中的不再是它、
   //     鲸鱼图片仍拿得到（回落到剩下的形象）
   const builtinDelArmed = await cdp.eval(
     "(function(){var rows=document.querySelectorAll('.zcwv-role-row'),t=null;" +
       "for(var i=0;i<rows.length;i++){var p=rows[i].querySelector('.zcwv-role-pick');" +
-      "if(p&&p.textContent==='小狐娘'){t=rows[i].querySelector('.zcwv-role-del')}}if(!t)return null;t.click();" +
+      "if(p&&p.textContent==='嘎啦嘛'){t=rows[i].querySelector('.zcwv-role-del')}}if(!t)return null;t.click();" +
       "var rows2=document.querySelectorAll('.zcwv-role-row');for(var j=0;j<rows2.length;j++){var p2=rows2[j].querySelector('.zcwv-role-pick');" +
-      "if(p2&&p2.textContent==='小狐娘'){var d=rows2[j].querySelector('.zcwv-role-del');return d?d.textContent:null}}return 'gone'})()"
+      "if(p2&&p2.textContent==='嘎啦嘛'){var d=rows2[j].querySelector('.zcwv-role-del');return d?d.textContent:null}}return 'gone'})()"
   )
   check('内置形象也能两步删除（点一次进入「再点删除」）', builtinDelArmed === '再点删除', JSON.stringify(builtinDelArmed))
   await cdp.eval(
     "(function(){var rows=document.querySelectorAll('.zcwv-role-row');for(var i=0;i<rows.length;i++){var p=rows[i].querySelector('.zcwv-role-pick');" +
-      "if(p&&p.textContent==='小狐娘'){var d=rows[i].querySelector('.zcwv-role-del');if(d){d.click();return true}}}return false})()"
+      "if(p&&p.textContent==='嘎啦嘛'){var d=rows[i].querySelector('.zcwv-role-del');if(d){d.click();return true}}}return false})()"
   )
   await new Promise((r) => setTimeout(r, 1200))
   const rolesAfterBuiltinDel = await (await fetch('http://127.0.0.1:' + PORT + '/whale/roles.json')).json()
@@ -546,7 +546,7 @@ try {
     "(function(){var img=document.querySelector('img[src*=\"image.png\"]');return img?img.naturalWidth:0})()"
   )
   check(
-    '删掉内置「小狐娘」：列表不再有它、选中项换人、图片仍可用',
+    '删掉内置「嘎啦嘛」：列表不再有它、选中项换人、图片仍可用',
     rolesAfterBuiltinDel.roles.filter((r) => r.builtin).map((r) => r.id).join(',') === 'whale,gpt,kimi,xiaoke' &&
       rolesAfterBuiltinDel.selected !== 'fox' &&
       imgAfterBuiltinDel > 1,
@@ -584,7 +584,7 @@ try {
       themeOpts.texts.indexOf('跟随 ZCode') !== -1,
     JSON.stringify(themeOpts)
   )
-  // 气泡配色随角色（浅色 + 深色两套）：未登记角色（用户导入的）回落到小鲸鱼
+  // 气泡配色随角色（浅色 + 深色两套）：未登记角色（用户导入的）回落到大肥鱼
   const ROLE_INK = {
     whale: { light: 'rgb(32, 49, 112)', dark: 'rgb(93, 141, 222)' },
     fox: { light: 'rgb(61, 68, 96)', dark: 'rgb(167, 167, 167)' },
@@ -612,7 +612,7 @@ try {
   await new Promise((r) => setTimeout(r, 2500))
   const inkLight = await readInk()
   check(
-    '浅色：气泡描边与文字都按角色着色（未登记角色回落小鲸鱼蓝）',
+    '浅色：气泡描边与文字都按角色着色（未登记角色回落大肥鱼蓝）',
     !!inkLight && inkLight.dark === false && inkLight.stroke === wantInk.light && inkLight.text !== 'rgb(212, 212, 212)',
     JSON.stringify({ role: curRole, ink: inkLight })
   )
@@ -796,7 +796,7 @@ try {
     )
   }
 
-  // ⑧b 主题回滚回归（v1.8.1）：「小鲸鱼蓝白」第四态已回滚——写 theme:'whale'
+  // ⑧b 主题回滚回归（v1.8.1）：「大肥鱼蓝白」第四态已回滚——写 theme:'whale'
   // 必须被服务端归一成 light，页面不得出现 zcwv-theme-whale
   await fetch('http://127.0.0.1:' + PORT + '/whale/size.json', {
     method: 'PUT',
@@ -998,7 +998,7 @@ try {
         "if(b&&/^=.+记账=$/.test(b.textContent)){label=b.textContent}}return JSON.stringify({name:nm,label:label})})()"
     )
   )
-  // 文案必须跟着当前形象走（本用例跑到这里时内置小狐娘已被 ⑦d 删掉，选中的是小鲸鱼）
+  // 文案必须跟着当前形象走（本用例跑到这里时内置嘎啦嘛已被 ⑦d 删掉，选中的是大肥鱼）
   check(
     '记账入口在一级菜单，文案为「=角色名记账=」且随角色名',
     !!bookEntry && !!bookEntry.name && bookEntry.label === '=' + bookEntry.name + '记账=',
@@ -1401,9 +1401,13 @@ try {
       "return n.className.indexOf('zcwv-flow-peak')!==-1?'peak':(n.className.indexOf('zcwv-flow-off')!==-1?'off':'?')})()"
   )
   check('峰谷流光：倒计时行挂红/绿系流光渐变（zcwv-flow-peak/off）', flowCls === 'peak' || flowCls === 'off', JSON.stringify(flowCls))
-  const cd1 = await cdp.eval("(function(){var n=document.querySelector('.zcwv-text .zcwv-flow');return n?n.textContent:null})()")
+  const cd1 = await cdp.eval(
+    "(function(){var ns=document.querySelectorAll('.zcwv-text .zcwv-flow');for(var i=0;i<ns.length;i++){if(/\\d{2}:\\d{2}:\\d{2}/.test(ns[i].textContent))return ns[i].textContent}return null})()"
+  )
   await new Promise((r) => setTimeout(r, 1300))
-  const cd2 = await cdp.eval("(function(){var n=document.querySelector('.zcwv-text .zcwv-flow');return n?n.textContent:null})()")
+  const cd2 = await cdp.eval(
+    "(function(){var ns=document.querySelectorAll('.zcwv-text .zcwv-flow');for(var i=0;i<ns.length;i++){if(/\\d{2}:\\d{2}:\\d{2}/.test(ns[i].textContent))return ns[i].textContent}return null})()"
+  )
   check('峰谷倒计时逐秒走字（1.3s 后读数变化，原地改写）', !!cd1 && !!cd2 && cd1 !== cd2, JSON.stringify({ t1: cd1, t2: cd2 }))
   // ⑪c 图挂降级：gif error 置 gifFailed 后，纯图步（r=0.99 确定性命中权重 5 的
   // 图片变体）降级成一句备胎文案，不再渲染破图
@@ -2012,7 +2016,7 @@ try {
   )
   await setThemeAndReload('dark')
   const darkXiaoke = await readRoleInk()
-  const pickedWhale = await pickRoleByName('小鲸鱼')
+  const pickedWhale = await pickRoleByName('大肥鱼')
   const darkWhale = await readRoleInk()
   check(
     '深色档一律不跟角色（菜单 / 二级页面 / 文本框保持主题色，拖动条回到原生绘制）',
@@ -2035,13 +2039,13 @@ try {
     JSON.stringify({ xiaoke: darkXiaoke, whale: darkWhale })
   )
   await setThemeAndReload('light')
-  // ==== 切角色后「出厂台词池」重烤（2026-10-07 实测：小狐娘念小克的台词）====
+  // ==== 切角色后「出厂台词池」重烤（2026-10-07 实测：嘎啦嘛念小克的台词）====
   // 台词池是烤进保存配置的，所以「以小克身份保存过一次」的配置里装的是小克台词。
-  // 这里模拟这份病态配置（3 条小克专属台词），切到小狐娘后重新加载：队列必须换成
-  // 小狐娘的池。识别口径 = 模块里每条台词的文本都落在某个角色的出厂池内（只看文本，
+  // 这里模拟这份病态配置（3 条小克专属台词），切到嘎啦嘛后重新加载：队列必须换成
+  // 嘎啦嘛的池。识别口径 = 模块里每条台词的文本都落在某个角色的出厂池内（只看文本，
   // 不看字号/权重/条数），用户自己写过的台词不匹配、原样保留。
-  const XIAOKE_ONLY = ['小鲸鱼...', '说中文≠不会封号', '你问这本书里面有什么？答案是思考链哦']
-  const pickedFox = await pickRoleByName('小狐娘')
+  const XIAOKE_ONLY = ['大肥鱼...', '说中文≠不会封号', '你问这本书里面有什么？答案是思考链哦']
+  const pickedFox = await pickRoleByName('嘎啦嘛')
   await fetch('http://127.0.0.1:' + PORT + '/whale/bubble-content.json', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -2061,7 +2065,7 @@ try {
     8000
   )
   check(
-    '切角色后出厂台词池重烤：小狐娘不念小克台词（配置里烤着的小克池被换成当前角色池）',
+    '切角色后出厂台词池重烤：嘎啦嘛不念小克台词（配置里烤着的小克池被换成当前角色池）',
     pickedFox === 'ok' &&
       typeof rebakedLine === 'string' &&
       rebakedLine.trim().length > 0 &&
@@ -2110,7 +2114,7 @@ try {
   )
   check(
     '菜单「更新」行：入口在 + 状态显示有新版本',
-    !!upMenu && upMenu.hasBtn === true && upMenu.state === '有新版本 v9.9.9',
+    !!upMenu && upMenu.hasBtn === true && upMenu.state === '有新版 v9.9.9',
     JSON.stringify(upMenu)
   )
   const upPanel = JSON.parse(

@@ -2000,7 +2000,7 @@ try {
     )
   }
 
-  // 角色库：内置小狐娘（默认）/小鲸鱼固定在前，上传件自动启用；未指定时默认小狐娘
+  // 角色库：内置嘎啦嘛（默认）/大肥鱼固定在前，上传件自动启用；未指定时默认嘎啦嘛
   const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
   const upRes = await fetch('http://127.0.0.1:' + port + '/whale/role-upload.json', {
     method: 'POST',
@@ -2011,14 +2011,14 @@ try {
   check('角色上传成功并自动启用', upRes.ok && upBody.ok && typeof upBody.id === 'string', JSON.stringify(upBody))
   const roles1 = await getJson(port, '/whale/roles.json')
   check(
-    '角色列表：五个内置形象在前（小狐娘/小鲸鱼/GPT娘/kimi娘/小克）+ 上传件，selected 指向上传件',
+    '角色列表：五个内置形象在前（嘎啦嘛/大肥鱼/GPT娘/kimi娘/小克）+ 上传件，selected 指向上传件',
     roles1 &&
       roles1.ok &&
       roles1.roles.length === 6 &&
       roles1.roles[0].id === 'fox' &&
-      roles1.roles[0].name === '小狐娘' &&
+      roles1.roles[0].name === '嘎啦嘛' &&
       roles1.roles[1].id === 'whale' &&
-      roles1.roles[1].name === '小鲸鱼' &&
+      roles1.roles[1].name === '大肥鱼' &&
       roles1.roles[2].id === 'gpt' &&
       roles1.roles[2].name === 'GPT娘' &&
       roles1.roles[3].id === 'kimi' &&
@@ -2045,11 +2045,11 @@ try {
     body: JSON.stringify({ scale: 1.5, roleId: null }),
   })
   const roles2 = await getJson(port, '/whale/roles.json')
-  check('未指定角色 = 默认小狐娘（selected=fox）', roles2 && roles2.ok && roles2.selected === 'fox', JSON.stringify(roles2.selected))
+  check('未指定角色 = 默认嘎啦嘛（selected=fox）', roles2 && roles2.ok && roles2.selected === 'fox', JSON.stringify(roles2.selected))
   const imgDef = Buffer.from(await (await fetch('http://127.0.0.1:' + port + '/whale/image.png')).arrayBuffer())
   const glmPng = fs.readFileSync(path.join(PLUGIN_ROOT, 'assets', 'GLM.png'))
   check(
-    '默认形象图 = 小狐娘 GLM.png（608x608）',
+    '默认形象图 = 嘎啦嘛 GLM.png（608x608）',
     imgDef.equals(glmPng) && imgDef.readUInt32BE(16) === 608 && imgDef.readUInt32BE(20) === 608,
     'len=' + imgDef.length
   )
@@ -2060,7 +2060,7 @@ try {
   })
   const imgWhale = Buffer.from(await (await fetch('http://127.0.0.1:' + port + '/whale/image.png')).arrayBuffer())
   const whalePng = fs.readFileSync(path.join(PLUGIN_ROOT, 'assets', 'DSniang1.png'))
-  check('切换小鲸鱼后 image.png 换成 DSniang1.png', imgWhale.equals(whalePng), 'len=' + imgWhale.length)
+  check('切换大肥鱼后 image.png 换成 DSniang1.png', imgWhale.equals(whalePng), 'len=' + imgWhale.length)
 
   // 角色改名：导入件可改名，内置形象拒绝
   const rnRes = await fetch('http://127.0.0.1:' + port + '/whale/role-rename.json', {
@@ -2095,7 +2095,7 @@ try {
   const delBody = await delRes.json()
   const afterIds = (delBody.roles || []).map((r) => r.id)
   check(
-    '导入角色删除（索引 + 文件 + 选中回落默认小狐娘）',
+    '导入角色删除（索引 + 文件 + 选中回落默认嘎啦嘛）',
     delRes.ok &&
       delBody.ok === true &&
       afterIds.indexOf(delUpBody.id) === -1 &&

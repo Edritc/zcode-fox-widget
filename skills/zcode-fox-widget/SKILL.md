@@ -1,6 +1,6 @@
 ---
 name: zcode-fox-widget
-description: 操作与排查 ZCode狐娘小挂件（zcode-fox-widget）。适用于：查询 DeepSeek 账户余额、今日已用金额、当前峰谷时段或上一轮对话消耗；启动/停止挂件，把鲸鱼作为桌面浮层显示在 ZCode 界面之上（安装 Electron 运行时、浮层点不动或不显示、浮层关闭、**桌宠模式**：界面扩展为整个屏幕工作区、可拖出 ZCode 窗口、失焦也不隐身、锁在最上层）；配置 DeepSeek API Key、对账口径（小鲸鱼记账 / 实时·令牌）、挂件端口或会话自启；调整主题（浅色/深色/跟随 ZCode）、角色（导入图片、改名、删除，内置形象可隐藏找回）、音效（导入/删除）、预警阈值（泛化后的「额度%」覆盖 GLM Plan 与 CommandCode + DeepSeek 余额¥）、按压泡泡（自定义点击队列）、**用量记录**（一级菜单入口，v1.8.7 从记账页移回）与**记账二级页**（「=角色名记账=」入口，内含额度/余额预警与余额校正）、今日排名口径（按金额/按 Token）；以及界面看不到挂件、余额获取失败、CommandCode 三重额度（月度池 + 5 小时/周窗口）读不到、厂商模板余额读不到、今日已用为 0、每轮消耗不弹窗、峰谷判定不对、和挂件互动后 ZCode 画面卡住、挂件周期性消失重现（冻结自愈误判）等问题。
+description: 操作与排查 ZCode狐娘小挂件（zcode-fox-widget）。适用于：查询 DeepSeek 账户余额、今日已用金额、当前峰谷时段或上一轮对话消耗；启动/停止挂件，把鲸鱼作为桌面浮层显示在 ZCode 界面之上（安装 Electron 运行时、浮层点不动或不显示、浮层关闭、**桌宠模式**：界面扩展为整个屏幕工作区、可拖出 ZCode 窗口、失焦也不隐身、锁在最上层）；配置 DeepSeek API Key、对账口径（大肥鱼记账 / 实时·令牌）、挂件端口或会话自启；调整主题（浅色/深色/跟随 ZCode）、角色（导入图片、改名、删除，内置形象可隐藏找回）、音效（导入/删除）、预警阈值（泛化后的「额度%」覆盖 GLM Plan 与 CommandCode + DeepSeek 余额¥）、按压泡泡（自定义点击队列）、**用量记录**（一级菜单入口，v1.8.7 从记账页移回）与**记账二级页**（「=角色名记账=」入口，内含额度/余额预警与余额校正）、今日排名口径（按金额/按 Token）；以及界面看不到挂件、余额获取失败、CommandCode 三重额度（月度池 + 5 小时/周窗口）读不到、厂商模板余额读不到、今日已用为 0、每轮消耗不弹窗、峰谷判定不对、和挂件互动后 ZCode 画面卡住、挂件周期性消失重现（冻结自愈误判）等问题。
 ---
 
 # ZCode狐娘小挂件（zcode-fox-widget）
@@ -33,7 +33,7 @@ description: 操作与排查 ZCode狐娘小挂件（zcode-fox-widget）。适用
 ## 数据从哪来
 
 - **余额**：`GET https://api.deepseek.com/user/balance`，从 `balance_infos` 里优先选 CNY 且大于 0 的项（多币种数组顺序不固定，不能取 `[0]`）。
-- **今日已用（主口径 = 本机库，v1.7.0 起）**：读 ZCode 落库的模型用量按价目折算（`lib/usage-records.mjs` 的 `todayVendorUsage()`，与用量面板同一次聚合），按模型看得见、不受充值干扰；套餐/网关行按配额或 tokens 表达。**小鲸鱼记账**（每次观测余额，余额下降的差值累加进 `~/.zcode/whale/usage-ledger.json`，跨天归档保留 30 天，免令牌但 ZCode 关闭期间会漏记）与**实时·令牌**退居「对账 + 兜底」：两口径数字不一致时并排展示（气泡小字 / 面板「对账（DeepSeek）」行），本机库当天无记录时兜底为主显示并标注来源。
+- **今日已用（主口径 = 本机库，v1.7.0 起）**：读 ZCode 落库的模型用量按价目折算（`lib/usage-records.mjs` 的 `todayVendorUsage()`，与用量面板同一次聚合），按模型看得见、不受充值干扰；套餐/网关行按配额或 tokens 表达。**大肥鱼记账**（每次观测余额，余额下降的差值累加进 `~/.zcode/whale/usage-ledger.json`，跨天归档保留 30 天，免令牌但 ZCode 关闭期间会漏记）与**实时·令牌**退居「对账 + 兜底」：两口径数字不一致时并排展示（气泡小字 / 面板「对账（DeepSeek）」行），本机库当天无记录时兜底为主显示并标注来源。
 - **实时·令牌（对账 + 兜底口径之一）**：需要 `DEEPSEEK_PLATFORM_TOKEN`，调平台用量接口拿 token 分桶，按峰谷定价自行换算（该接口不返回金额）。令牌缺失或失效会自动回落记账口径并在界面上标注。
 - **每轮对话消耗**：读 ZCode 自己的会话库 `~/.zcode/cli/db/db.sqlite` 的 `turn_usage` 表（上游监听进程内 `session/event`，ZCode 拿不到该事件流，但落库数据语义等价）。数据库读不到时回退解析 `~/.zcode/cli/rollout/model-io-*.jsonl`。
 
@@ -76,13 +76,13 @@ node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" desktop install # 安装 Electron 运行
 | `port` | 固定端口，留空则用默认 39321，占用时自动顺延 |
 | `autoStartWidget` | 默认 `true`，SessionStart 是否自动拉起服务 |
 | `autoStartOverlay` | 默认 `true`，会话启动时是否顺带拉起桌面浮层（Electron 运行时未安装时静默跳过） |
-| `followIntervalMs` | 跟随探测间隔（毫秒），默认 40；越小鲸鱼跟得越紧。挂件菜单里的「跟随延迟」会覆盖它 |
+| `followIntervalMs` | 跟随探测间隔（毫秒），默认 40；越大肥鱼跟得越紧。挂件菜单里的「跟随延迟」会覆盖它 |
 
 挂件自身的外观与开关（大小、音效、音量、角色、主题、气泡、每轮消耗提示与自动关闭秒数、避让滚动条、桌宠模式、跟随延迟、预警阈值、显示跟随）在 `~/.zcode/whale/widget-state.json`，由挂件菜单直接写入：
 - `theme`：`light` / `dark` / `system`——`system` 即「跟随 ZCode」（三层判定：浮层观测 ZCode 窗口的 DWM 暗色标志 > 用户级配置 `ui.theme` > 操作系统深浅色，实现见 `lib/zcode-theme.mjs`）。（v1.8.0 曾有第四态 `whale` 蓝白主题，v1.8.1 回滚；旧值读取时归一为 `light`。）
 - `petMode`：桌宠模式（浮层专属，默认 false）。开着时**视口 = 整个浮层窗口（主显示器工作区，自动排除任务栏）**——鲸鱼可以拖出 ZCode 窗口放到屏幕任何角落，且失焦/被盖住/最小化都不隐身，每 3 秒检查一次置顶（丢了才重申）；关掉即回到「视口 = ZCode 窗口 ∩ 浮层窗口、随 ZCode 前台隐身」的原有行为。
 - `alerts`：v1.8.0 泛化后**两条阈值**——`quotaPct`（额度不足提醒，对 GLM Plan 剩余% 与 CommandCode 三重窗口同时生效：各来源用自己的单位表达「剩余比例低于阈值」，CommandCode 卡片画的是已用进度，折算 `剩余 = 100 − 已用` 再比，于是「阈值 20%」在它那边表现为「进度涨过 80% 才提醒」）/ `moneyAlert`（DeepSeek 余额低于提醒；旧键 `deepseekBelow` / `bigmodelDaily` 读取时自动迁移）。旧键 `planPct` / `cmdgoPct` 读取时折入 `quotaPct`（只设过其中一条的用户设置不会丢）。阈值单位是人民币。消费型厂商（GLM / MiMo / Kimi / OpenAI / Claude / Qwen / MiniMax，无公开余额接口）的「今日已用达到」预警 v1.7.7 起取消。每个来源每天只提醒一次，去重键含阈值与窗口名。
-- `roleId`：当前形象（内置 `fox` 小狐娘 / `whale` 小鲸鱼，或导入件 id；导入件的索引与图片在 `roles.json` + `roles/`），未指定即小狐娘。`fox` 在 v1.7.3 及之前叫 `xiaohuniang`，持久化里的旧值读取时自动归一。
+- `roleId`：当前形象（内置 `fox` 嘎啦嘛 / `whale` 大肥鱼，或导入件 id；导入件的索引与图片在 `roles.json` + `roles/`），未指定即嘎啦嘛。`fox` 在 v1.7.3 及之前叫 `xiaohuniang`，持久化里的旧值读取时自动归一。
 - 按压泡泡队列在 `~/.zcode/whale/bubble-content.json`：**v2 格式** `{v:2, tapAdvance, steps:[{modules:[…]}]}`——每步一组模块，模块三种：`text`（支持 `{balance}` `{today}` `{tokens}` `{plan}` `{model}` `{vendor}` `{time}` `{period}` `{reset}` 占位符，按换行分行）、`rand`（语句池随机取一，留空用内置随机台词）、`view`（内置视图 = 跟随计费源的默认余额/配额内容）。第 1 步按压时显示，之后每点一下气泡推进一步，走完收起；`tapAdvance:false` 时点气泡直接收起。旧 v1 配置（`{v, first, items}`）读写时自动迁移，无感升级。
 
 ## 故障排查
@@ -109,7 +109,7 @@ node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" desktop install # 安装 Electron 运行
 | 点击挂件/气泡没声音 | 检查菜单音量是否为 0、音效组是否已选；音频页面加载时预热，输出设备切换后若无声重启浮层。按压/松手音只属于鲸鱼本体；点气泡不出声（随上游原版行为，v1.3.2 起回退） |
 | 点设置键却有音效（v1.3.0 起不应出现） | 菜单按钮的 click 里不该有 `playPress()`；按压音只属于角色本体（鲸鱼/气泡）两种操作 |
 | 余额显示旧值并带 `stale` | 接口瞬时失败（网络/5xx），服务在回退缓存。4xx 不会回退，会直接报错 |
-| 今日已用一直 0 | 主口径是本机库：ZCode 今天还没有模型用量记录（或数据库读不到）时才兜底显示账号口径并标注来源；账号口径（小鲸鱼记账）只统计「观测到的余额下降」。`node lib/cli.mjs status` 看双口径、`/whale/health` 看数据来源 |
+| 今日已用一直 0 | 主口径是本机库：ZCode 今天还没有模型用量记录（或数据库读不到）时才兜底显示账号口径并标注来源；账号口径（大肥鱼记账）只统计「观测到的余额下降」。`node lib/cli.mjs status` 看双口径、`/whale/health` 看数据来源 |
 | **CLI/MCP 里的每轮消耗金额币种不对** | v1.3.1 起 `cli.mjs` / `mcp-server.mjs` 按轮次和逐行携带的 `currency` 输出（美元轮次显示 `$`）。若还看到人民币符号出现在 OpenAI/Claude 轮次上，说明这两个文本出口又把 `'CNY'` 写死在格式化里了；`tools/selftest.mjs` 里有「美元轮次经 CLI/MCP 路径」的回归断言 |
 | **每轮消耗金额离谱（虚高十几倍）** | 多半是计价口径又踩了「input 含缓存」这个坑：缓存命中的 token 被按未命中价重复算了一遍。核对 `lib/pricing.mjs` 的 `splitInputTokens()` 是否被 `costOfUsage()` 使用，并跑 `node tools/selftest.mjs`（内含两种口径的回归断言）。用 `node lib/cli.mjs turn` 看逐档明细即可判断 |
 | 每轮消耗不弹窗 | 需要 ZCode 至少完成过一轮对话（`turn_usage` 有 `completed` 行）；另外菜单里「每轮消耗提示」必须开着 |
