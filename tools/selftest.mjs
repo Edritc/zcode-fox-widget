@@ -2194,14 +2194,12 @@ try {
   }
 
   // issue #2 修复点（浮层主进程没法在自检里真跑 Electron，这里按源码钉住关键分支，
-  // 防止后续重构把修复悄悄改掉；行为验证见 smoke 的接管看门狗用例与真机日志）
+  // 防止后续重构把修复悄悄改掉）
+  //
+  // 注：另外两条「暂停」方向的修复（页面侧接管看门狗、周期出帧保险的 moveTop 守卫）
+  // 实测没有解决宿主暂停，已按用户要求回滚，钉桩一并移除——别再从别处「顺手加回来」。
   {
     const mainSrc = fs.readFileSync(path.join(PLUGIN_ROOT, 'desktop', 'main.cjs'), 'utf8')
-    check(
-      'issue#2：周期性出帧保险不再无条件 moveTop（只在丢了置顶时重申层级）',
-      /reason !== 'periodic' \|\| !win\.isAlwaysOnTop\(\)/.test(mainSrc) && mainSrc.indexOf('no-movetop') !== -1,
-      ''
-    )
     check(
       'issue#2：宿主窗口长时间不存在时浮层自退（空窗看门狗，桌宠模式豁免）',
       mainSrc.indexOf('MISSING_QUIT_MS') !== -1 &&
@@ -2215,15 +2213,6 @@ try {
       /function applyInteractive\(next, force\)/.test(mainSrc) &&
         /interactive\) applyInteractive\(false, true\)/.test(mainSrc) &&
         /hideOverlay\('zcode-identity-changed'\)/.test(mainSrc),
-      ''
-    )
-    const widgetSrc2 = fs.readFileSync(path.join(PLUGIN_ROOT, 'lib', 'widget.js'), 'utf8')
-    check(
-      'issue#2：页面侧接管看门狗（接管中 6 秒无真实指针活动就强制交还穿透）',
-      widgetSrc2.indexOf('capture watchdog release') !== -1 &&
-        /Date\.now\(\) - last <= 6000/.test(widgetSrc2) &&
-        /setOverlayInteractive\(false, true\)/.test(widgetSrc2) &&
-        widgetSrc2.indexOf('if (v) {\n      lastInteractiveOnAt') !== -1,
       ''
     )
   }

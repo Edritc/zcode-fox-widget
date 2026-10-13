@@ -90,15 +90,8 @@ function kickPresentation(reason) {
   if (!win || win.isDestroyed()) return
   try {
     win.webContents.invalidate()
-    // moveTop 会重排 z 序：宿主（ZCode）一旦被判成「被遮挡」，Chromium 会停止
-    // 给它出帧，表现就是「点了角色之后 ZCode 画面不刷新，点一下才恢复」
-    //（issue #2）。周期性保险只在**真的丢了置顶**时才重申层级，平时只补一帧。
-    if (reason !== 'periodic' || !win.isAlwaysOnTop()) {
-      win.moveTop()
-      log('kick', reason)
-    } else {
-      log('kick', reason + ' no-movetop')
-    }
+    win.moveTop()
+    log('kick', reason)
   } catch (err) {}
 }
 

@@ -2362,43 +2362,9 @@ try {
   check('等确认提醒：同一事件只提醒一次（按事件时间戳去重，不刷屏）', alertAgain === false, JSON.stringify(alertAgain))
   // 桩是页面内覆盖的（见上），不需要 removeScriptToEvaluateOnNewDocument
 
-  // ⑮ 接管看门狗（issue #2）：用「假浮层桥」让页面以为自己跑在浮层里，从而能驱动
-  // 接管状态。用例：悬停角色 → 接管；静置 8 秒 → 自动交还穿透；持续移动 → 不释放。
-  const bridgeStub =
-    '(function(){window.__bridge=[];function rec(v){window.__bridge.push({v:v,at:Date.now()})}' +
-    'window.whaleDesktop={' +
-    'setInteractive:function(v){rec(!!v)},setKeyboardFocus:function(){},setPetMode:function(){},setFollowInterval:function(){},' +
-    'onCursor:function(){},onViewport:function(){},onWindowBlur:function(){},dismissReplay:function(){}}})()'
-  const stubBridge = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: bridgeStub })
-  await cdp.send('Page.reload')
-  await new Promise((r) => setTimeout(r, 3200))
-  await pollEval(cdp, "document.readyState==='complete' && !!document.querySelector('.zcwv-hint')", 12000)
-  await cdp.eval('window.__bridge=[]')
-  const dogPt = JSON.parse(await cdp.eval(
-    "(function(){var r=document.querySelector('.zcwv-root img').getBoundingClientRect();return JSON.stringify({x:Math.round(r.left+r.width*0.7),y:Math.round(r.top+r.height*0.72)})})()"
-  ))
-  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: dogPt.x, y: dogPt.y, button: 'none', pointerType: 'mouse' })
-  const tookCapture = await pollEval(cdp, 'window.__bridge.some(function(e){return e.v===true})?true:null', 5000)
-  check('浮层接管：指针压到角色上进入接管（假桥记录 setInteractive(true)）', tookCapture === true, '')
-  // 静置 8 秒：看门狗应在 6 秒无活动后强制交还
-  await new Promise((r) => setTimeout(r, 8000))
-  const released = await cdp.eval(
-    "(function(){var l=window.__bridge.filter(function(e){return e.v===false});return l.length?Math.round((Date.now()-l[0].at)/1000):-1})()"
-  )
-  check(
-    'issue#2 接管看门狗：静置 8 秒后自动交还穿透（6 秒阈值，防窗口一直吃掉鼠标/挡住宿主）',
-    typeof released === 'number' && released >= 0 && released <= 8,
-    'release 在 ' + released + ' 秒前'
-  )
-  // 反向对照：持续移动指针时不得释放（看门狗只治「真的没在动」）
-  await cdp.eval('window.__bridge=[]')
-  for (let i = 0; i < 5; i++) {
-    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: dogPt.x, y: dogPt.y, button: 'none', pointerType: 'mouse' })
-    await new Promise((r) => setTimeout(r, 1800))
-  }
-  const heldDuringUse = await cdp.eval('window.__bridge.filter(function(e){return e.v===false}).length')
-  check('issue#2 接管看门狗：持续活动时不误释放（只在真的静置时才交还）', heldDuringUse === 0, 'release 次数=' + heldDuringUse)
-  if (stubBridge && stubBridge.identifier) await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: stubBridge.identifier })
+  // （原 ⑮「接管看门狗」用例已随该修复一并回滚：实测它没有解决宿主暂停，
+  //   而「接管中 6 秒无活动就交还」本身还有副作用——指针停在角色上超过 6 秒后
+  //   角色会变成点不到。相关代码与自检钉桩都已移除。）
 } catch (err) {
   check('冒烟过程未抛异常', false, String((err && err.message) || err))
 } finally {
