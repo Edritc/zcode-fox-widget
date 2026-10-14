@@ -6,6 +6,16 @@
 
 ---
 
+## 未发布（Unreleased）：修复点角色后宿主 ZCode 停止刷新画面（issue #2 症状一）
+
+> 调查与真机 A/B 验证记录见 `OVERLAY-PAUSE-FINDINGS.md` 附录。代码已就位但**尚未发版**（版本号仍为 v1.11.1）。
+
+- **根因**：点击角色时浮层接管鼠标（`setIgnoreMouseEvents(false)`）会摘掉 `WS_EX_TRANSPARENT|WS_EX_LAYERED`；铺满工作区的置顶浮层又**没有 `WS_EX_TOOLWINDOW`**（实测 Electron 44.4.5 的 `skipTaskbar` 走 ITaskbarList，不再落样式位），于是被**宿主 ZCode 自己的 Chromium** 遮挡判定（`IsWindowVisibleAndFullyOpaque`）计为「完全不透明遮挡源」→ 宿主判定自己被完全遮挡 → 停止出帧（画面停在旧帧，点一下 ZCode 才恢复）。浮层进程里的 `disable-features=CalculateNativeWinOcclusion` 只作用于自己，管不到宿主。
+- **修复**：窗口创建处加 `type: 'toolbar'`（仅 Windows）——Electron 创建即设 `WS_EX_TOOLWINDOW` 且穿透/接管/键盘焦点各态全程保留，该位在宿主遮挡判定中被直接排除。附带从源头修掉历史上「点菜单文本框后浮层在任务栏冒幽灵按钮」的问题（`setFocusable` 重写样式后这一位不再被冲掉；跟随进程的 `EnsureToolWindow` 补写保留为安全网）。
+- **验证**（2026-10-14 真机，流式输出场景 + 完全被动采样，唯一变量为该样式位）：无 TOOLWINDOW 时点击后 113 帧仅 8 个不同（冻结 ≈8.5s）；补上 TOOLWINDOW 后 113/113 帧全变，不冻结。
+
+---
+
 ## v1.11.1 修复：镜像缓存导致漏报新版本
 
 - **探测改为「多源取最高版本」**：镜像 CDN 可能仍在返回上一版内容（实测：v1.11.0 发布后，`ghproxy` 代理的 raw 仍报 1.10.0），此前只看第一个成功的响应，会把已有新版本误判成「已是最新」。现在以所有候选里的最高版本为准；一旦某个源给出比当前严格更新的版本就立即采纳（缓存只会让源停留在旧值，不会凭空造出更高的版本）。

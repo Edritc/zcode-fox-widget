@@ -164,6 +164,15 @@ function createWindow() {
     fullscreenable: false,
     skipTaskbar: true,
     hasShadow: false,
+    // Windows 上用 toolbar 型窗口：创建即带 WS_EX_TOOLWINDOW 且全程保留。
+    // 关键在「宿主冻结」问题（issue #2 症状一，2026-10-14 真机 A/B 实锤）：
+    // 点击角色时页面会让本窗口 setIgnoreMouseEvents(false) 接管鼠标，那一瞬
+    // 间 Electron 会摘掉 WS_EX_TRANSPARENT|WS_EX_LAYERED——铺满工作区的置顶
+    // 窗口于是被宿主 ZCode 自己的 Chromium 遮挡判定（IsWindowVisibleAndFullyOpaque）
+    // 计为「完全不透明遮挡源」，宿主判定自己被完全遮挡后停止出帧（画面停在
+    // 旧帧）。带 WS_EX_TOOLWINDOW 的窗口被该判定直接排除。Electron 44 的
+    // skipTaskbar 走 ITaskbarList、不再落这个样式位，所以必须显式给。
+    ...(process.platform === 'win32' ? { type: 'toolbar' } : {}),
     // Windows 上必须不可激活：可激活的浮层被点一下就会把前台从 ZCode 抢走，
     // 而 ZCode 失去前台后画面会停止更新——实测点完挂件后 GetForegroundWindow
     // 变成浮层、WM_MOUSEACTIVATE 返回 MA_ACTIVATE，症状是「和挂件互动后 ZCode
@@ -673,10 +682,11 @@ ipcMain.on('whale:keyboard-focus', (_event, value) => {
     if (want) {
       win.setFocusable(true)
       win.focus()
-      // setFocusable(true) 会重写窗口扩展样式，把 skipTaskbar 的 TOOLWINDOW
-      // 位冲掉——实测点文本框的瞬间浮层出现在任务栏（一下午攒了七个幽灵
-      // 按钮）。Electron 的 setSkipTaskbar 走 ITaskbarList 补不回样式位，
-      // 让跟随进程直接把 WS_EX_TOOLWINDOW 写回去（它持有浮层 HWND）。
+      // setFocusable(true) 会重写窗口扩展样式，可能把 WS_EX_TOOLWINDOW 冲掉
+      // （历史实测：点文本框的瞬间浮层出现在任务栏，一下午攒了七个幽灵按钮；
+      // 该位又是宿主遮挡判定排除浮层的关键，见 createWindow 的 type:'toolbar'
+      // 注释）。Electron 的 setSkipTaskbar 走 ITaskbarList 补不回样式位，
+      // 让跟随进程直接把它写回去（它持有浮层 HWND）。
       followerCommand('toolwindow')
     } else {
       // 顺序不能反：先把前台还给 ZCode，再拆可激活态。setFocusable(false)
