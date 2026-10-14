@@ -15,9 +15,13 @@ const path = require('node:path')
 const fs = require('node:fs')
 const os = require('node:os')
 const { evaluateBootState, readNewestLogTail } = require('./ui-ready.cjs')
+const { isUpdaterRunning, yieldPlan } = require('./update-guard.cjs')
 
 const PORT = Number(process.env.WHALE_PORT) || 39321
 const TARGET_URL = 'http://127.0.0.1:' + PORT + '/'
+// 插件数据目录（与 lib/paths.mjs 的 DATA_DIR 同源：<ZCODE_HOME>/whale，默认 ~/.zcode/whale）。
+// WHALE_DATA_DIR 供测试注入，正常运行时走默认值。
+const DATA_DIR = process.env.WHALE_DATA_DIR || path.join(os.homedir(), '.zcode', 'whale')
 
 // 按压/松手音效走 HTMLAudio 播放。Electron 默认 autoplay 策略在部分环境会拦
 // 非手势起播（表现为「点击有时没声音」），显式放开（须在 app ready 前设置）。
@@ -48,7 +52,7 @@ app.commandLine.appendSwitch('disable-background-timer-throttling')
 // 防长期写爆。
 const DEBUG_LOG = process.env.WHALE_OVERLAY_LOG === '0'
   ? null
-  : path.join(os.homedir(), '.zcode', 'whale', 'overlay-debug.log')
+  : path.join(DATA_DIR, 'overlay-debug.log')
 try {
   if (DEBUG_LOG && fs.statSync(DEBUG_LOG).size > 5 * 1024 * 1024) {
     fs.rmSync(DEBUG_LOG + '.1', { force: true })
@@ -423,7 +427,7 @@ function noteZCodeIdentity(msg) {
 // 跟随脚本顺手读目标窗口的 DWM 沉浸式暗色标志（ZCode 壳层按自己的主题设置
 // nativeTheme，见其 app 包），这就是「ZCode 目前用的什么主题」。落盘给挂件
 // 服务的 /whale/zcode-theme.json 用（lib/zcode-theme.mjs 合并：观测 > 配置 > 系统）。
-const ZCODE_THEME_OBS_FILE = path.join(os.homedir(), '.zcode', 'whale', 'zcode-theme-observed.json')
+const ZCODE_THEME_OBS_FILE = path.join(DATA_DIR, 'zcode-theme-observed.json')
 let zcodeThemeObserved = -1
 let zcodeThemeObsWrittenAt = 0
 
@@ -477,6 +481,73 @@ function refreshUiReady() {
 // 只统计「窗口不存在」这一段（window-missing / 宿主换了进程），被盖住与加载中都不算。
 const MISSING_QUIT_MS = 30000
 let missingSince = 0
+// ---------- 宿主更新时的让路（issue #2 后半段） ----------
+// 判定与探测在 desktop/update-guard.cjs；这里只负责动作与节流：
+//   交还鼠标 → 让本机挂件服务也退出 → 退出浮层。
+// 触发时机：宿主进程已退出（msg.gone），或窗口消失期间探测到宿主更新程序正在跑。
+let yielding = false
+let updaterProbe = null
+const UPDATER_PROBE_MS = 2000
+
+// 让本机挂件服务退出：读 server.json 的令牌打 /whale/shutdown（与 cli.mjs stop 同一条路径）。
+// 失败不阻塞退出——浮层必须先让开，最多等 2 秒。
+function stopLocalService() {
+  return new Promise((resolve) => {
+    let info = null
+    try {
+      info = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'server.json'), 'utf8'))
+    } catch (err) {}
+    if (!info || typeof info.token !== 'string' || !info.port) return resolve(false)
+    let done = false
+    const fin = (v) => {
+      if (!done) {
+        done = true
+        resolve(v)
+      }
+    }
+    setTimeout(() => fin(false), 2000)
+    Promise.resolve()
+      .then(() =>
+        fetch('http://127.0.0.1:' + info.port + '/whale/shutdown', {
+          method: 'POST',
+          headers: { 'x-whale-token': info.token },
+          signal: AbortSignal.timeout(1500),
+        })
+      )
+      .then((res) => res.json())
+      .then((d) => fin(!!(d && d.ok)))
+      .catch(() => fin(false))
+  })
+}
+
+function yieldToHost(reason) {
+  if (yielding) return
+  yielding = true
+  stopUpdaterProbe()
+  log('yield-' + reason, 'updater=' + (isUpdaterRunning() ? 1 : 0))
+  try {
+    if (win && !win.isDestroyed()) win.setIgnoreMouseEvents(true) // 先交还鼠标
+  } catch (err) {}
+  stopLocalService().then((ok) => {
+    log('yield-service-stop', ok ? 'ok' : 'failed')
+    app.quit()
+  })
+}
+
+// 更新程序探测：只在「宿主窗口消失」期间启用（正常态零开销），2 秒一次。
+function startUpdaterProbe() {
+  if (updaterProbe || yielding) return
+  updaterProbe = setInterval(() => {
+    if (yieldPlan({ updaterRunning: isUpdaterRunning(), hostGone: false }) === 'quit-updater') yieldToHost('updater')
+  }, UPDATER_PROBE_MS)
+}
+function stopUpdaterProbe() {
+  if (updaterProbe) {
+    clearInterval(updaterProbe)
+    updaterProbe = null
+  }
+}
+
 function hideOverlay(reason) {
   if (overlayShown) {
     overlayShown = false
@@ -490,6 +561,8 @@ function hideOverlay(reason) {
   //（issue #2「无法关闭 ZCode」）。被盖住 / 加载中都不算（那是正常状态）。
   if (reason === 'window-missing' || reason === 'zcode-identity-changed') {
     if (!missingSince) missingSince = Date.now()
+    // 这一段里宿主可能正被更新程序替换：低频看一眼更新程序在不在跑，在跑就整体让路
+    startUpdaterProbe()
   }
   log('hidden', reason)
 }
@@ -501,7 +574,7 @@ setInterval(() => {
   if (Date.now() - missingSince < MISSING_QUIT_MS) return
   missingSince = 0
   log('quit-window-missing', String(MISSING_QUIT_MS) + 'ms')
-  app.quit()
+  yieldToHost('window-missing')
 }, 10000)
 
 // 加载期挂一个轻量轮询：就绪后立刻补一次显示（跟随脚本只在状态变化时发消息，
@@ -522,7 +595,8 @@ function applyZCodeBounds(msg) {
   if (!win || win.isDestroyed()) return
   if (msg.gone) {
     log('zcode-gone')
-    app.quit()
+    const plan = yieldPlan({ hostGone: true, updaterRunning: isUpdaterRunning() })
+    yieldToHost(plan === 'quit-updater' ? 'updater' : 'hostgone')
     return
   }
   const winBounds = win.getBounds()
@@ -592,6 +666,7 @@ function applyZCodeBounds(msg) {
 function applyFrame(frame) {
   lastViewport = frame
   missingSince = 0 // 有可用视口 = 宿主窗口在（空窗看门狗据此复位）
+  stopUpdaterProbe()
 
   let reshowTransition = false
   if (!win.isVisible()) {

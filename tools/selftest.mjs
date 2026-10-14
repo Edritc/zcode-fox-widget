@@ -2362,6 +2362,181 @@ try {
     )
   }
 
+  // ---------- 宿主更新时的让路（issue #2 后半段：更新 ZCode 时提示「无法关闭 ZCode」） ----------
+  // 判定与探测抽在 desktop/update-guard.cjs（纯函数 + 一次「可执行映像是否被占用」探测）。
+  // 这里测三层：纯函数三态、真机占用语义、以及**端到端**——用「跟随一个不存在的进程」模拟
+  // 宿主消失，断言浮层真的让路（停掉本机服务 + 自己退出）；再测「探测到更新程序在跑」这条
+  // 提前让路的分支。
+  {
+    const requireCjs = createRequire(import.meta.url)
+    const guard = requireCjs('../desktop/update-guard.cjs')
+    const throwCode = (code) => () => {
+      const e = new Error(code)
+      e.code = code
+      throw e
+    }
+    check(
+      '让路判定：更新程序在跑 → quit-updater；宿主已退出 → quit-hostgone；其余 wait',
+      guard.yieldPlan({ updaterRunning: true, hostGone: false }) === 'quit-updater' &&
+        guard.yieldPlan({ updaterRunning: false, hostGone: true }) === 'quit-hostgone' &&
+        guard.yieldPlan({ updaterRunning: false, hostGone: false }) === 'wait' &&
+        guard.yieldPlan() === 'wait'
+    )
+    check(
+      '更新程序路径：默认 %LOCALAPPDATA%\\@zcodedesktop-updater\\installer.exe；可被 WHALE_ZCODE_UPDATER_DIR 覆盖；缺 LOCALAPPDATA 时为空',
+      guard.updaterInstallerPath({ LOCALAPPDATA: 'C:\\L' }).replace(/\\/g, '/') === 'C:/L/@zcodedesktop-updater/installer.exe' &&
+        guard.updaterInstallerPath({ LOCALAPPDATA: 'C:\\L', WHALE_ZCODE_UPDATER_DIR: 'D:\\u' }).replace(/\\/g, '/') === 'D:/u/installer.exe' &&
+        guard.updaterInstallerPath({}) === ''
+    )
+    check(
+      '更新程序探测：可写=没在跑；EBUSY/EPERM=在跑；ENOENT=没在跑；WHALE_FAKE_UPDATER=1 强制为真',
+      guard.isUpdaterRunning('x', { openSync: () => 1, closeSync: () => {} }) === false &&
+        guard.isUpdaterRunning('x', { openSync: throwCode('EBUSY') }) === true &&
+        guard.isUpdaterRunning('x', { openSync: throwCode('EPERM') }) === true &&
+        guard.isUpdaterRunning('x', { openSync: throwCode('ENOENT') }) === false &&
+        guard.isUpdaterRunning('x', { env: { WHALE_FAKE_UPDATER: '1' } }) === true
+    )
+    // 真机语义：运行中的可执行映像被内核以「拒绝写入」方式打开 → 探测为「在跑」；结束后恢复。
+    // 这条正是 update-guard 赖以判定的机制，用真实进程验一遍（非 Windows 语义不同，跳过）。
+    if (process.platform !== 'win32') {
+      check('更新程序探测（真机）：跳过——占用语义只在 Windows 成立', true, '跳过')
+    } else {
+      const t = fs.mkdtempSync(path.join(os.tmpdir(), 'zcw-guard-'))
+      const exe = path.join(t, 'probe.exe')
+      fs.copyFileSync(process.execPath, exe)
+      const before = guard.isUpdaterRunning(exe)
+      const child = spawn(exe, ['-e', 'setTimeout(()=>{},6000)'], { stdio: 'ignore', windowsHide: true })
+      await new Promise((r) => setTimeout(r, 900))
+      const during = guard.isUpdaterRunning(exe)
+      try {
+        child.kill()
+      } catch (err) {}
+      await new Promise((r) => setTimeout(r, 1200))
+      const after = guard.isUpdaterRunning(exe)
+      check(
+        '更新程序探测（真机）：运行中被占用 → true；未运行 / 已退出 → false',
+        before === false && during === true && after === false,
+        JSON.stringify({ before, during, after })
+      )
+      fs.rmSync(t, { recursive: true, force: true })
+    }
+    {
+      const mainSrc = fs.readFileSync(path.join(PLUGIN_ROOT, 'desktop', 'main.cjs'), 'utf8')
+      check(
+        '让路接线：三条退出路径（宿主 gone / 30 秒空窗 / 探测命中）都走 yieldToHost，且都会停掉本机服务',
+        /function yieldToHost\(reason\)/.test(mainSrc) &&
+          /function stopLocalService\(\)/.test(mainSrc) &&
+          /stopLocalService\(\)\.then/.test(mainSrc) &&
+          /yield-service-stop/.test(mainSrc) &&
+          (mainSrc.match(/yieldToHost\(/g) || []).length >= 4
+      )
+      check(
+        '让路接线：更新程序探测只在「宿主窗口消失」期间启用（正常态零开销）',
+        /startUpdaterProbe\(\)/.test(mainSrc) && /stopUpdaterProbe\(\)/.test(mainSrc) && /UPDATER_PROBE_MS/.test(mainSrc)
+      )
+    }
+    // 端到端：起一个隔离服务 + 一个真的浮层（跟随不存在的进程 → 立刻 hide、5 秒后 gone）
+    {
+      const ELECTRON = path.join(
+        os.homedir(),
+        '.zcode',
+        'whale',
+        'desktop-runtime',
+        'node_modules',
+        'electron',
+        'dist',
+        process.platform === 'win32' ? 'electron.exe' : 'electron'
+      )
+      if (!fs.existsSync(ELECTRON)) {
+        check('让路（端到端）：跳过——本机未安装 Electron 运行时', true, '跳过')
+      } else {
+        const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms))
+        const scenario = async (fakeUpdater, port) => {
+          const t = fs.mkdtempSync(path.join(os.tmpdir(), 'zcw-yield-'))
+          const data = path.join(t, 'whale')
+          fs.mkdirSync(data, { recursive: true })
+          fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ port }), 'utf8')
+          const logFile = path.join(data, 'overlay-debug.log')
+          const svc = spawn(process.execPath, [path.join(PLUGIN_ROOT, 'lib', 'server.mjs')], {
+            cwd: PLUGIN_ROOT,
+            env: { ...process.env, ZCODE_HOME: t, WHALE_DISABLE_UPDATE_CHECK: '1' },
+            stdio: 'ignore',
+            windowsHide: true,
+          })
+          const alive = async () => {
+            try {
+              const r = await fetch('http://127.0.0.1:' + port + '/whale/health', { signal: AbortSignal.timeout(700) })
+              return r.ok
+            } catch (err) {
+              return false
+            }
+          }
+          let ready = false
+          for (let i = 0; i < 30 && !ready; i++) {
+            await sleepMs(300)
+            ready = await alive()
+          }
+          const spawnAt = Date.now()
+          const ov = spawn(ELECTRON, [path.join(PLUGIN_ROOT, 'desktop'), '--user-data-dir=' + path.join(t, 'profile')], {
+            cwd: PLUGIN_ROOT,
+            env: {
+              ...process.env,
+              WHALE_PORT: String(port),
+              WHALE_DATA_DIR: data,
+              WHALE_TARGET_PROCESS: 'NoSuchProcessZCWTEST',
+              WHALE_OVERLAY_LOG: logFile,
+              WHALE_DISABLE_UPDATE_CHECK: '1',
+              ...(fakeUpdater ? { WHALE_FAKE_UPDATER: '1' } : {}),
+            },
+            stdio: 'ignore',
+            windowsHide: true,
+          })
+          let exited = false
+          let exitAt = 0
+          ov.on('exit', () => {
+            exited = true
+            exitAt = Date.now()
+          })
+          let serviceStopped = false
+          for (let i = 0; i < 60 && !(exited && serviceStopped); i++) {
+            await sleepMs(500)
+            if (!(await alive())) serviceStopped = true
+          }
+          const logText = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8') : ''
+          try {
+            ov.kill()
+          } catch (err) {}
+          try {
+            svc.kill()
+          } catch (err) {}
+          await sleepMs(300)
+          fs.rmSync(t, { recursive: true, force: true })
+          return { ready, exited, serviceStopped, logText, elapsedMs: exitAt ? exitAt - spawnAt : -1 }
+        }
+        const a = await scenario(false, 39781)
+        check(
+          '让路（端到端·宿主消失）：浮层自己退出，并把本机挂件服务一起停掉（yield-hostgone + yield-service-stop ok）',
+          a.ready && a.exited && a.serviceStopped && /yield-hostgone/.test(a.logText) && /yield-service-stop ok/.test(a.logText),
+          JSON.stringify({ ready: a.ready, exited: a.exited, serviceStopped: a.serviceStopped, ms: a.elapsedMs })
+        )
+        const b = await scenario(true, 39782)
+        // 时间断言是这条用例的关键：gone 分支要等跟随脚本满 5 秒才触发，而探测是 2 秒一拍。
+        // 若只断言日志里出现 yield-updater，gone 分支也会打出同样的串（FAKE 让探测恒真），
+        // 那样「提前让路」就假通过了——所以 A 必须 ≥5 秒、B 必须明显早于 5 秒。
+        check(
+          '让路时序：宿主消失走满 5 秒宽限才退（≥5s），更新程序在跑则提前退（<5s）',
+          a.elapsedMs >= 5000 && b.elapsedMs > 0 && b.elapsedMs < 5000,
+          JSON.stringify({ hostGoneMs: a.elapsedMs, updaterMs: b.elapsedMs })
+        )
+        check(
+          '让路（端到端·更新程序在跑）：窗口消失期间探测命中 → 提前让路（yield-updater，早于 gone 的 5 秒）',
+          b.ready && b.exited && b.serviceStopped && /yield-updater/.test(b.logText),
+          JSON.stringify({ ready: b.ready, exited: b.exited, serviceStopped: b.serviceStopped, ms: b.elapsedMs })
+        )
+      }
+    }
+  }
+
   // 角色库：内置嘎啦嘛（默认）/大肥鱼固定在前，上传件自动启用；未指定时默认嘎啦嘛
   const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
   const upRes = await fetch('http://127.0.0.1:' + port + '/whale/role-upload.json', {
