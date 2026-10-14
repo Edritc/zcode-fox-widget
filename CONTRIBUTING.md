@@ -43,6 +43,17 @@
 - 版本变更必须独立成 `chore(release): vX.Y.Z`，body 列变更清单。**禁止把版本号变更悄悄夹带进 feat/fix**（v1.6.0–v1.7.2 曾四次这样夹带，本条即为教训成文）。
 - 版本号单一来源：`.zcode-plugin/plugin.json`（`lib/paths.mjs` 的 `pluginVersion()` 供 server 的 health 与 MCP 动态读取——审查 P2-2 之前 server.mjs 硬编码第三份，已移除）。release commit 仍需同步改 `marketplace.json` 的版本；selftest 有「health = 清单 = marketplace」一致性断言兜底。`desktop/package.json` 是浮层入口包，版本独立，不在此列。
 
+### 两条产品线的发布纪律（同仓双分支）
+
+本仓库有两个分支承载两条产品线：`main` = ZCode狐娘小挂件（`zcode-fox-widget`），`workbuddy` = WorkBuddy狐娘小挂件（`fox-widget`）。上面那套纪律两边都适用，另加这几条：
+
+- **版本号各自独立递增，不刻意对齐**。共享内核的修复 = 同一个修复、两个版本号，各自在 CHANGELOG 里记一条，release 正文互相点名配对关系（人看 tag 列表看不出配对）。只发一条线时**另一条线什么都不做**——不要为「对齐」补一个空 tag。
+- **tag 前缀即产品线**：`main` 用 `vX.Y.Z`，`workbuddy` 用 `wb-vX.Y.Z`。两条线的更新内核都按各自前缀做探测与下载，改动任一侧的前缀口径等于改发版契约。
+- **版本号提交必须先于 tag**：两线的更新内核都有「包内清单的版本号 == 目标版本」这道落盘前校验，tag 若打在版本号未改的提交上，之后所有下载包都会被判「版本不符」拒装。
+- **每个 tag 一份自己线的树**：客户端自动附的源码包天然是该 tag 对应提交的树，两线的更新内核下载的正是它。**不要做双端合并包**——更新内核的清理步骤是「删掉上一版清单里有、这一版没有的文件」，包里混入另一条线的文件，会让它在下一次更新时被当旧文件删掉。若另附人工安装包，按线各附一个、命名带线名与版本（如 `fox-widget-1.0.0.zip`），包内是插件根（含各自的清单目录）。
+- **`Latest` 徽章留给 `v*` 那条线**：WorkBuddy 线的 release 用 `gh release create … --latest=false`。它的探测本来就是「枚举 releases 再挑 `wb-v*`」，不依赖徽章；而 ZCode 线的探测走 `/releases/latest`，徽章被 `wb-v*` 抢走会让这条探测源失效。
+- **pre-release 的可见性两线不同**：ZCode 线的 `/releases/latest` 会被 GitHub 跳过（prerelease 与 draft 都不返回），所以 pre-release 不会自动送达 ZCode 用户；WorkBuddy 线是枚举 releases + 前缀过滤，**会**送达已装用户。发 pre-release 前先确认这是不是想要的。
+
 ## 提交纪律
 
 - **不改写已推送历史**：不 force-push 已推送分支、不 rebase 已进入 PR 的提交；修错用新提交。

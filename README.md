@@ -26,6 +26,24 @@
 
 逐条清单见 [`NOTICE`](./NOTICE)；MIT 许可全文见 [`LICENSE`](./LICENSE)。fork 之后新增了什么，见下一节与 [CHANGELOG](./CHANGELOG.md)。
 
+### 同仓的另一条产品线：WorkBuddy 版
+
+本仓库**同仓双分支**承载两条产品线，版本号各自独立、互不包含：
+
+| | `main`（本分支） | `workbuddy` 分支 |
+|---|---|---|
+| 产品 | **ZCode狐娘小挂件**（`zcode-fox-widget`） | **WorkBuddy狐娘小挂件**（`fox-widget`） |
+| 宿主 | ZCode 客户端 | WorkBuddy 客户端 |
+| 主口径 | 多厂商余额与计价（DeepSeek 峰谷 / GLM Plan / CommandCode 三重额度 / 每轮消耗） | **订阅积分**（今日积分 / 本轮 credit / 上下文余量） |
+| 插件清单 | `.zcode-plugin/plugin.json` | `.codebuddy-plugin/plugin.json` + `.mcp.json` |
+| 数据目录 | `~/.zcode/whale/` | 宿主的插件数据目录（`<WorkBuddy 数据目录>/plugins/data/fox-widget-fox-local/`） |
+| 发版 tag 前缀 | `v`（如 `v1.12.0`） | `wb-v`（如 `wb-v1.0.0`） |
+| 文档 | 本文件 | 该分支的 `README.md` 与 `CHANGELOG.md` 的 `## WorkBuddy` 小节 |
+
+两条线共用内核（角色与专属台词、角色配色、按压泡泡、记账与预警、厂商模板、桌面浮层、出站白名单与本地服务加固、自更新内核）；宿主相关的部分（数据源、主题、凭据发现、钩子事件、清单与路径变量）各自收在一个宿主适配文件里。共享内核的修复会在两边的 CHANGELOG 各记一条；只发布一条线时另一条线不动，详见 [CONTRIBUTING](./CONTRIBUTING.md) 的发布纪律。
+
+**两端同装时**各显示一个角色、各跟随各自的宿主窗口：浮层的单例判定只认「自己的运行时目录」，不会把对方的浮层当重复实例收掉（机制与真机证据见 `workbuddy` 分支的 `BUGREPORT-CROSS-LINE-OVERLAY-KILL.md`）。
+
 ---
 
 ## 功能总览（基础功能）
