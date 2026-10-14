@@ -1611,6 +1611,12 @@ try {
   }
   const glmPart = costOfUsage('GLM-5.3-Flash', { input_tokens: 500_000, cache_read_input_tokens: 450_000, output_tokens: 50_000, computed_total_tokens: 550_000 }, atC, 'account:zai-start-plan').amount
   const dsPart = costOfUsage('deepseek-flash', { input_tokens: 300_000, cache_read_input_tokens: 0, output_tokens: 30_000, computed_total_tokens: 330_000 }, atC, 'deepseek-test').amount
+  // 按量（真金白银）行的合计：套餐行与后面的 CommandCode credit 行都不进这个数。
+  // 主显示的「DeepSeek 今日已用」就该等于它。
+  const paidApiTotal =
+    costOfUsage('deepseek-flash', { input_tokens: 1, output_tokens: 1, computed_total_tokens: 2 }, atA, 'deepseek-test').amount +
+    costOfUsage('deepseek-flash', USAGE_B, atB, 'deepseek-test').amount +
+    dsPart
   check(
     '多模型轮次按行加总并带逐模型明细',
     third && third.seq === 2 && Array.isArray(third.models) && third.models.length === 2 && Math.abs(third.amount - (glmPart + dsPart)) < 1e-9,
@@ -1834,6 +1840,67 @@ try {
     mcpVersion === pluginJson.version,
     'mcp=' + mcpVersion + ' plugin.json=' + pluginJson.version
   )
+
+  // CommandCode 反代（预付 credit 池）不计真金白银：2026-10-15 的真实现场是
+  // 「上午走 CommandCode、下午转官方 API」，官方那部分 ¥1.48，而「DeepSeek 今日
+  // 已用」把 credit 折算的 ¥4.26 一起加进来显示 ¥5.73 —— 用户看到的是「我才花了
+  // 1 块多」。这条钉住三件事：credit 行金额 0、归到自己的厂商标签、官方行照算。
+  {
+    const atCmdgo = Date.now()
+    const CMDGO_USAGE = {
+      input_tokens: 1_000_000,
+      cache_read_input_tokens: 40_000_000,
+      output_tokens: 100_000,
+      computed_total_tokens: 41_100_000,
+    }
+    insertTurn('sess_selftest', 'turn_cmdgo', CMDGO_USAGE, atCmdgo, [
+      { model: 'deepseek/deepseek-v4.1-flash', providerId: 'cmdgo-bridge', usage: CMDGO_USAGE },
+    ])
+    let cmdgoTurn = null
+    const deadlineCmdgo = Date.now() + 6000
+    while (Date.now() < deadlineCmdgo) {
+      await new Promise((r) => setTimeout(r, 400))
+      cmdgoTurn = await getJson(port, '/whale/last-turn.json')
+      if (cmdgoTurn.seq > 3) break
+    }
+    const market = costOfUsage('deepseek/deepseek-v4.1-flash', CMDGO_USAGE, atCmdgo, 'cmdgo-bridge').amount
+    check(
+      'CommandCode 轮次按 tokens 展示（credit 池不折算成金额）',
+      cmdgoTurn && cmdgoTurn.billable === false && cmdgoTurn.amount === 0 && cmdgoTurn.tokens > 0 && market > 0,
+      cmdgoTurn
+        ? 'billable=' + cmdgoTurn.billable + ' amount=' + cmdgoTurn.amount + ' tokens=' + cmdgoTurn.tokens + '（等价市值 ¥' + market.toFixed(4) + ' 不计）'
+        : '无'
+    )
+    const rec = await getJson(port, '/whale/usage-records.json')
+    const apiTotal = paidApiTotal
+    if (rec && rec.ok) {
+      const row = (rec.today.models || []).find((m) => m.providerId === 'cmdgo-bridge')
+      check(
+        '用量记录：CommandCode 行金额记 0 但 tokens/市值在，且归到自己的厂商标签',
+        row && row.amount === 0 && row.plan === true && row.tokens > 0 && Number(row.market) > 0 && row.vendorLabel === 'CommandCode',
+        JSON.stringify(row || null)
+      )
+      check(
+        '「DeepSeek 今日已用」不含 CommandCode 折算（只剩按量行之和）',
+        Math.abs(rec.today.byVendor.DeepSeek.amount - apiTotal) < 1e-9 && rec.today.byVendor.DeepSeek.tokens > 0,
+        'DeepSeek 厂商 ¥' + rec.today.byVendor.DeepSeek.amount.toFixed(6) + '（含 credit 时会是 ¥' + (apiTotal + market).toFixed(6) + '）'
+      )
+      check(
+        'CommandCode 行独立成厂商（金额 0、tokens 在），不再并进 DeepSeek',
+        rec.today.byVendor.CommandCode && rec.today.byVendor.CommandCode.amount === 0 && rec.today.byVendor.CommandCode.tokens > 0,
+        JSON.stringify(rec.today.byVendor.CommandCode || null)
+      )
+      const bvSum = Object.keys(rec.today.byVendor).reduce((s, k) => s + (Number(rec.today.byVendor[k].amount) || 0), 0)
+      const rankOverTotal = rec.today.rankTotal - rec.today.total
+      check(
+        '今日合计 = 各厂商真金白银之和，credit 折算只进排名的等价市值',
+        Math.abs(rec.today.total - bvSum) < 2e-6 && rankOverTotal >= Number(row.market) - 1e-9,
+        'total=¥' + rec.today.total.toFixed(6) + ' rankTotal=¥' + rec.today.rankTotal.toFixed(6) + ' 多出的 ¥' + rankOverTotal.toFixed(6) + ' 里含 credit 等价 ¥' + Number(row.market).toFixed(6)
+      )
+    } else {
+      check('用量记录：CommandCode 行金额记 0 但 tokens/市值在，且归到自己的厂商标签', false, '接口不可用')
+    }
+  }
 
   // 预警设置归一：额度阈值泛化为单一 quotaPct（旧键 planPct/cmdgoPct 折入），
   // moneyAlert 仍由 DS/BM 两个旧键合并，负数/非法值归 0
