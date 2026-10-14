@@ -292,15 +292,18 @@ cat ${CODEBUDDY_PLUGIN_DATA}/autostart.log      # 每次启动追加一行，如
 
 实测 WorkBuddy **应用启动本身不触发任何插件钩子**（钩子与插件 MCP 都随「会话动作」——回退对话 / 新对话 / 发消息——而来），而钩子拉起的服务与浮层长在宿主进程树上，应用退出即被收走。于是存在一个死角：**启动 WorkBuddy 后一动不动 = 桌面上没有挂件**。
 
-看门狗（`lib/watchdog.mjs`）补这个缺口：一个登录自启的独立小进程，监听宿主 `logs/AppStartup.log` / `AppShutdown.log`，WorkBuddy 一启动就把「服务 + 浮层」拉起来，运行期每 15s 自检补活（服务被会话切换连带杀掉也会被拉回），宿主退出后宽限 5 分钟再停服务。装一次即可：
+看门狗（`lib/watchdog.mjs`）补这个缺口：一个登录自启的独立小进程，监听宿主 `logs/AppStartup.log` / `AppShutdown.log`，WorkBuddy 一启动就把「服务 + 浮层」拉起来，运行期每 15s 自检补活（服务被会话切换连带杀掉也会被拉回），宿主退出后宽限 5 分钟再停服务。
+
+装一次即可（**每台机器一次，不是每次开机**）：
 
 ```bash
-node lib/cli.mjs watchdog install    # 写入启动文件夹（用户级 VBS）并立即启动
+node lib/cli.mjs desktop install     # 装 Electron 运行时的同时**顺手装好看门狗**（推荐路径）
+node lib/cli.mjs watchdog install    # 也可以单独装（只装看门狗，跳过运行时）
 node lib/cli.mjs watchdog status     # 查看自启项与进程状态
 node lib/cli.mjs watchdog uninstall  # 移除
 ```
 
-日志在 `${CODEBUDDY_PLUGIN_DATA}/watchdog.log`。`autoStartWidget=false` 时看门狗怠速（不拉起任何东西）；排障可临时 `FOX_WIDGET_NO_WATCHDOG=1`。
+启动项写在启动文件夹（`fox-widget-watchdog.vbs`，用户级、免管理员、删文件即卸载），登录时它会自动挑最新的插件副本与可用的 node，所以**插件升级后不需要重装**。日志在 `${CODEBUDDY_PLUGIN_DATA}/watchdog.log`。`autoStartWidget=false` 时看门狗怠速（不拉起任何东西）；排障可临时 `FOX_WIDGET_NO_WATCHDOG=1`。
 
 ### 命令行
 
