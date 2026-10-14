@@ -10,7 +10,7 @@
 
 ## WorkBuddy
 
-### wb-v2.0.0 新增：移植到 WorkBuddy（积分口径 + 上下文余量）
+### wb-v1.0.0 新增：移植到 WorkBuddy（积分口径 + 上下文余量）
 
 > 移植规划见 `MIGRATION-PLAN-WORKBUDDY.md`，分阶段实测与决策记录见 `docs/porting/`，
 > 宿主契约的实测结论见 `docs/porting/phase-0.md`，交接说明见 `HANDOFF-WORKBUDDY-PORT.md`。
