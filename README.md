@@ -145,11 +145,29 @@
 
 2. **注册为本地插件市场**，二选一：
 
-   **方式 A：客户端界面**
-   设置 → 插件管理 → **发现** → 右上角 `+` → 选择**本地目录**，指向仓库根目录（内含 `.codebuddy-plugin/marketplace.json`）。
+   **方式 A：客户端界面（推荐）**
 
-   **方式 B：手工写配置**
-   在 `~/.workbuddy/plugins/known_marketplaces.json` 里追加一条（key 就是市场名）：
+   1. 左栏点 **「专家·技能·连接器」** → 选 **「技能」** 分栏。
+   2. 进「技能」页后，再选它的**子分页「插件」**。
+      该页的子分页是：推荐 / 技能库 / **插件** / 结绳 / 企业（对应宿主路由 `/plugins`、组件 `PluginsPage`）。
+   3. 点页头右上角的圆形 **`＋`**（悬浮提示「添加市场」）。
+      ⚠️ **它不是一个文件夹选择框**：弹出的「添加市场」对话框里只有一个**「市场源」文本框**。
+   4. 在「市场源」里粘贴**仓库的绝对路径**，例如
+      `C:\Users\paper\WorkBuddy\Worktrees\zcode-fox-widget\main-56fc9dd2`，然后点「提交」。
+   5. 市场 `fox-local` 出现后，在它下面安装 `fox-widget`（会让你选安装范围，选 **user** 即可）。
+
+   > 别走「技能」页的「**导入技能**」——那条路只接受 `.skill` 技能包，
+   > 选插件仓库目录会报「没有 .skill」。插件必须走「插件」分页的「添加市场」。
+
+   > **这一步最容易踩坑**，记一下宿主的判定逻辑（`pluginManager.parseSource()`）：
+   > 它先把输入按工作目录解析成路径，**路径真实存在**就当成「本地目录市场」；
+   > 路径不存在才依次试 GitHub 简写 `owner/repo`、`git@…`（SSH）、URL、ZIP。
+   > 所以**填市场名、插件名或目录名都不会生效，必须填一个真实存在的路径**，且路径要指向
+   > 含 `.codebuddy-plugin/marketplace.json` 的目录（= 本仓库根目录）。
+   > 宿主自带的输入提示原文：`owner/repo（GitHub）、git@…（SSH）、https://….zip（ZIP）、./path/to/marketplace（本地）`。
+
+   **方式 B：手工写配置**（宿主在运行时可能把这两个文件写回，导致手改被覆盖，仅作备用）
+   先完全退出 WorkBuddy，再在 `~/.workbuddy/plugins/known_marketplaces.json` 里追加一条（key 就是市场名）：
 
    ```json
    {
@@ -167,7 +185,8 @@
    > 想把这份插件分享给别人从 GitHub 安装，把 `source` 换成仓库形式即可：
    > `"source": { "source": "github", "repo": "pigeon189/zcode-fox-widget", "branch": "workbuddy" }`
 
-3. **安装并启用插件**：在插件管理里安装 `fox-widget`。手工方式则在 `~/.workbuddy/settings.json` 的顶层加：
+3. **安装并启用插件**：在刚添加的市场下安装 `fox-widget`（会问安装范围，选 **user**）。
+   手工方式则先退出 WorkBuddy，再在 `~/.workbuddy/settings.json` 的顶层加：
 
    ```json
    {
@@ -201,7 +220,7 @@
 插件的安装来源就是这份克隆的仓库，更新 = 拉新代码 + 让客户端重抓一遍：
 
 1. 在仓库目录里 `git pull` 拿到最新版（每次发版 `.codebuddy-plugin/plugin.json` 与 `.codebuddy-plugin/marketplace.json` 的版本号都会同步递增，这是客户端判断「有新版本」的依据）。
-2. 设置 → 插件管理 → 对 `fox-local` 市场重新抓取（或移除后重新添加），新版本会装进独立的缓存目录（`cache/fox-local/fox-widget/<版本>/`）。
+2. 在技能市场页选中 `fox-local` 市场，点「**刷新**」（或先「删除」再按上面的方式 A 重新添加），新版本会装进独立的缓存目录（`cache/fox-local/fox-widget/<版本>/`）。
 3. 重启客户端生效。
 
 说明：挂件的全部数据（API key、账本、角色、泡泡配置、Electron 运行时）都在 `<插件数据目录>`（默认 `~/.workbuddy/plugins/data/fox-widget-fox-local/`），与插件目录无关，更新不丢配置。

@@ -92,7 +92,10 @@ node "${CODEBUDDY_PLUGIN_ROOT}/lib/cli.mjs" desktop install # 安装 Electron �
 
 **本分支默认关闭自更新**（`lib/update.mjs` 的 `startAutoCheck()` 需显式 `FOX_WIDGET_ENABLE_UPDATE_CHECK=1` 才启用）。理由：ZCode 版的自更新会把文件**原地覆盖**到客户端 cache 快照，而 WorkBuddy 的版本账本由 `installed_plugins.json` 记录、目录名带版本号，原地覆盖会让二者对不上，和宿主的插件管理打架。
 
-推荐更新方式：`git pull` → 在 WorkBuddy 插件管理里重新抓取市场。发版口径见 `CONTRIBUTING.md`（tag 前缀 `wb-v`）。
+推荐更新方式：`git pull` → 在 WorkBuddy 的**技能市场页**选中 `fox-local` 市场点「刷新」。发版口径见 `CONTRIBUTING.md`（tag 前缀 `wb-v`）。
+
+> 装插件时注意：宿主的「添加市场」是**填「市场源」的文本框**（不是文件夹选择框），
+> 必须填**真实存在的路径**（仓库根绝对路径）；填市场名/目录名会被判成 `Unsupported source format`。
 
 ## 角色配色（继承 ZCode 版）
 
@@ -129,7 +132,10 @@ node "${CODEBUDDY_PLUGIN_ROOT}/lib/cli.mjs" desktop install # 安装 Electron �
 
 | 现象 | 原因与动作 |
 |---|---|
-| **界面上看不到挂件** | 插件无法注入 WorkBuddy 客户端界面，必须走桌面浮层：先 `desktop install` 装运行时，再 `window start` |
+| **界面上看不到挂件** | 插件无法注入 WorkBuddy 客户端界面，必须走桌面浮层：先 `desktop install` 装运行时，再 `window start`。**先分两层定位**：`curl 127.0.0.1:39321/whale/health` 有响应（服务是好的）但桌面没窗口 → 问题在浮层，看 `autostart.log` 最后一行与下面的「浮层秒退」两条 |
+| **启动 WorkBuddy 后桌面上没有挂件，随便动一下会话（比如点「对话回退」）才冒出来** | **这是宿主语义，不是故障**：WorkBuddy **启动客户端本身不触发 `SessionStart`**。实测（宿主日志 `executeSessionStartHooks` 对齐 `AppStartup.log`）：存活 14s / 21s 的两个应用实例里 SessionStart **一次都没跑**；其余实例内它出现的延迟从 **+19s 到 +736s 毫无规律** → 由**用户动作**驱动（`source=resume`＝真正进入/恢复一个会话），不是启动定时器。所以自启只挂 SessionStart 的话，冷启动后「一动不动」就没有挂件。**v2.0.1 起已在 `hook-event.mjs` 里加了廉价兜底**：`UserPromptSubmit` / `Notification` 时瞄一眼 `server.json` / `overlay.json` 的 pid，不活着就后台 detached 拉起 `autostart.mjs`（不阻塞这一轮，20s 节流）。排查时看 `<插件数据目录>/hook-state.json` 的 `lastEnsureSpawnAt` 与 `autostart.log`；要关掉这个行为设 `FOX_WIDGET_NO_ENSURE=1` |
+| **浮层进程在跑、但你就是看不见它** | 十有八九**不是故障，是设计行为**：浮层默认**只跟随 WorkBuddy 前台**，你切到别的窗口（浏览器 / 游戏 / 另一个 IDE / 图片查看器）它就会隐身。要它常驻就开挂件菜单里的**桌宠模式**。确认它此刻到底显没显示：看 `<插件数据目录>/overlay-debug.log` 最后几行 —— `hidden host-not-foreground` = **正常隐身**，`shown-at {…}` / `reshown-at {…}` = 已经显示。**问用户之前先问一句「你是不是在别的窗口上」**（本机实测：用户连续三次报「消失了」，每次查下来最顶层窗口都不是 WorkBuddy —— 分别是 War Thunder / 图片查看器 / WorkBuddy 被最小化）。重启后的头几十秒也常是这种情况（那时 WorkBuddy 还没拿到前台）。判定规则就一句：`show = 未最小化 && (前台是 WorkBuddy 或前台是浮层本身)`，且**只在状态变化时上报**，所以「一直没消息」= 状态没变过 = 一直该隐身 |
+| **用户说「挂件随对话出现/消失」，但那不是本挂件** | **WorkBuddy 自带一个桌宠**（资源名 `miao`，`renderer/assets/default-miao-*.png`，灰白猫耳 + 耳机 + 深色面罩的机器头、带倒影，由 `HomePetActivityBubble` 渲染）。它**带活动气泡**，助手干活时冒出来、干完收回去，所以看着就像「发消息就出现、跑完就消失」。本挂件的角色全是 chibi **少女**（嘎啦嘛 / 大肥鱼 / GPT娘 / kimi娘 / 小克），**没有机器头**。分辨与取证见 `docs/porting/phase-6-acceptance.md` §5.9。两者默认都落右下角、会重叠，**别把宿主桌宠当成我们的角色** |
 | **打开 WorkBuddy 没有自动出现鲸鱼** | 自启由 SessionStart hook（`lib/autostart.mjs`）负责，先看 `<插件数据目录>/autostart.log` 最后一行。**没有新行 = 钩子没触发**（插件未启用 / 改完 hooks.json 没重启客户端 / `command` 里 `node` 不在 PATH）。排查钩子：设 `FOX_WIDGET_HOOK_DEBUG=1`，钩子会把每次事件写进 `<插件数据目录>/hook.log`。也可 `node lib/autostart.mjs` 手动跑一次 |
 | **积分/上下文一直读不到** | 看 `/whale/hook.json` 有没有 `sessionId`：没有说明 UserPromptSubmit 钩子没跑到（`hook-state.json` 没写）。有 `sessionId` 再看 `/whale/context.json` 的 `reason`；`db-unavailable` = `~/.workbuddy/workbuddy.db` 读不到或 `node:sqlite` 不可用（自带 node 需 ≥ 22.5，实测 22.22.2 可用） |
 | **今日积分比客户端显示的小** | 面板扫的是 `~/.workbuddy/projects/*/*.jsonl`，只取最近 60 个会话、每个只读尾部 2MB。老会话或超长会话的早期轮次可能没算进去（`usage-records.json` 的 `scannedTranscripts` / `totalTranscripts` 可以看出来）。这是刻意的性能取舍 |
@@ -139,7 +145,9 @@ node "${CODEBUDDY_PLUGIN_ROOT}/lib/cli.mjs" desktop install # 安装 Electron �
 | 探测脚本秒退 / 浮层跟着消失 | 多为 `follow-window.ps1` 里的 C# 编译失败或脚本被写成非 ASCII。**该文件必须保持纯 ASCII**（PS 5.1 按 ANSI 代码页读） |
 | 浮层里菜单的数字框打不了字 | 换成自定义下拉的路径已处理；还不行就确认浮层版本与插件一致（`/whale/health` 的 `version`），或改用本地页面（浏览器打开 `http://127.0.0.1:<port>/`）直接键入 |
 | **和挂件互动后 WorkBuddy 画面卡住（点一下才恢复）** | 浮层窗口设为不可激活（`focusable:false` → `WS_EX_NOACTIVATE`）解决；另有 `desktop/main.cjs` 的 `type: 'toolbar'`（让浮层不进宿主 Chromium 的遮挡判定）**不能删**——删掉会复发「点角色后宿主停帧」（ZCode 侧 issue #2 的真机 A/B 实锤，WorkBuddy 同为 Electron，同源风险存在）。改动窗口选项后必须 `window stop` + `window start` |
-| 浮层启动失败 | `node lib/cli.mjs window status` 看运行时是否已安装；未安装则 `desktop install`。Electron 约 150MB，装到 `<插件数据目录>/desktop-runtime` |
+| 浮层启动失败 | `node lib/cli.mjs window status` 看运行时是否已安装；未安装则 `desktop install`（Electron 约 150MB，装到 `<插件数据目录>/desktop-runtime`） |
+| **浮层「启动后立即退出」**（`autostart.log` 记 `overlay=failed:浮层进程启动后立即退出`） | **先看 `<插件数据目录>/overlay-spawn.log`** —— Electron 的 stderr 落在这里。若日志为空/进程秒退，十有八九是下一条 |
+| **浮层继承了宿主注入的 `ELECTRON_RUN_AS_NODE=1`**（真机实锤，WorkBuddy 专有） | WorkBuddy 自己把 Electron 二进制当 Node 用，会给派生子进程设 `ELECTRON_RUN_AS_NODE=1`（还有 `NODE_OPTIONS=--require=<宿主 shim>`）。浮层是**真 Electron GUI**，继承它后 electron.exe 以 **Node 模式**启动，`require('electron')` 拿不到 `app`/`BrowserWindow`，主进程立刻退出 → 服务明明是好的、桌面却什么都没有。**自检**：同一个 electron.exe 跑 `--version` —— 带该变量打印 **node 版本**（如 `v24.21.0`），去掉才打印 **Electron 版本**（如 `v44.7.2`）。**代码已修**（`lib/overlay.mjs` 的 `overlaySpawnEnv()` 在 spawn 前清掉这两个变量，已有回归断言）。临时绕过：在**普通终端**里 `node lib/cli.mjs window start`（别用 WorkBuddy 派生的 shell）。**注意必须换新进程才生效**：已在跑的 MCP 服务 / 服务进程内存里缓存着旧模块，重启客户端或重新起进程即可 |
 | 改完 follow-window.ps1 后行为没变 | 该脚本是常驻子进程，改完要 `window stop` + `window start` 才重新加载 |
 | **开了「等确认提醒」但不弹 / 弹太频繁** | 事件源是 `Notification`（WorkBuddy **没有 PermissionRequest**）。先确认改完 hooks.json 后**重启过客户端**（钩子在客户端启动时加载）；再 `curl http://127.0.0.1:39321/whale/hook.json` 看 `waiting`/`ts`/`notification`。**已知局限**：`Notification` 会伴随所有宿主通知触发，比 ZCode 版更容易多提醒几次，所以默认关闭。若确有必要换成更精确的源，候选只剩 `PreToolUse` 返回 `permissionDecision:"ask"` 的自诉时机 |
 | 主题不跟随 | 看 `/whale/host-theme.json` 的 `source`：`host-window` = 浮层观测到宿主窗口暗色标志（最准）；`preferences` = 读 `preferences.json`；`missing` = 都没读到，回落系统。**注意**：宿主设为「跟随系统」时这里会返回 `system`，属正确行为 |

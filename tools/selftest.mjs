@@ -47,7 +47,7 @@ const { isBlockedHost } = await import('../lib/blocked-host.mjs')
 const { matchTemplateId, buildProviderEntries, invalidateDiscoverCache } = await import('../lib/discover.mjs')
 const { computeTodayUsage, resolveTodayUsage, pickBalanceInfo, platformUsageUrl } = await import('../lib/balance.mjs')
 const { mapHostTheme, themeOfPreferences, resolveHostTheme } = await import('../lib/host-theme.mjs')
-const { safeMirrorUrl } = await import('../lib/overlay.mjs')
+const { safeMirrorUrl, overlaySpawnEnv } = await import('../lib/overlay.mjs')
 const { MODEL_ROLE_RULES, roleIdForModel } = await import('../lib/paths.mjs')
 const { findApiKey, readPluginConfig } = await import('../lib/credentials.mjs')
 const { resolveBillingSource, isNightOffpeak, resolveHostBillingSource } = await import('../lib/source.mjs')
@@ -2140,7 +2140,9 @@ try {
   // WorkBuddy 没有 PermissionRequest 事件，「等确认」改由 Notification 触发。
   {
     const lab = fs.mkdtempSync(path.join(os.tmpdir(), 'fox-hook-'))
-    const hookEnv = { ...process.env, CODEBUDDY_HOME: lab, FOX_WIDGET_DATA_DIR: lab }
+    // 关掉「补拉起」：这一块只验状态文件语义，不该在测试里顺手起一个真服务
+    //（补拉起本身另有一块专门的断言，见下面 fox-ensure-*）。
+    const hookEnv = { ...process.env, CODEBUDDY_HOME: lab, FOX_WIDGET_DATA_DIR: lab, FOX_WIDGET_NO_ENSURE: '1' }
     const stateFile = path.join(lab, 'hook-state.json')
     const runHook = (payload) =>
       spawnSync(process.execPath, [path.join(PLUGIN_ROOT, 'lib', 'hook-event.mjs')], {
@@ -2200,6 +2202,99 @@ try {
       JSON.stringify({ empty: empty.status, bad: bad.status, event: after.event })
     )
     fs.rmSync(lab, { recursive: true, force: true })
+  }
+
+  // 补拉起（v2.0.1）：**WorkBuddy 启动客户端本身不触发 SessionStart**。实测（宿主日志
+  // `executeSessionStartHooks` 与 AppStartup.log 对齐）：存活 14s / 21s 的两个应用实例里
+  // SessionStart 一次都没跑；其余实例内的延迟从 +19s 到 +736s 毫无规律 → 由用户动作驱动
+  //（source=resume：真正进入/恢复一个会话），不是启动定时器。所以 hook-event 在
+  // UserPromptSubmit / Notification 上做一次廉价兜底：服务或浮层不活着就后台拉起 autostart.mjs。
+  // 这块会真的起一个服务，因此用独立数据目录 + 独立端口，测完收掉。
+  {
+    const lab = fs.mkdtempSync(path.join(os.tmpdir(), 'fox-ensure-'))
+    const port2 = 39700 + (process.pid % 200)
+    const env2 = { ...process.env, CODEBUDDY_HOME: lab, FOX_WIDGET_DATA_DIR: lab, FOX_WIDGET_PORT: String(port2) }
+    const autoLog = path.join(lab, 'autostart.log')
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+    const fire = (dir, payload) =>
+      spawnSync(process.execPath, [path.join(PLUGIN_ROOT, 'lib', 'hook-event.mjs')], {
+        input: JSON.stringify(payload),
+        encoding: 'utf8',
+        env: { ...env2, CODEBUDDY_HOME: dir, FOX_WIDGET_DATA_DIR: dir },
+      })
+    const readLog = (dir) => {
+      try {
+        return fs.readFileSync(path.join(dir, 'autostart.log'), 'utf8')
+      } catch (err) {
+        return ''
+      }
+    }
+
+    // 1) 服务与浮层都没在跑 → 应触发后台补拉起
+    fire(lab, { hook_event_name: 'UserPromptSubmit', session_id: 'e1' })
+    let waited = 0
+    while (!readLog(lab) && waited < 12000) {
+      await sleep(300)
+      waited += 300
+    }
+    const logText = readLog(lab)
+    check(
+      '补拉起：UserPromptSubmit 发现服务不在 → 后台拉起 autostart（不必等 SessionStart）',
+      /server=started/.test(logText),
+      JSON.stringify(logText.trim().slice(0, 90))
+    )
+    check(
+      '补拉起：测试环境没有 Electron 运行时 → 浮层如实 skip（不会真起 Electron）',
+      /overlay=skipped:no-runtime/.test(logText),
+      JSON.stringify(logText.trim().slice(0, 90))
+    )
+    let stEnsure = JSON.parse(fs.readFileSync(path.join(lab, 'hook-state.json'), 'utf8'))
+    check(
+      '补拉起：节流锚点落盘，会话身份照常写入',
+      Number(stEnsure.lastEnsureSpawnAt) > 0 && stEnsure.sessionId === 'e1',
+      JSON.stringify({ at: stEnsure.lastEnsureSpawnAt, sid: stEnsure.sessionId })
+    )
+
+    // 2) 紧接着再来一次 → 节流窗口内不重复 spawn
+    const beforeN = readLog(lab).split('\n').filter(Boolean).length
+    fire(lab, { hook_event_name: 'UserPromptSubmit', session_id: 'e2' })
+    await sleep(2500)
+    const afterN = readLog(lab).split('\n').filter(Boolean).length
+    check(
+      '补拉起：节流窗口内不重复拉起（连发消息不会拉出一堆 Electron）',
+      afterN === beforeN,
+      beforeN + ' -> ' + afterN
+    )
+
+    // 3) 非补拉起事件不触发
+    const lab3 = fs.mkdtempSync(path.join(os.tmpdir(), 'fox-ensure-other-'))
+    fire(lab3, { hook_event_name: 'Stop', session_id: 'e3' })
+    await sleep(2500)
+    check('补拉起：Stop 这类事件不触发补拉起', !fs.existsSync(path.join(lab3, 'autostart.log')), '')
+
+    // 4) 服务与浮层都活着 → 一次都不该 spawn（这是常态路径，必须零开销）
+    const lab4 = fs.mkdtempSync(path.join(os.tmpdir(), 'fox-ensure-up-'))
+    fs.writeFileSync(path.join(lab4, 'server.json'), JSON.stringify({ pid: process.pid, port: port2 }))
+    fs.writeFileSync(path.join(lab4, 'overlay.json'), JSON.stringify({ pid: process.pid, port: port2 }))
+    fire(lab4, { hook_event_name: 'UserPromptSubmit', session_id: 'e4' })
+    await sleep(3000)
+    const stUp = JSON.parse(fs.readFileSync(path.join(lab4, 'hook-state.json'), 'utf8'))
+    check(
+      '补拉起：服务+浮层都在时不动手（不 spawn、不写节流锚点）',
+      !fs.existsSync(path.join(lab4, 'autostart.log')) && !stUp.lastEnsureSpawnAt,
+      JSON.stringify({ at: stUp.lastEnsureSpawnAt })
+    )
+
+    // 收掉测试起的服务（否则会留一个占端口的孤儿）
+    try {
+      const svc = JSON.parse(fs.readFileSync(path.join(lab, 'server.json'), 'utf8'))
+      spawnSync('taskkill', ['/PID', String(svc.pid), '/T', '/F'], { windowsHide: true, timeout: 8000 })
+    } catch (err) {}
+    for (const d of [lab, lab3, lab4]) {
+      try {
+        fs.rmSync(d, { recursive: true, force: true })
+      } catch (err) {}
+    }
   }
 
   // 钩子状态路由 + 新 widget-state 字段
@@ -3062,14 +3157,20 @@ try {
   if (usageRank && usageRank.ok) {
     const amtList = usageRank.today.models || []
     const tokList = usageRank.today.modelsByTokens || []
-    // 金额榜按「排名值」（等价市值，Plan 行 amount=0 但 market>0）降序；
-    // token 榜按 tokens 降序
-    const rankOf = (m) => Number(m.market) || Number(m.amount) || 0
+    // 「金额榜」在 WorkBuddy 分支按**积分**降序（服务端 modelsList 的 rankByCredit，
+    // 逐模型行以 credit 为主键、tokens 为次键）；token 榜按 tokens 降序。
+    //
+    // 注意：**不要**拿等价市值（market）来验这一条。market 是按公开价目折算的参考值，
+    // 会随峰谷时段变化（PEAK_HOURS = [9,12],[14,18]），而 fixture 的时间戳是
+    // `Date.now()` —— 用它做断言会在高峰时段排序上翻车。2026-10-14 真机就踩到：
+    // 14:00 前 off-peak 时「积分序」与「市值序」恰好同向，所以这条断言看起来一直是绿的，
+    // 15:16（peak）复跑才暴露（[5.6, 0.94, 1.1235…] 里 0.94 与 1.1235 反序）。
+    const rankOf = (m) => Number(m.credit) || 0
     const descRank = (arr) => arr.every((v, i) => i === 0 || rankOf(arr[i - 1]) >= rankOf(v))
     const desc = (arr, key) => arr.every((v, i) => i === 0 || Number(arr[i - 1][key]) >= Number(v[key]))
     const maxTok = Math.max.apply(null, amtList.map((x) => Number(x.tokens) || 0))
     check(
-      '用量记录：两个榜各自降序（金额榜按排名值 / token 榜按 tokens）',
+      '用量记录：两个榜各自降序（金额榜按积分 / token 榜按 tokens）',
       amtList.length > 0 && tokList.length > 0 && descRank(amtList) && desc(tokList, 'tokens'),
       JSON.stringify({ amt: amtList.map(rankOf), tok: tokList.map((x) => x.tokens) })
     )
@@ -3498,6 +3599,59 @@ try {
         safeMirrorUrl('http://192.168.1.5/npm', FB) === FB &&
         safeMirrorUrl('http://localhost:4873', FB) === FB,
       'FALLBACK'
+    )
+  }
+
+  {
+    // ---------- 浮层 spawn 环境（2026-10-14 真机回归） ----------
+    //
+    // 真机现象：装了插件、服务也起来了（/whale/health 正常），但桌面就是没有挂件，
+    // autostart.log 只留一句 `overlay=failed:浮层进程启动后立即退出`。
+    // 根因：WorkBuddy 把 Electron 二进制当 Node 用，给子进程注入了
+    // `ELECTRON_RUN_AS_NODE=1`；浮层继承它后 electron.exe 以 Node 模式启动
+    // （实测同一 exe：带该变量 `--version` 打印 node v24.21.0、去掉后打印
+    // Electron v44.7.2），主进程拿不到 app/BrowserWindow，立刻退出。
+    // 把「spawn 前清掉污染变量、其余环境照旧、父进程不受影响」钉死。
+    const prevRunAsNode = process.env.ELECTRON_RUN_AS_NODE
+    const prevNodeOptions = process.env.NODE_OPTIONS
+    process.env.ELECTRON_RUN_AS_NODE = '1'
+    process.env.NODE_OPTIONS = '--require="…/node-language-shim.cjs"'
+    let ovEnv = null
+    try {
+      ovEnv = overlaySpawnEnv({ port: 45678 })
+    } finally {
+      if (prevRunAsNode === undefined) delete process.env.ELECTRON_RUN_AS_NODE
+      else process.env.ELECTRON_RUN_AS_NODE = prevRunAsNode
+      if (prevNodeOptions === undefined) delete process.env.NODE_OPTIONS
+      else process.env.NODE_OPTIONS = prevNodeOptions
+    }
+    check(
+      '浮层 spawn env：清掉 ELECTRON_RUN_AS_NODE（否则 Electron 以 Node 模式秒退）',
+      !!ovEnv && ovEnv.ELECTRON_RUN_AS_NODE === undefined,
+      String(ovEnv && ovEnv.ELECTRON_RUN_AS_NODE)
+    )
+    check(
+      '浮层 spawn env：清掉继承的 NODE_OPTIONS（不把宿主 node shim 注进 Electron 主进程）',
+      !!ovEnv && ovEnv.NODE_OPTIONS === undefined,
+      String(ovEnv && ovEnv.NODE_OPTIONS)
+    )
+    check(
+      '浮层 spawn env：WHALE_PORT / 跟随目标 / 跟随间隔仍就位',
+      !!ovEnv &&
+        ovEnv.WHALE_PORT === '45678' &&
+        !!ovEnv.WHALE_TARGET_PROCESS &&
+        /^\d+$/.test(String(ovEnv.WHALE_FOLLOW_INTERVAL_MS)),
+      ovEnv && [ovEnv.WHALE_PORT, ovEnv.WHALE_TARGET_PROCESS, ovEnv.WHALE_FOLLOW_INTERVAL_MS].join(' / ')
+    )
+    check(
+      '浮层 spawn env：不是空环境（PATH 等基础变量仍继承）',
+      !!ovEnv && typeof ovEnv.PATH === 'string' && ovEnv.PATH.length > 0 && Object.keys(ovEnv).length > 5,
+      ovEnv && Object.keys(ovEnv).length + ' 个变量'
+    )
+    check(
+      '浮层 spawn env：不改动父进程环境（进程自身仍带宿主变量）',
+      process.env.ELECTRON_RUN_AS_NODE === prevRunAsNode,
+      String(process.env.ELECTRON_RUN_AS_NODE)
     )
   }
 
