@@ -133,7 +133,7 @@ zcode-fox-widget/
 | 2 | 「用户手动退出过就别再自动拉起」 | 现在是每次会话启动幂等拉起 | 参考 CrossPet：比较退出标记 mtime 与宿主顶层进程启动时间（Windows 要 toolhelp + QueryFullProcessImageName，跳过 cmd/powershell 外壳） |
 | 3 | 「等确认提醒」的事件源 | ZCode 靠 `PermissionRequest` 钩子 | **WorkBuddy 没有这个事件**（见 §5.3），要换数据源 |
 | 4 | 噪音过滤（跳过 agent 自己的后台轮次） | 没做 | 现在只挂低频事件用不上；**要做姿势就必须先做**，否则角色会被后台轮次带得乱动。WorkBuddy 的 `sessions.is_background_automation` 字段可直接用(【实测】) |
-| 5 | 心跳/自检面 | 数据面有（`hook-state.json` + `/whale/hook.json`），界面诊断行刚被用户要求删掉 | 若要恢复，别做成 `钩子 UserPromptSubmit 20:18` 那种裸事件名——做成开关旁边的状态点或 tooltip |
+| 5 | 心跳/自检面 | 数据面有（`hook-state.json` + `/whale/hook.json`），界面诊断行已移除（菜单不放开发者诊断文本） | 若要恢复，别做成 `钩子 UserPromptSubmit 20:18` 那种裸事件名——做成开关旁边的状态点或 tooltip |
 
 ---
 
