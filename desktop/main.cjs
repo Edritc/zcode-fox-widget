@@ -279,6 +279,47 @@ function createWindow() {
 }
 
 // ---------- 跟随 ZCode 主窗口 ----------
+
+// ---------- 跟随脚本静默自愈 ----------
+//
+// 【实测 2026-10-14】跟随脚本正常时，起来后 ~1.5s（Add-Type 编译完）就会发出
+// 第一条 stderr（follow-start）与 stdout 消息；目标窗口找不到也会立刻发
+// {"hide":true}（follow-window.ps1 的 missSince 分支）。所以「起来后长时间一条
+// 输出都没有」= 脚本本身卡死在半路（本实例是在宿主回收钩子进程树的瞬间被拉起的，
+// PowerShell 子进程一直没跑到 Run()）：页面起了、进程活着，鲸鱼却永远不上屏，
+// 桌面上什么都看不到。这时重启一次跟随脚本通常就能恢复（重新 spawn 一个干净的
+// PowerShell）；连续两轮仍静默就不再折腾——留给上层的看门狗/钩子重拉整个浮层。
+const FOLLOWER_SILENT_MS = 15000
+const FOLLOWER_SILENT_RETRY_LIMIT = 2
+let followerSilentTimer = null
+let followerSilentRetries = 0
+// 本轮跟随脚本是否出过输出（每个新脚本实例都从 false 起步——不能用全局的
+// lastFollowerMsg 判：换过一次脚本后它还留着上一轮的消息，静默会被误判成活着）
+let followerGotOutput = false
+function armFollowerSilentWatch() {
+  if (followerSilentTimer) clearTimeout(followerSilentTimer)
+  followerSilentTimer = setTimeout(() => {
+    followerSilentTimer = null
+    if (!win || win.isDestroyed()) return
+    if (followerGotOutput) return
+    followerSilentRetries++
+    if (followerSilentRetries > FOLLOWER_SILENT_RETRY_LIMIT) {
+      log('follower-silent-giveup', String(followerSilentRetries - 1) + ' retries')
+      return
+    }
+    log('follower-silent-restart', followerSilentRetries + '/' + FOLLOWER_SILENT_RETRY_LIMIT)
+    restartFollower('silent')
+  }, FOLLOWER_SILENT_MS)
+}
+function noteFollowerAlive() {
+  followerGotOutput = true
+  followerSilentRetries = 0
+  if (followerSilentTimer) {
+    clearTimeout(followerSilentTimer)
+    followerSilentTimer = null
+  }
+}
+
 function startFollower() {
   let hwnd = ''
   try {
@@ -314,6 +355,8 @@ function startFollower() {
     child.stdin.on('error', () => {}) // 跟随进程退出时管道会断，静默即可
   }
   log('follower-started', 'interval=' + followIntervalMs + 'ms')
+  followerGotOutput = false
+  armFollowerSilentWatch()
   let buf = ''
   child.stdout.on('data', (chunk) => {
     buf += chunk.toString('utf8')
@@ -322,6 +365,8 @@ function startFollower() {
       const line = buf.slice(0, idx).trim()
       buf = buf.slice(idx + 1)
       if (!line) continue
+      // 任何一行输出（包括解析失败的坏行）都证明脚本活着：静默自愈归零
+      noteFollowerAlive()
       let msg = null
       try {
         msg = JSON.parse(line)
@@ -338,11 +383,19 @@ function startFollower() {
       applyHostBounds(msg)
     }
   })
-  child.stderr.on('data', (chunk) => log('follower-stderr', chunk.toString('utf8').slice(0, 200)))
+  child.stderr.on('data', (chunk) => {
+    // follow-start 等诊断行也是活性证据（编译完成的标志）
+    noteFollowerAlive()
+    log('follower-stderr', chunk.toString('utf8').slice(0, 200))
+  })
   child.on('exit', (code) => {
     // 被主动替换掉的旧实例：这里不再做什么，否则会误退出整个浮层
     if (follower !== child) return
     follower = null
+    if (followerSilentTimer) {
+      clearTimeout(followerSilentTimer)
+      followerSilentTimer = null
+    }
     log('follower-exit', String(code))
     // 跟随脚本自己退了（多半是 ZCode 已退出）：浮层也没有存在意义了
     if (code !== null && !app.isQuitting) app.quit()
