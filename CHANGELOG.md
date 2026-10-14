@@ -23,7 +23,7 @@
 - **主题跟随改读宿主**：`lib/zcode-theme.mjs` → `lib/host-theme.mjs`，第二层数据源换成 `~/.workbuddy/storage/user-*/global/preferences.json` 的 `theme`；路由 `/whale/zcode-theme.json` → `/whale/host-theme.json`；「跟随 ZCode」→「跟随 WorkBuddy」。
 - **凭据发现改扫宿主**：`lib/discover.mjs` 重写（环境变量表 / 宿主 `settings.json` 的 `env` 与 `pluginConfigs` / 插件数据目录的 `apiKey` 与 `vendorKeys`）；`provider_config.json` 与 `zcode-builtin.json` 模板继承路径删除。
 - **新增宿主适配层 `lib/host.mjs`**：数据目录、db、主题、进程名、浮层单例特征、环境变量名、事件表差异全部收在一个文件里，把 `git merge main` 的冲突面从「十几个文件散落硬编码」缩到「1 个文件」。
-- **浮层适配**：跟随目标换 `WorkBuddy`（`follow-window.ps1` 默认目标进程改名，文件仍保持纯 ASCII）；**移除「宿主启动就绪」门控**（WorkBuddy 的启动标记未实测到可用锚点，而门控失效方向是「鲸鱼永不出现」，比加载期早出现严重得多）——`desktop/ui-ready.cjs` 删除；浮层单例判定同时接受新旧插件名（两端同装不出现「双角色同屏」）。
+- **浮层适配**：跟随目标换 `WorkBuddy`（`follow-window.ps1` 默认目标进程改名，文件仍保持纯 ASCII）；**移除「宿主启动就绪」门控**（WorkBuddy 的启动标记未实测到可用锚点，而门控失效方向是「鲸鱼永不出现」，比加载期早出现严重得多）——`desktop/ui-ready.cjs` 删除；**随本版带上 ZCode 线 v1.12.0 的两项浮层修复**——窗口加 `type: 'toolbar'`（治「点角色后宿主停止刷新画面」，机制与真机 A/B 见 `OVERLAY-PAUSE-FINDINGS.md`）与单例判定改为只认「本插件运行时的 electron 目录」（治跨产品线互杀，见 `BUGREPORT-CROSS-LINE-OVERLAY-KILL.md`；此前按插件名子串匹配，两端同装时本线角色会在对方启停后被收掉、桌面只剩服务不见角色）。
 - **「等确认提醒」换事件源**：WorkBuddy **没有 `PermissionRequest` 事件**，改挂 `Notification`（已知会伴随所有宿主通知触发，故默认关闭，并把原始通知文本记入 `hook-state.json` 便于核实）。
 - **自更新默认关闭**：ZCode 式的「原地覆盖所有安装目录」会与宿主的插件管理打架（宿主用目录名 + `installed_plugins.json` 记版本），本分支改为显式设 `FOX_WIDGET_ENABLE_UPDATE_CHECK=1` 才启用；推荐更新方式 = `git pull` + 客户端重抓市场。发版 tag 前缀 `wb-v`，探测读 `workbuddy` 分支并只挑 `wb-v*` 的 release（避免命中 ZCode 线的 tag）。
 - **砍掉 GLM Plan 配额**：唯一数据源是 ZCode 客户端日志，宿主无对应物；`lib/plan-balance.mjs` 冻结（导出接口保留，恒返回 `not-supported-on-workbuddy`），`lib/vendors.mjs` 的 `zcode-plan` 模板删除，`/whale/plan.json` 保留但恒返回不支持。
@@ -37,16 +37,6 @@
 > 本文件自 fork 以来（v1.1.0 起）每个版本的变更都记在这里；各版本在仓库中均有对应的 tag 与 GitHub Release。相邻的小修复版本按合并策略并入组内最后一个版本号（v1.8.7–v1.8.10 并入 v1.8.9；v1.3.1–v1.3.2 并入 v1.3.3、v1.4.1–v1.4.2 并入 v1.4.3、v1.5.1–v1.5.3 并入 v1.5.4、v1.7.1–v1.7.2 并入 v1.7.3、v1.7.5–v1.7.6 并入 v1.7.7、v1.7.8–v1.7.10 并入 v1.7.11、v1.8.3 并入 v1.8.4、v1.9.0-preview 并入 v1.9.0），中间版本号不再单独发版。
 
 > 命名说明：v1.8.4 及更早的版本发布时，产品曾使用「ZCode 版 DeepSeek 余额小鲸鱼挂件」「Widget of ZCode」等名称；v1.8.5 起统一为 **ZCode狐娘小挂件**（zcode-fox-widget）。下文条目中的产品名一律按新名称书写，功能与修复的描述保持发布当时的原文。
-
----
-
-## 未发布（Unreleased）：修复点角色后宿主 ZCode 停止刷新画面（issue #2 症状一）
-
-> 调查与真机 A/B 验证记录见 `OVERLAY-PAUSE-FINDINGS.md` 附录。代码已就位但**尚未发版**（版本号仍为 v1.11.1）。
-
-- **根因**：点击角色时浮层接管鼠标（`setIgnoreMouseEvents(false)`）会摘掉 `WS_EX_TRANSPARENT|WS_EX_LAYERED`；铺满工作区的置顶浮层又**没有 `WS_EX_TOOLWINDOW`**（实测 Electron 44.4.5 的 `skipTaskbar` 走 ITaskbarList，不再落样式位），于是被**宿主 ZCode 自己的 Chromium** 遮挡判定（`IsWindowVisibleAndFullyOpaque`）计为「完全不透明遮挡源」→ 宿主判定自己被完全遮挡 → 停止出帧（画面停在旧帧，点一下 ZCode 才恢复）。浮层进程里的 `disable-features=CalculateNativeWinOcclusion` 只作用于自己，管不到宿主。
-- **修复**：窗口创建处加 `type: 'toolbar'`（仅 Windows）——Electron 创建即设 `WS_EX_TOOLWINDOW` 且穿透/接管/键盘焦点各态全程保留，该位在宿主遮挡判定中被直接排除。附带从源头修掉历史上「点菜单文本框后浮层在任务栏冒幽灵按钮」的问题（`setFocusable` 重写样式后这一位不再被冲掉；跟随进程的 `EnsureToolWindow` 补写保留为安全网）。
-- **验证**（2026-10-14 真机，流式输出场景 + 完全被动采样，唯一变量为该样式位）：无 TOOLWINDOW 时点击后 113 帧仅 8 个不同（冻结 ≈8.5s）；补上 TOOLWINDOW 后 113/113 帧全变，不冻结。
 
 ---
 
@@ -90,10 +80,6 @@
   - **Kimi**：`kimi-latest`、`kimi-k2.5`、快照版与 `moonshot-v1` 系下线（迁移 k3），条目移除；在售 k3 / k2.7-code(+highspeed) / k2.6 一致。
   - **GLM / MiniMax / MiMo**：复核无变化。
 - **测试**：selftest 259→263（inkOverrides 三组、nextPeakChange 边界、价目增删各一组）、smoke-ui 82→87（倒计时占位符 / 流光挂色 / 逐秒走字 / 图挂降级 / 点角色续时）；调色板真实鼠标拖拽探针 12/12。
-
----
-
-## v1.9.0 新增：泡泡 v2.1 移植 + 多角色体系（五套内置角色 / 专属台词 / 浅色配色全套跟随）
 
 ---
 
