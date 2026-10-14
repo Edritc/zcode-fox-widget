@@ -33,19 +33,40 @@
 
 | 套件 | 命令 | 结果 |
 |---|---|---|
-| 主自检 | `node tools/selftest.mjs` | 见下「测试结果」 |
-| 更新内核自检 | `node tools/selftest-update.mjs` | 见下 |
-| 前端冒烟 | `node tools/smoke-ui.mjs` | 见下（找不到 headless 浏览器时 SKIP 是预期） |
+| 主自检 | `node tools/selftest.mjs` | **全部通过 285/285**，0 失败 0 跳过 |
+| 更新内核自检 | `node tools/selftest-update.mjs` | **50/50 通过**（含重启链路端到端） |
+| 前端冒烟 | `node tools/smoke-ui.mjs` | **全部通过 103/103**（本机 msedge 真跑，无 SKIP） |
 
 三套测试的**隔离手法**保留（承 HANDOFF §7.1）：临时目录 + 伪造数据源，不碰真实数据目录。
 变化点是隔离变量名（`CODEBUDDY_HOME` / `FOX_WIDGET_DATA_DIR`）与 fixture 结构
 （宿主 `session_usage` + `sessions` 两张表 + transcript jsonl，取代 ZCode 的
 `turn_usage` / `model_usage`）。
 
-**测试结果**
+移植期新增/改写的断言（要点）：
+- **清单契约**：`.codebuddy-plugin/plugin.json` 的 `name: fox-widget` / `hooks` / `mcpServers`
+  字段、`.mcp.json` 的 server 声明（`node` + `${CODEBUDDY_PLUGIN_ROOT}/lib/mcp-server.mjs`）、
+  `.codebuddy-plugin/marketplace.json` 与 health 的版本号三处一致。
+- **钩子接线**：3 个事件（SessionStart / UserPromptSubmit / Notification）、全部
+  `type:"command"` + 字符串 command 含 `${CODEBUDDY_PLUGIN_ROOT}` + 数值 timeout（秒），
+  并**显式断言 `PostToolUse` 不在 hooks 里**（见 phase-1 的取舍说明）。
+- **数据源 fixture**：「金额虚高」回归（缓存命中按命中价、未命中只算 miss）、
+  `breakdown.output` 把思考并入（= `completion_tokens`）、`usageFromRawUsage` 的字段映射、
+  上下文百分比。
+- **禁字面量**：`lib/` `hooks/` `commands/` `skills/` `desktop/` `.codebuddy-plugin/` `.mcp.json`
+  中不得出现 `~/.zcode` 或 `${ZCODE_PLUGIN_ROOT}` 等路径/变量**字面量**（断言会先剥掉注释——
+  注释里描述历史来源的「ZCode」字样是有意保留的，不在此列）。
+- **单例归一**：浮层命令行特征同时匹配 `fox-widget` 与 `zcode-fox-widget`。
+- ZCode 专属、无 WorkBuddy 等价物的断言（GLM Plan 日志尾随、`provider_config.json` 发现、
+  `ZCODE_DATA_BASE_DIR`、ui-ready 门控、`type:"process"` 钩子）已删除或替换为对应的
+  WorkBuddy 断言，未静默丢覆盖。
 
-<!-- 由测试移植会话回填：每套的真实命令 + 最后若干行输出 + 跳过的项与原因 -->
-（待回填）
+**移植期在测试里抓到的一个真实缺陷**（值得记下来）：等价金额断言最初只按「非思考输出」
+（80_000）计，漏了思考（20_000）。而 `lib/pricing.mjs` 的既定口径是**输出与思考同价**
+（`costOfUsage` 用 `t.output + t.reasoning`），`usageFromRawUsage` 也刻意把
+`completion_tokens` 拆成 `output_tokens = completion − thinking` 与 `reasoning_tokens`
+两栏。断言少算一格 → 期望 ¥0.340980 vs 实际 ¥0.420980（差 = 20_000/1e6 × out 价）。
+修法：按 `completion_tokens` 全额计，并新增一条断言把「思考并入 output 桶」钉死。
+这个对照值正好说明**没有**踩缓存命中的重复计价坑（重复计费会得到 ¥1.339980）。
 
 ### 文档
 
@@ -87,13 +108,13 @@
 
 ## 遗留项
 
-1. **测试结果待回填**（见上表）。
-2. **真机验收未做**（清单见 `HANDOFF-WORKBUDDY-PORT.md` §7）——需要在实际的 WorkBuddy 客户端里
-   注册目录市场、安装、跑浮层。本次移植在 agent shell 里完成了能做的全部静态与隔离验证
-   （三套测试的隔离环境、端到端服务冒烟、MCP 协议冒烟、真实数据只读实测）。
-3. 用户在 `main` 分支上的历史 tag（`v1.9.0` 起累积未发版的提交）未处理——按规划
+1. **真机验收未做**（清单见 `HANDOFF-WORKBUDDY-PORT.md` §7）——需要在实际的 WorkBuddy
+   客户端里注册目录市场、安装、跑浮层。本次移植完成了能做的全部静态与隔离验证：
+   三套测试全绿（285/50/103）、端到端服务冒烟（13 个路由）、MCP 协议冒烟（5 个工具）、
+   钩子处理器冒烟（5 种载荷）、真实数据只读实测。
+2. 用户在 `main` 分支上的历史 tag（v1.9.0 起累积未发版的提交）未处理——按规划
    `main` 侧发版是 ZCode 线自己的事，本分支不动 `main`。
-4. `git push` 未执行：本次移植只在本地 `workbuddy/main-56fc9dd2` 工作树上完成（见下）。
+3. `git push` 未执行：本次移植只在本地 `workbuddy/main-56fc9dd2` 工作树上完成（见下）。
 
 ## 关于本工作树
 
