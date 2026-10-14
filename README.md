@@ -55,7 +55,10 @@
 - **记账二级页**：一级菜单有「**用量记录…**」（v1.8.7 移回一级）与「**=角色名记账=**」入口；额度预警、余额预警、余额校正收进记账页。
 - **预警**：一条「额度%」阈值对 GLM Plan 与 CommandCode 同时生效，加一条「余额¥」管 DeepSeek 余额见底；每源每天最多提醒一次，恢复后自动重新武装。
 - **桌宠模式**（浮层专属）：开启后挂件以**整个屏幕（工作区，自动排除任务栏）**为界面，可拖出 ZCode 窗口放到屏幕任何角落，且锁在所有窗口最上层——切到别的应用、ZCode 被盖住或最小化也不隐身；关闭后回到「跟随 ZCode 窗口」的原有行为。
-- **挂件交互**：拖拽、四边四分之一吸附、左吸附水平镜像（文字保持可读）、按压 Q 弹 + 音效、余额变化数字滚动、点击角色弹气泡、再点切随机台词（含 rua 动图；台词按内置角色分套——大肥鱼 = 原版文案也是默认套，嘎啦嘛 / GPT娘 / kimi娘 / 小克 各有一套专属台词，用户导入的角色用鲸鱼套；切角色当场换台词，不用刷新页面）。
+- **挂件交互**：拖拽、四边四分之一吸附、左吸附水平镜像（文字保持可读）、按压 Q 弹 + 音效、余额变化数字滚动、点击角色弹气泡、再点切随机台词（含 rua 动图；台词按内置角色分套——大肥鱼 = 原版文案也是默认套，嘎啦嘛 / GPT娘 / kimi娘 / 小克 各有一套专属台词，用户导入的角色用大肥鱼套；切角色当场换台词，不用刷新页面）。
+- **角色配色**（v1.10.0 起）：角色下拉每行末尾的小圆点打开配色弹层，浅/深两档各有内嵌 HSV 调色板与 HEX·RGB 输入，另有五个预设色块与「恢复默认」；浅色主题下整套界面的正文、描边、进度条随角色色走（正文按 4.5:1 派生达标色，装饰件用角色原色）。
+- **按模型自动换角色**（v1.12.0 起）：默认开启，按当前模型所属厂商族自动切换内置形象与该角色的配色、台词池（GLM 系→嘎啦嘛、DeepSeek→大肥鱼、GPT 系→GPT娘、Kimi→kimi娘、Claude→小克）；认不出的模型保持不动，在角色菜单里手动选过形象后自动关闭这一项。
+- **挂件内自动更新**（v1.11.0 起）：服务定时探测远端版本，菜单的记账行里有「检查更新…」与状态小字；更新面板支持镜像链下载、备份、跳过此版本与一键重启（详见下文「更新」小节）。
 - **汉堡菜单**：大小 0.6–2.5×、音效、音量、角色、对账口径、峰谷播报、主题（跟随 ZCode / 浅色 / 深色）、显示、气泡开关、按压泡泡、每轮消耗提示与自动关闭秒数、避让滚动条，浮层下还有「桌宠模式」与「跟随延迟」。
 - **会话自启**：打开 ZCode（新会话）时自动拉起，不用手动开。
 - **随窗口联动**：ZCode 移动/缩放时跟着走，最小化或被别的应用盖住时隐藏（除非开了桌宠模式），ZCode 退出时一起退出。
@@ -300,21 +303,19 @@ node lib/cli.mjs json            # 结构化输出，便于脚本消费
 | 大小 | 0.6–2.5×，滑块或数字（1–20） |
 | 音效 / 音量 | 内置小黄鸭/音效1，可导入自定义音效（1 个=按压松手共用，2 个=按压+松手）；音量 0 即静音 |
 | 角色 | 选择形象（内置：嘎啦嘛 / 大肥鱼 / GPT娘 / kimi娘 / 小克）；导入的图片可改名（✎）或删除（×）；内置形象也可删（隐藏记在 roles.json 的 hiddenBuiltins，清掉即找回）。在角色菜单里手动选过形象会自动关掉「按模型换角色」，尊重手动选择 |
-| 按模型换角色 | 默认开：按当前模型的厂商族自动切换内置形象（GLM 系→嘎啦嘛、DeepSeek→大肥鱼、GPT 系→GPT娘、Kimi→kimi娘、Claude→小克），连带该角色的配色与台词池一起换；认不出的模型（Qwen / MiniMax / MiMo / Gemini…）保持当前形象不动 |
-| 气泡 | 左侧开关控制思考气泡显隐，右侧「按压泡泡设置」打开自定义队列；同一行末尾的「等确认提醒」默认关：打开后 ZCode 弹出权限确认 / 提问等你处理时，挂件提醒一次（同一件事只提醒一次） |
+| 按模型换角色 | 默认开：按当前模型的厂商族自动切换内置形象（GLM 系→嘎啦嘛、DeepSeek→大肥鱼、GPT 系→GPT娘、Kimi→kimi娘、Claude→小克），连带该角色的配色与台词池一起换；认不出的模型（Qwen / MiniMax / MiMo / Gemini…）保持当前形象不动。在角色菜单里手动选过形象后自动关闭 |
 | 对账口径 | 大肥鱼记账 / 实时·令牌（v1.7.0 起决定「对账 + 兜底」用哪个账号数字，主显示固定本机库） |
 | 峰谷播报 | 台词里峰谷文案的风格（默认 / 梁文峰谷 / !?强强?!） |
 | 主题 | 浅色模式 / 深色模式 / 跟随 ZCode（三层判定：浮层观测 ZCode 窗口的 DWM 暗色标志 > 配置 ui.theme > 操作系统深浅色） |
 | 显示 | 气泡主显示跟随哪个计费源（自动 / Plan / CommandCode / GLM / DeepSeek） |
-| 气泡 | 是否允许自动弹出气泡 |
-| 按压泡泡 | 自定义按压泡泡队列（DSH 式可视化编辑器：加权变体 / 随机语句带权重与样式 / 内置视图 / 图片与随机图片 / 超链接 / 模块库）；首分区「每轮消耗提示内容」同面板编辑 |
+| 气泡 | 左侧开关控制思考气泡显隐，中间「按压泡泡设置」打开自定义队列（DSH 式可视化编辑器：加权变体 / 随机语句带权重与样式 / 内置视图 / 图片与随机图片 / 超链接 / 模块库；首分区「每轮消耗提示内容」同面板编辑），末尾「等确认提醒」默认关：打开后 ZCode 弹出权限确认 / 提问等你处理时，挂件提醒一次（同一件事只提醒一次） |
 | 每轮消耗提示 | 是否在每轮结束后弹消耗气泡；自动关闭秒数（0 = 手动关）。提示内容在「按压泡泡设置」首分区编辑 |
 | 避让滚动条 | 让挂件右侧避开滚动条的像素宽度（默认关） |
 | 隐藏菜单按钮 | 开启后挂件上的菜单按钮不再出现，改用右键点击角色唤出菜单（位置不变） |
 | 桌宠模式 | **仅浮层**：锁在最上层、切应用不隐身 |
 | 跟随延迟 | **仅浮层**：探测 ZCode 窗口位置的间隔，16 / 40 / 100 / 250ms（16ms 为系统定时器粒度下的实际下限） |
 | 用量记录 | 今日金额与模型占比、近 7 天逐日、最近 50 条明细（一级菜单；v1.8.0–v1.8.6 曾收进记账页） |
-| =角色名记账= | 记账二级页：额度预警 / 余额预警 / 预警内容模板 / 余额校正（原「预警」「余额校正」两行已收编于此） |
+| =角色名记账= | 记账二级页入口（额度预警 / 余额预警 / 预警内容模板 / 余额校正——原「预警」「余额校正」两行已收编于此）；同一行末尾还有 **「检查更新…」与更新状态小字**（v1.11.0 起，原先独占一行） |
 
 ### 浮层里的交互要点
 
@@ -362,17 +363,17 @@ node lib/cli.mjs json            # 结构化输出，便于脚本消费
 想核对每一分钱，用 `node lib/cli.mjs turn`，它会逐档列出：
 
 ```
-上一轮对话消耗   ¥ 1.33
+上一轮对话消耗   ¥ 0.62
 模型             deepseek-flash
 计价时段         空闲（base 价目）
-缓存命中输入     22,637,312 tokens × ¥0.05/M = ¥1.1319
-未命中输入       12,049 tokens × ¥1.5/M = ¥0.0181
-输出             40,034 tokens × ¥4.5/M = ¥0.1802
+缓存命中输入     22,637,312 tokens × ¥0.02/M = ¥0.4527
+未命中输入       12,049 tokens × ¥1/M = ¥0.0120
+输出             40,034 tokens × ¥4/M = ¥0.1601
 ```
 
 ### 改价目
 
-DeepSeek 调价时改 `lib/pricing.mjs` 顶部的 `PEAK_HOURS` / `BASE_PRICE` / `PRO_PRICE`。`deepseek-v4-pro` 走 3 倍价，其余（含 `deepseek-flash`）走基础价。
+DeepSeek 调价时改 `lib/pricing.mjs` 顶部的 `PEAK_HOURS` / `BASE_PRICE` / `PRO_PRICE`。两个档位表各自单独维护，**不按固定倍数换算**（当前快照下 `deepseek-v4-pro` 相对基础档约为命中 7.5× / 未命中 4.5× / 输出 3.375×，任一侧调价都会变）。
 
 ---
 
@@ -449,6 +450,9 @@ zcode-fox-widget/
 │  ├─ vendors.mjs              厂商余额/配额模板框架（host 白名单、缓存、归一化）
 │  ├─ discover.mjs             厂商凭据自动发现（多路径扫描 + 短 TTL 缓存）
 │  ├─ zcode-theme.mjs          「跟随 ZCode」主题三层判定（观测 > 配置 > 系统）
+│  ├─ blocked-host.mjs         环回/私有/保留地址判定（出站硬约束与本地网关判定共用一份口径）
+│  ├─ update.mjs               挂件内自动更新：镜像链探测、纯 JS 解 tar.gz、落盘与清理、备份轮转
+│  ├─ hook-event.mjs           钩子事件 → hook-state.json（「等确认提醒」的数据面）
 │  ├─ paths.mjs                数据目录与文件路径常量（含数据目录迁移候选探测）
 │  ├─ credentials.mjs          凭据发现 + 出站主机白名单校验
 │  ├─ service.mjs              挂件服务的发现/拉起/关闭
@@ -469,6 +473,12 @@ zcode-fox-widget/
 | `config.json` | API Key、平台令牌、厂商 key（vendorKeys）、端口、自启开关、跟随间隔 |
 | `widget-state.json` | 挂件外观与菜单开关（大小、音效、主题、气泡、对账口径、预警阈值、排名口径…） |
 | `bubble-content.json` | 按压泡泡队列（v2：`{v:2, tapAdvance, steps:[{modules}]}`；旧 v1 配置读取时自动迁移） |
+| `bubble-templates.json` | 预警内容模板与每轮消耗提示模板（与泡泡队列分文件存，v1.8.x 起） |
+| `bubble-imgs/` + `bubble-imgs.json` | 泡泡里可用的自备图片与索引（`/whale/bubble-img.png` 按图取字节） |
+| `hook-state.json` | 钩子事件状态：最近事件名 / 工具 / 时间戳 / 「等确认」标记与计数（菜单「等确认提醒」与 `/whale/hook.json` 读它） |
+| `update-state.json` | 自动更新状态：检查时间 / 当前与最新版本 / 阶段与进度 / 错误 |
+| `update-files.json` | 上一次更新写下的「各安装目录的文件清单」（按 root 分条），供下次清理旧文件 |
+| `update/backup/` | 更新前备份的被覆盖 / 被删除文件（按时间戳分目录，保留最近两份） |
 | `roles.json` + `roles/` | 导入的角色索引与图片；`hiddenBuiltins` 记录被删（隐藏）的内置形象，清掉即找回 |
 | `sounds/` + `sounds.json` | 导入的音效文件与索引（≤20 套，v1.6.0 起） |
 | `usage-ledger.json` | 记账口径的账本（含最近 30 天归档） |
@@ -480,7 +490,7 @@ zcode-fox-widget/
 | `autostart.log` | 每次会话启动的自启结果 |
 | `desktop-runtime/` | Electron 运行时（下载包约 150MB，解压装机后占用约 370MB；删掉即回收，浮层随之失效） |
 
-服务接口（排查时可直接 curl）：页面与资产 `/`（`/index.html`）、`/whale/widget.js`、`/whale/image.png`、`/whale/rua.gif`、`/whale/sound/press.mp3` 与 `/whale/sound/release.mp3`（`?set=<音效集 id>`）；状态查询 `/whale/health`、`/whale/balance.json`、`/whale/plan.json`、`/whale/cmdgo.json`（CommandCode 三重额度，`?refresh=1` 强制绕缓存）、`/whale/vendors.json`、`/whale/usage-records.json`、`/whale/session.json`、`/whale/last-turn.json`、`/whale/sounds.json`、`/whale/roles.json`、`/whale/bubble-content.json`（GET/POST）、`/whale/balance-adjustments.json`（GET/POST）、`/whale/size.json`（GET/PUT）、`/whale/zcode-theme.json`；写操作 `/whale/role-upload.json`、`/whale/role-rename.json`、`/whale/role-delete.json`、`/whale/sound-upload.json`、`/whale/sound-delete.json`（写操作校验 Origin）；关停 `/whale/shutdown`（需 `server.json` 随机令牌）。
+服务接口（排查时可直接 curl）：页面与资产 `/`（`/index.html`）、`/whale/widget.js`、`/whale/image.png`、`/whale/rua.gif`、`/whale/bubble-img.png`（`?id=<图片 id>`，内置 `rua` 与导入件都走它）、`/whale/sound/press.mp3` 与 `/whale/sound/release.mp3`（`?set=<音效集 id>`）；状态查询 `/whale/health`、`/whale/balance.json`、`/whale/plan.json`、`/whale/cmdgo.json`（CommandCode 三重额度，`?refresh=1` 强制绕缓存）、`/whale/vendors.json`、`/whale/usage-records.json`、`/whale/session.json`、`/whale/last-turn.json`、`/whale/hook.json`（钩子接入状态与「等确认」标记）、`/whale/update.json`（更新状态与动作：GET 看状态，POST `action=check\|update\|skip\|unskip\|restart`）、`/whale/sounds.json`、`/whale/roles.json`、`/whale/bubble-content.json`（GET/POST）、`/whale/bubble-templates.json`（预警与消耗提示模板，GET/POST）、`/whale/bubble-imgs.json`（图库索引）、`/whale/balance-adjustments.json`（GET/POST）、`/whale/size.json`（GET/PUT）、`/whale/zcode-theme.json`；写操作 `/whale/role-upload.json`、`/whale/role-rename.json`、`/whale/role-delete.json`、`/whale/bubble-img.json`、`/whale/bubble-img-delete.json`、`/whale/sound-upload.json`、`/whale/sound-delete.json`（写操作校验 Origin）；关停 `/whale/shutdown`（需 `server.json` 随机令牌）。
 
 ---
 
@@ -520,13 +530,12 @@ zcode-fox-widget/
 
 ---
 
----
-
 ## 版本历史
 
 - 逐版本变更：[CHANGELOG.md](./CHANGELOG.md)（v1.1.0 起；相邻小修复版本按合并策略并入组内最后版本号，现存版本均有 tag 与 GitHub Release）。
 - 贡献与提交规范：[CONTRIBUTING.md](./CONTRIBUTING.md)。
 - 命名沿革：ZCode 版 DeepSeek 余额小鲸鱼挂件（移植期）→ Widget of ZCode（v1.8.2–v1.8.4）→ **ZCode狐娘小挂件**（v1.8.5 起）。
+- 调研与审查报告（仓库根，随代码一起维护）：[`FIX-REPORT-ISSUE2-HOST-FREEZE.md`](./FIX-REPORT-ISSUE2-HOST-FREEZE.md)（点角色后宿主停帧的根因与真机 A/B）、[`OVERLAY-PAUSE-FINDINGS.md`](./OVERLAY-PAUSE-FINDINGS.md)（同一问题的完整调查记录，含无效方向）、[`HANDOFF-WORKBUDDY.md`](./HANDOFF-WORKBUDDY.md)（移植到 WorkBuddy 的交接说明）。
 
 ---
 

@@ -97,7 +97,7 @@ node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" desktop install # 安装 Electron 运行
 | `port` | 固定端口，留空则用默认 39321，占用时自动顺延 |
 | `autoStartWidget` | 默认 `true`，SessionStart 是否自动拉起服务 |
 | `autoStartOverlay` | 默认 `true`，会话启动时是否顺带拉起桌面浮层（Electron 运行时未安装时静默跳过） |
-| `followIntervalMs` | 跟随探测间隔（毫秒），默认 40；越大肥鱼跟得越紧。挂件菜单里的「跟随延迟」会覆盖它 |
+| `followIntervalMs` | 跟随探测间隔（毫秒），默认 40；**越小**跟得越紧（16ms 已到系统定时器粒度的实际下限）。挂件菜单里的「跟随延迟」会覆盖它 |
 
 挂件自身的外观与开关（大小、音效、音量、角色、主题、气泡、每轮消耗提示与自动关闭秒数、避让滚动条、桌宠模式、跟随延迟、预警阈值、显示跟随）在 `~/.zcode/whale/widget-state.json`，由挂件菜单直接写入：
 - `theme`：`light` / `dark` / `system`——`system` 即「跟随 ZCode」（三层判定：浮层观测 ZCode 窗口的 DWM 暗色标志 > 用户级配置 `ui.theme` > 操作系统深浅色，实现见 `lib/zcode-theme.mjs`）。（v1.8.0 曾有第四态 `whale` 蓝白主题，v1.8.1 回滚；旧值读取时归一为 `light`。）

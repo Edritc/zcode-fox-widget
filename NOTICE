@@ -75,21 +75,24 @@ ZCode狐娘小挂件（zcode-fox-widget，https://github.com/pigeon189/zcode-fox
   `~/.zcode/whale/bubble-content.json`（文件划分沿用上游 `.dshw-bubble.json`
   与 `.dshw-usage.json` 分离的做法）。
 - **ZCode 特有（无上游对应）**：GLM 平价分档价目表（来源 docs.bigmodel.cn，
-  2026-09-29 版）；ZCode Plan 套餐配额的日志尾随读取（lib/plan-balance.mjs）；
+  2026-09-29 版）；ZCode Plan（v1.7.8 起界面名为 GLM Plan，template id 仍是
+  `zcode-plan`）套餐配额的日志尾随读取（lib/plan-balance.mjs）；
   基于 session_entry「runtime/model_selection」的计费源智能切换；ZCode 深浅
   主题配色（取自 ZCode 客户端 .theme-zai-dark/light 的实测 token）；
   「跟随系统」主题（prefers-color-scheme）；浮层窗口的不可激活方案
   （Electron focusable:false + 按键类控件时才临时接管键盘焦点），上游是网页版
   挂件、没有窗口激活这层问题。
 
-- **v1.2.0 价目与素材来源**：GPT/Claude/Qwen/MiniMax/MiMo/Kimi 六家价目取自
-  各厂商官网 2026-09-29 版——OpenAI 为 community.openai.com 官方员工帖与
-  LiteLLM 注册表交叉验证（platform.openai.com 反爬未能直取，建议人工复核）；
-  Claude 来自 claude.com/pricing；Qwen 来自 help.aliyun.com 模型服务计费页
-  （华北2北京价）；MiniMax 来自 platform.minimaxi.com；MiMo 来自
-  platform.xiaomimimo.com / mimo.mi.com（双端点拆分与 Token Plan 夜间 0.8x
-  消耗系数依官方 FAQ）；Kimi 来自 platform.kimi.com。小狐娘形象 `GLM.png`
-  为项目提供素材，非上游资产。
+2026-09-30 起的价目与素材来源（v1.2.0）
+--------------------------------------
+
+六家厂商价目取自各厂商官网 2026-09-29 版——OpenAI 为 community.openai.com 官方
+员工帖与 LiteLLM 注册表交叉验证（platform.openai.com 反爬未能直取，建议人工复核）；
+Claude 来自 claude.com/pricing；Qwen 来自 help.aliyun.com 模型服务计费页
+（华北2北京价）；MiniMax 来自 platform.minimaxi.com；MiMo 来自
+platform.xiaomimimo.com / mimo.mi.com（双端点拆分与 Token Plan 夜间 0.8x
+消耗系数依官方 FAQ）；Kimi 来自 platform.kimi.com。嘎啦嘛形象 `GLM.png`
+为项目提供素材，非上游资产。
 
 上游许可为 MIT，允许使用、复制、修改、合并、发布、分发、再许可和/或销售本软件的
 副本，前提是保留上述版权声明与许可声明。本目录内 LICENSE 即为上游许可原文。

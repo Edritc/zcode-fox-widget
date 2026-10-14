@@ -47,14 +47,16 @@ description: 手动复核并更新 ZCode狐娘小挂件（zcode-fox-widget）的
 
 1. **改 `lib/pricing.mjs`**：只改对应厂商的表；同步文件头该家的快照日期与来源注释；估算值保留行内注释惯例（如「缓存写未公布 → 按通行折扣 125% 输入估算」「cw 未公布记 0」）。
 2. **改 `tools/selftest.mjs` 钉死断言**（数值全部写死，改价必改断言）：计价断言集中在「计价口径」段（GLM 系、DeepSeek 峰谷、GPT/Claude/Qwen/MiniMax/Kimi/MiMo 各一条）；另有若干**间接依赖价目的断言**（余额/今日已用、last-turn 金额、USD 折算）——按改动的厂商全数核对，跑 selftest 看哪条红改哪条。
-3. **CHANGELOG.md**：新增 `## vX.Y.Z 调价：…` 小节，写明哪几家、什么口径变了、快照日期。
-4. **版本号**：`lib/server.mjs` 的 `VERSION`、`.zcode-plugin/plugin.json`、`marketplace.json` 三处同步 +1。
+3. **CHANGELOG.md**：在该版本的小节里写明哪几家、什么口径变了、快照日期（小节标题的动词按 CONTRIBUTING §文档风格 取「变更」，例如 `## vX.Y.Z 变更：全厂商价目复核（快照 YYYY-MM-DD）`）。
+4. **版本号**：`.zcode-plugin/plugin.json` 与 `marketplace.json` 两处同步 +1（server / MCP 的版本经 `lib/paths.mjs` 的 `pluginVersion()` 从清单读取，没有第三份硬编码）。
 5. **提交与部署**（仓库工作目录执行）：
    ```bash
    git add lib/pricing.mjs tools/selftest.mjs CHANGELOG.md .zcode-plugin/plugin.json marketplace.json lib/server.mjs
-   git commit -m "pricing(vX.Y.Z): <厂商> 价目复核更新（快照 YYYY-MM-DD）"
+   git commit -m "chore(pricing): <厂商> 价目复核更新（快照 YYYY-MM-DD）"
+   # type 按改动性质取 feat(pricing)（新增模型）/ fix(pricing)（纠错）/ chore(pricing)（例行复核），
+   # 不加版本号 scope——见 CONTRIBUTING §type / §scope
    git --git-dir="<本仓库根目录>/.git" archive HEAD | tar -x -C "<本机插件缓存目录>"
-   node lib/cli.mjs window restart && node lib/cli.mjs stop && node lib/cli.mjs start
+   node lib/cli.mjs restart-all
    ```
 6. **验证**：`node tools/selftest.mjs` 全绿 → `curl -s http://127.0.0.1:39321/whale/health` 版本正确 → `node lib/cli.mjs turn` 看上一轮逐档明细与改动一致 → 需要看气泡效果用 `node tools/demo.mjs`（假数据，不碰真实账单）。
 
