@@ -1,6 +1,6 @@
 ---
 name: zcode-fox-widget
-description: 操作与排查 ZCode狐娘小挂件（zcode-fox-widget）。适用于：查询 DeepSeek 账户余额、今日已用金额、当前峰谷时段或上一轮对话消耗；启动/停止挂件，把鲸鱼作为桌面浮层显示在 ZCode 界面之上（安装 Electron 运行时、浮层点不动或不显示、浮层关闭、**桌宠模式**：界面扩展为整个屏幕工作区、可拖出 ZCode 窗口、失焦也不隐身、锁在最上层）；配置 DeepSeek API Key、对账口径（大肥鱼记账 / 实时·令牌）、挂件端口或会话自启；调整主题（浅色/深色/跟随 ZCode）、角色（导入图片、改名、删除，内置形象可隐藏找回）、**角色配色**（每个角色的浅/深两档气泡墨色，内嵌调色板 + HEX/RGB，含「恢复默认」与恢复手段）、音效（导入/删除）、预警阈值（泛化后的「额度%」覆盖 GLM Plan 与 CommandCode + DeepSeek 余额¥）、按压泡泡（自定义点击队列）、**用量记录**（一级菜单入口，v1.8.7 从记账页移回）与**记账二级页**（「=角色名记账=」入口，内含额度/余额预警与余额校正）、**挂件内自动更新**（镜像链检查/下载/替换/备份，跳过某版本，重启挂件生效）、按模型自动换角色（默认开；手动选过形象即自动关闭）、钩子接入状态与「等确认提醒」、今日排名口径（按金额/按 Token）；以及界面看不到挂件、余额获取失败、CommandCode 三重额度（月度池 + 5 小时/周窗口）读不到、厂商模板余额读不到、今日已用为 0、每轮消耗不弹窗、峰谷判定不对、更新失败 / 镜像不可达 / 版本不符拒装 / 更新后怎么回滚、配色改坏了怎么恢复、和挂件互动后 ZCode 画面卡住、挂件周期性消失重现（冻结自愈误判）等问题。
+description: 操作与排查 ZCode狐娘小挂件（zcode-fox-widget）。适用于：查询 DeepSeek 账户余额、今日已用金额、当前峰谷时段或上一轮对话消耗；启动/停止挂件，把鲸鱼作为桌面浮层显示在 ZCode 界面之上（安装 Electron 运行时、浮层点不动或不显示、浮层关闭、**桌宠模式**：界面扩展为整个屏幕工作区、可拖出 ZCode 窗口、失焦也不隐身、锁在最上层）；配置 DeepSeek API Key、对账口径（大肥鱼记账 / 实时·令牌）、挂件端口或会话自启；调整主题（浅色/深色/跟随 ZCode）、角色（导入图片、改名、删除，内置形象可隐藏找回）、**角色配色**（每个角色的浅/深两档气泡墨色，内嵌调色板 + HEX/RGB，含「恢复默认」与恢复手段）、音效（导入/删除）、预警阈值（泛化后的「额度%」覆盖 GLM Plan 与 CommandCode + DeepSeek 余额¥）、按压泡泡（自定义点击队列）、**用量记录**（一级菜单入口，v1.8.7 从记账页移回）与**记账二级页**（「=角色名记账=」入口，内含额度/余额预警与余额校正）、**挂件内自动更新**（镜像链检查/下载/替换/备份，跳过某版本，重启挂件生效）、按模型自动换角色（默认开；手动选过形象即自动关闭）、「等确认提醒」（ZCode 弹权限确认时提醒，与按压泡泡设置同一行）、今日排名口径（按金额/按 Token）；以及界面看不到挂件、余额获取失败、CommandCode 三重额度（月度池 + 5 小时/周窗口）读不到、厂商模板余额读不到、今日已用为 0、每轮消耗不弹窗、峰谷判定不对、更新失败 / 镜像不可达 / 版本不符拒装 / 更新后怎么回滚、配色改坏了怎么恢复、和挂件互动后 ZCode 画面卡住、挂件周期性消失重现（冻结自愈误判）等问题。
 ---
 
 # ZCode狐娘小挂件（zcode-fox-widget）
@@ -64,7 +64,7 @@ node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" window stop     # 关闭浮层
 node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" desktop install # 安装 Electron 运行时（浮层前置，一次性）
 ```
 
-服务接口（排查时可直接 curl）：`/whale/health`、`/whale/balance.json`、`/whale/last-turn.json`、`/whale/size.json`（GET/PUT）、`/whale/session.json`、`/whale/plan.json`（GLM Plan 配额）、`/whale/cmdgo.json`（CommandCode 三重额度，`?refresh=1` 强制绕缓存）、`/whale/vendors.json`、`/whale/usage-records.json`、`/whale/hook.json`（钩子接入状态与「等确认」标记）、`/whale/update.json`（GET 看状态，POST `action=check|update|skip|unskip|restart`）、`/whale/roles.json`、`/whale/role-upload.json`、`/whale/role-rename.json`（POST）、`/whale/role-delete.json`（POST）、`/whale/bubble-content.json`（GET/POST）、`/whale/balance-adjustments.json`（GET/POST）、`/whale/sounds.json`、`/whale/sound-upload.json`（POST）、`/whale/sound-delete.json`（POST）、`/whale/zcode-theme.json`、`/whale/image.png`、`/whale/rua.gif`、`/whale/sound/press.mp3` 与 `/whale/sound/release.mp3`（`?set=<音效集 id>`）、`/whale/widget.js`、`/whale/shutdown`（POST，需 `server.json` 令牌）。
+服务接口（排查时可直接 curl）：`/whale/health`、`/whale/balance.json`、`/whale/last-turn.json`、`/whale/size.json`（GET/PUT）、`/whale/session.json`、`/whale/plan.json`（GLM Plan 配额）、`/whale/cmdgo.json`（CommandCode 三重额度，`?refresh=1` 强制绕缓存）、`/whale/vendors.json`、`/whale/usage-records.json`、`/whale/hook.json`（等确认标记与最近事件，**菜单里已不再显示这行诊断**）、`/whale/update.json`（GET 看状态，POST `action=check|update|skip|unskip|restart`）、`/whale/roles.json`、`/whale/role-upload.json`、`/whale/role-rename.json`（POST）、`/whale/role-delete.json`（POST）、`/whale/bubble-content.json`（GET/POST）、`/whale/balance-adjustments.json`（GET/POST）、`/whale/sounds.json`、`/whale/sound-upload.json`（POST）、`/whale/sound-delete.json`（POST）、`/whale/zcode-theme.json`、`/whale/image.png`、`/whale/rua.gif`、`/whale/sound/press.mp3` 与 `/whale/sound/release.mp3`（`?set=<音效集 id>`）、`/whale/widget.js`、`/whale/shutdown`（POST，需 `server.json` 令牌）。
 
 ## 挂件内自动更新（v1.11.0 起）
 
@@ -152,6 +152,7 @@ node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" desktop install # 安装 Electron 运行
 | **更新后还是旧版本 / 改了 `server.mjs` 不生效** | `lib/server.mjs`、`lib/paths.mjs` 在服务进程启动时定版，必须重启挂件（面板「重启挂件」或 `node lib/cli.mjs restart-all`）；只有 `lib/widget.js` 每次请求现读，前端改动刷新页面即可 |
 | **挂件颜色怪怪的 / 整套界面被染成某个色** | 那是浅色档「整套界面跟随角色配色」。改回去：角色下拉 → 该行末尾圆点 → 「恢复默认」；或编辑 `~/.zcode/whale/widget-state.json` 清掉 `inkOverrides`（删掉某角色的键 = 该角色回内置配色）。正文色是按 4.5:1 派生的达标变体、装饰件才是角色原色，两者本来就不完全相同 |
 | 配色弹层里拖动色板没反应 / HEX 输了没生效 | HEX 支持 `#1A2B3C` / `26,43,60` / `rgb(26,43,60)`，需要回车或失焦才应用；拖动是实时预览、松手才落盘进 `inkOverrides`，所以松手前去别处看仍是旧值属预期 |
+| **开了「等确认提醒」但不弹** | 提醒由插件的 `PermissionRequest` 钩子驱动：先确认是新版插件且**改完 hooks.json 之后重启过 ZCode 客户端**（钩子在客户端启动时加载）。再 `curl http://127.0.0.1:39321/whale/hook.json` 看 `waiting`/`ts`：`configured:false` = 还没收到过任何钩子事件；`waiting:true` 但没弹，说明开启开关之前事件就到了（去重按事件时间戳，同一件事只弹一次）。菜单里已不显示钩子状态行，诊断只看这个接口 |
 
 排查浮层联动时有个前提：`desktop/follow-window.ps1` **必须保持纯 ASCII**。Windows PowerShell 5.1 会用系统 ANSI 代码页读取无 BOM 的 .ps1，中文注释会被解码成破坏语法的字节，脚本会直接退出（表现为跟随失效）。
 

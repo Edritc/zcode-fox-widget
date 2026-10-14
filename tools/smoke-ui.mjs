@@ -2259,7 +2259,7 @@ try {
   check('更新面板：返回按钮收起面板', !!upClosed && upClosed.open === false, JSON.stringify(upClosed))
   if (stubUp && stubUp.identifier) await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: stubUp.identifier })
 
-  // ⑭ 按模型换角色 + 钩子状态 + 等确认提醒（v-next）
+  // ⑭ 按模型换角色 + 等确认提醒（v-next）
   // 桩直接在当前页面里覆盖 fetch（不 reload）：模型/钩子状态由 window.__model、
   // window.__hook 两个旋钮驱动，页面自己的 3s（会话）/5s（钩子）轮询会跟着变。
   const stubAuto = await cdp.eval(
@@ -2289,14 +2289,16 @@ try {
       return { err: 'bad-json:' + String(raw).slice(0, 80) }
     }
   }
-  // 菜单行结构：按模型换角色（默认勾选）+ 钩子（状态 + 等确认提醒，默认不勾）
+  // 菜单行结构：按模型换角色（默认勾选）+ 「等确认提醒」复选框（默认不勾，和
+  // 按压泡泡设置同一行；菜单里不再有「钩子 <最近事件>」那行——诊断走 /whale/hook.json）
   const menuNewRows = parseJsonSafe(
     await cdp.eval(
-      "(function(){var rows=document.querySelectorAll('.zcwv-menu-row');var out={auto:null,hook:null};" +
+      "(function(){var rows=document.querySelectorAll('.zcwv-menu-row');var out={auto:null,ask:null,askRowHasBubbleBtn:false,hookRowGone:true};" +
         "for(var i=0;i<rows.length;i++){var t=rows[i].textContent;" +
         "if(t.indexOf('\\u6309\\u6a21\\u578b\\u6362\\u89d2\\u8272')!==-1){var cb=rows[i].querySelector('.zcwv-check');out.auto=cb?cb.checked:null}" +
-        "if(t.indexOf('\\u94a9\\u5b50')!==-1){var st=rows[i].querySelector('.zcwv-hook-state,.zcwv-update-state'),cb2=rows[i].querySelector('.zcwv-check');" +
-        "out.hook={state:st?st.textContent:null,ask:cb2?cb2.checked:null,hasLabel:t.indexOf('\\u7b49\\u786e\\u8ba4\\u63d0\\u9192')!==-1}}}" +
+        "if(t.indexOf('\\u7b49\\u786e\\u8ba4\\u63d0\\u9192')!==-1){var cb2=rows[i].querySelector('.zcwv-ask-check');out.ask=cb2?cb2.checked:null;" +
+        "var bs=rows[i].querySelectorAll('button');for(var j=0;j<bs.length;j++){if(bs[j].textContent.indexOf('\\u6309\\u538b\\u6ce1\\u6ce1\\u8bbe\\u7f6e')!==-1)out.askRowHasBubbleBtn=true}}" +
+        "if(t.indexOf('\\u94a9\\u5b50')!==-1)out.hookRowGone=false}" +
         'return JSON.stringify(out)})()'
     )
   )
@@ -2319,8 +2321,11 @@ try {
     await new Promise((r) => setTimeout(r, 800))
   }
   check(
-    '菜单新增两行：按模型换角色 + 钩子状态（等确认提醒默认不勾）',
-    typeof menuNewRows.auto === 'boolean' && !!menuNewRows.hook && menuNewRows.hook.ask === false && menuNewRows.hook.hasLabel === true,
+    '菜单：「等确认提醒」和按压泡泡设置同一行、默认不勾；「钩子 <最近事件>」诊断行已移除',
+    typeof menuNewRows.auto === 'boolean' &&
+      menuNewRows.ask === false &&
+      menuNewRows.askRowHasBubbleBtn === true &&
+      menuNewRows.hookRowGone === true,
     JSON.stringify(menuNewRows)
   )
   // 开关初值必须与 widget-state 一致：本次实现踩过「变量声明落在 buildMenu 调用之后，
@@ -2408,30 +2413,30 @@ try {
     afterReopen === expectAfter('whale'),
     JSON.stringify({ after: afterReopen, expect: expectAfter('whale'), switch: await autoSwitch() })
   )
-  // 钩子状态行：时间戳新鲜时显示事件名 + 时分
+  // 等确认提醒：先开启开关（它在「气泡」行、与按压泡泡设置同一行；「钩子 <最近事件>」
+  // 那一行已移除），再喂 waiting=true → 弹一次；同 ts 再轮询不重复弹
   const hookTs = Math.floor(Date.now() / 1000)
   await cdp.eval(
     '(function(){window.__hook={ts:' + hookTs + ",waiting:false,event:'UserPromptSubmit'};return true})()"
   )
-  await ensureMenuOpen() // 打开菜单会立刻刷一次钩子状态（诊断行不该看到过期值）
-  const hookLine = await pollEval(
-    cdp,
-    "(function(){var es=document.querySelectorAll('.zcwv-menu-row');for(var i=0;i<es.length;i++){" +
-      "if(es[i].textContent.indexOf('\\u94a9\\u5b50')!==-1){var st=es[i].querySelector('.zcwv-hook-state,.zcwv-update-state');" +
-      "return st&&st.textContent.indexOf('UserPromptSubmit')===0?st.textContent:null}}return null})()",
-    8000
-  )
-  check(
-    '钩子状态行：显示最近事件名与时间（诊断「接上了但从没收到事件」）',
-    typeof hookLine === 'string' && hookLine.indexOf('UserPromptSubmit') === 0,
-    JSON.stringify(hookLine)
-  )
-  // 等确认提醒：先开启开关，再喂 waiting=true → 弹一次；同 ts 再轮询不重复弹
   await ensureMenuOpen()
-  await cdp.eval(
-    "(function(){var rows=document.querySelectorAll('.zcwv-menu-row');for(var i=0;i<rows.length;i++){" +
-      "if(rows[i].textContent.indexOf('\\u94a9\\u5b50')!==-1){rows[i].querySelector('.zcwv-check').click();return true}}return false})()"
-  )
+  const clickAskSwitch = () =>
+    cdp.eval(
+      "(function(){var rows=document.querySelectorAll('.zcwv-menu-row');for(var i=0;i<rows.length;i++){" +
+        "if(rows[i].textContent.indexOf('\\u7b49\\u786e\\u8ba4\\u63d0\\u9192')!==-1){rows[i].querySelector('.zcwv-ask-check').click();return true}}return false})()"
+    )
+  const askSwitchState = async () =>
+    parseJsonSafe(
+      await cdp.eval(
+        "(function(){var rows=document.querySelectorAll('.zcwv-menu-row');for(var i=0;i<rows.length;i++){" +
+          "if(rows[i].textContent.indexOf('\\u7b49\\u786e\\u8ba4\\u63d0\\u9192')!==-1){var cb=rows[i].querySelector('.zcwv-ask-check');" +
+          "return JSON.stringify({checked:cb?cb.checked:null})}}return '{}'})()"
+      )
+    )
+  if (!(await askSwitchState()).checked) await clickAskSwitch()
+  await new Promise((r) => setTimeout(r, 400))
+  const askOn = await askSwitchState()
+  check('等确认提醒：开关可打开（与按压泡泡设置同行的复选框）', askOn && askOn.checked === true, JSON.stringify(askOn))
   await cdp.eval(
     '(function(){window.__hook={ts:' + (hookTs + 1) + ",waiting:true,event:'PermissionRequest'};return true})()"
   )
