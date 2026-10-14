@@ -1,271 +1,112 @@
 // 自检：在不触碰用户真实数据的前提下，端到端验证「每轮对话消耗」链路。
 //
-// 做法是把 ZCODE_HOME 指向一个临时目录，在里面伪造一个最小化的 ZCode 会话库
-// （turn_usage / model_usage 两张表），再拉起一个挂件服务实例，然后插入一条新的
-// 已完成轮次，观察 /whale/last-turn.json 的 seq 是否从 0 递增到 1 且金额与定价
-// 换算一致。顺带验证 health 接口与令牌关闭。
+// 做法是把 CODEBUDDY_HOME / FOX_WIDGET_DATA_DIR 指向临时目录，在里面伪造一个
+// 最小化的 WorkBuddy 会话库（workbuddy.db 的 sessions / session_usage 两张表 +
+// projects/<slug>/<sid>.jsonl 的 transcript），再拉起一个挂件服务实例，然后往
+// transcript 里追加一条新的已完成轮次，观察 /whale/last-turn.json 的 seq 是否
+// 递增、credit 是否与宿主记的 credit_json 一致。顺带验证 health、主题、钩子、
+// 角色、泡泡等接口。
+//
+// 口径红线（承 HANDOFF §7.2.2）：WorkBuddy 的 rawUsage.prompt_tokens **包含**
+// 缓存命中、completion_tokens **包含**思考；自算等价市值必须复用 usageFromRawUsage
+// 的映射（交给 pricing 的 splitInputTokens 拆分），否则缓存那 99% 会被按未命中价
+// 重复计费，金额虚高十几倍。
 //
 //   node tools/selftest.mjs
-import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import { DatabaseSync } from 'node:sqlite'
-import { costOfUsage, priceFor, isPeakTime, nextPeakChange, resolveVendor, resolvePricing, normalizeModelId } from '../lib/pricing.mjs'
-import { shapePlanPayload, turnPlanUsage, extraAmountsOfTurn, quotaBucketForModel, readPlanBalance, readLogFile } from '../lib/plan-balance.mjs'
-import { getPath, TEMPLATES, fetchFromTemplate, pickVendorBalance } from '../lib/vendors.mjs'
-import { isBlockedHost } from '../lib/blocked-host.mjs'
-import { matchTemplateId, buildProviderEntries, invalidateDiscoverCache } from '../lib/discover.mjs'
-import { computeTodayUsage, resolveTodayUsage, pickBalanceInfo, platformUsageUrl } from '../lib/balance.mjs'
-import { mapZcodeTheme, themeOfConfig, resolveZcodeTheme } from '../lib/zcode-theme.mjs'
-import { safeMirrorUrl } from '../lib/overlay.mjs'
-import { MODEL_ROLE_RULES, roleIdForModel } from '../lib/paths.mjs'
-import { findApiKey, readPluginConfig } from '../lib/credentials.mjs'
-import { resolveBillingSource, isNightOffpeak } from '../lib/source.mjs'
+import { spawn, spawnSync } from 'node:child_process'
 
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // 浮层的 desktop/*.cjs 是 CommonJS（Electron 主进程），从 ESM 自检里 require 进来测
 const requireCjs = createRequire(import.meta.url)
+
+// —— 隔离必须在 import 任何 lib/*.mjs 之前完成 ——
+// lib/host.mjs 的 HOST_HOME / PLUGIN_DATA_DIR 在 import 时求值，晚一步就会写到
+// 用户真实数据目录（~/.workbuddy 有正在跑的 WAL 库）。所以这里先设环境变量，
+// 再动态 import lib 模块（与 selftest-update.mjs 同法）。
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-selftest-'))
-const dbDir = path.join(tmpHome, 'cli', 'db')
-const dataDir = path.join(tmpHome, 'whale')
-fs.mkdirSync(dbDir, { recursive: true })
+const dataDir = path.join(tmpHome, 'plugin-data')
 fs.mkdirSync(dataDir, { recursive: true })
+process.env.CODEBUDDY_HOME = tmpHome
+process.env.FOX_WIDGET_DATA_DIR = dataDir
+// 版本自检会向镜像发真实请求：测试环境整个关掉（见 lib/update.mjs 的 startAutoCheck）
+process.env.WHALE_DISABLE_UPDATE_CHECK = '1'
 
-// Plan 配额日志的 fixture：写进 tmpHome/.zcode/v2/logs/<今天>.log，
-// 服务进程以 ZCODE_DATA_BASE_DIR=tmpHome 启动，plan-balance 会优先读这里。
-// 形状对齐真实日志：顶层 balances 是摘要（无 capabilities），模型映射在
-// plans[].entitlements[].capabilities 里；另放一条带内联 capabilities 的桶测兜底路径。
-const PLAN_FIXTURE = {
-  balanceCount: 3,
-  balances: [
-    {
-      entitlement_id: 'ent-flash',
-      show_name: 'GLM-5.3-Flash',
-      total_units: 100_000_000,
-      used_units: 10_000_000,
-      remaining_units: 90_000_000,
-      available_units: 90_000_000,
-      reserved_units: null,
-    },
-    {
-      entitlement_id: 'ent-5p3',
-      show_name: 'GLM-5.3',
-      total_units: 3_000_000,
-      used_units: 0,
-      remaining_units: 3_000_000,
-      available_units: 3_000_000,
-      reserved_units: null,
-    },
-    {
-      // 测试「balances 内联 capabilities」的兜底路径（部分版本可能带）
-      entitlement_id: 'ent-extra',
-      show_name: 'GLM-4.7-Flash',
-      total_units: 1_000_000,
-      used_units: 1_000_000,
-      remaining_units: 0,
-      available_units: 0,
-      reserved_units: null,
-      capabilities: ['model:glm-4.7-flash'],
-    },
-  ],
-  code: 0,
-  msg: '',
-  payload: {
-    code: 0,
-    msg: '',
-    data: {
-      server_time: Math.floor(Date.now() / 1000),
-      plans: [
-        {
-          plan_id: 'plan-fixture',
-          name: 'ZCode Start',
-          status: 'active',
-          starts_at: Math.floor(Date.now() / 1000) - 86400,
-          ends_at: Math.floor(Date.now() / 1000) + 86400,
-          entitlements: [
-            {
-              entitlement_id: 'ent-flash',
-              show_name: 'GLM-5.3-Flash',
-              meter: 'model_usage',
-              unit_type: 'token',
-              capabilities: ['model:glm-5.3-flash'],
-              grant_units: 100_000_000,
-              period: 'one_time',
-            },
-            {
-              entitlement_id: 'ent-5p3',
-              show_name: 'GLM-5.3',
-              meter: 'model_usage',
-              unit_type: 'token',
-              capabilities: ['model:glm-5.3'],
-              grant_units: 3_000_000,
-              period: 'one_time',
-            },
-          ],
+const { DatabaseSync } = await import('node:sqlite')
+const { costOfUsage, priceFor, isPeakTime, nextPeakChange, resolveVendor, resolvePricing, normalizeModelId } = await import('../lib/pricing.mjs')
+// plan-balance 在 WorkBuddy 分支已冻结：只保留两个出口（readPlanBalance/turnPlanUsage），
+// 恒返回「宿主无此项」。GLM Plan 日志解析相关的断言在本文件里已按迁移要求删除。
+const { readPlanBalance, turnPlanUsage } = await import('../lib/plan-balance.mjs')
+const { getPath, TEMPLATES, fetchFromTemplate, pickVendorBalance } = await import('../lib/vendors.mjs')
+const { isBlockedHost } = await import('../lib/blocked-host.mjs')
+const { matchTemplateId, buildProviderEntries, invalidateDiscoverCache } = await import('../lib/discover.mjs')
+const { computeTodayUsage, resolveTodayUsage, pickBalanceInfo, platformUsageUrl } = await import('../lib/balance.mjs')
+const { mapHostTheme, themeOfPreferences, resolveHostTheme } = await import('../lib/host-theme.mjs')
+const { safeMirrorUrl } = await import('../lib/overlay.mjs')
+const { MODEL_ROLE_RULES, roleIdForModel } = await import('../lib/paths.mjs')
+const { findApiKey, readPluginConfig } = await import('../lib/credentials.mjs')
+const { resolveBillingSource, isNightOffpeak, resolveHostBillingSource } = await import('../lib/source.mjs')
+const { readLatestTurn, resolveSession, readContextUsage, usageFromRawUsage, CREDIT_CURRENCY } = await import('../lib/turn-cost.mjs')
+
+// ---------- 宿主侧凭据候选位 fixture（discover.mjs 扫描的地方） ----------
+// WorkBuddy 没有 ZCode 的 provider_config.json / zcode-builtin.json 模板继承；
+// discover 改为扫 settings.json 的 env / pluginConfigs 与 plugins/data/*/config.json。
+fs.writeFileSync(
+  path.join(tmpHome, 'settings.json'),
+  JSON.stringify({
+    env: {},
+    pluginConfigs: {
+      'bigmodel-connector': {
+        options: {
+          apiKey: 'selftest-fake-bigmodel-key',
+          baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+          providerId: 'bigmodel-standard-api',
         },
-      ],
-      balances: [],
-    },
-  },
-}
-const planLogDir = path.join(tmpHome, '.zcode', 'v2', 'logs')
-fs.mkdirSync(planLogDir, { recursive: true })
-const planLogLine =
-  '[2026-09-29 08:42:27.092] [info] [pid:1] [main] [host-log] (local-1) [host] [2026-09-29 08:42:27.091] [pid:2] [usage-stats] billing/balance 请求完成 ' +
-  JSON.stringify(PLAN_FIXTURE) +
-  '\n'
-// v1.4.2 尾窗逐级扩读：标记行前垫 1.2MB 刷屏行、后垫 200KB，把标记整个
-// 挤出旧版 512KB 尾窗——读不到今天的观测就会回退到昨天的死套餐残值
-// （实测：2.4% 错值挂了一分钟）。服务必须逐级扩窗才能找到这条标记。
-const planJunkHead = Buffer.alloc(1200 * 1024, 0x78)
-const planJunkTail = Buffer.alloc(200 * 1024, 0x78)
-// v1.7.8 套餐切换间隙的空桶快照：真实日志里新套餐窗口开始前会有 balances=[]
-// 的过渡观测（实测 2026-10-02 末尾连续 4 条）。把它垫在好观测**之后**，
-// plan.json 端到端断言即验证「按行从新到旧跳过空桶、取最近的有效观测」
-const planEmptyLine =
-  '[2026-09-29 08:42:28.001] [info] [pid:1] [main] [host-log] (local-1) [host] [2026-09-29 08:42:28.001] [pid:2] [usage-stats] billing/balance 请求完成 ' +
-  JSON.stringify({
-    balances: [],
-    payload: { code: 0, data: { server_time: Math.floor(Date.now() / 1000), plans: PLAN_FIXTURE.payload.data.plans, balances: [] } },
-  }) +
-  '\n'
-fs.writeFileSync(
-  path.join(planLogDir, todayKeyForLog() + '.log'),
-  Buffer.concat([planJunkHead, Buffer.from('\n' + planLogLine), planJunkTail, Buffer.from('\n' + planEmptyLine)])
-)
-
-// 厂商自动发现 fixture：一个 bigmodel 规则（应命中 bigmodel-glm），一个本地网关
-// 规则（baseURL 是环回地址，key 是网关鉴权用，必须被跳过，即使模型名含 deepseek），
-// 一个 enc:v1: 加密凭据规则（无法解密必须跳过，不能当明文 key 用）。
-// 注意：fixture 不放**明文** deepseek key——vendors.json 的 deepseek 模板拿到 key
-// 会真的出网查余额；findApiKey 的发现路径改在纯函数段用注入路径覆盖。
-fs.writeFileSync(
-  path.join(tmpHome, '.zcode', 'v2', 'provider_config.json'),
-  JSON.stringify({
-    config: {
-      providerConfigRules: {
-        providerRules: [
-          {
-            providerId: 'bigmodel-standard-api',
-            templateId: 'bigmodel-standard-api',
-            providerName: 'BigModel API',
-            config: {
-              access: { type: 'api-key', apiKey: 'selftest-fake-bigmodel-key' },
-              api: { baseUrl: 'https://open.bigmodel.cn/api/paas/v4' },
-              modelOrder: ['GLM-5.3', 'GLM-5.3-Flash'],
-            },
-          },
-          {
-            providerId: 'cmdgo-bridge',
-            providerName: 'CommandCode Go (cmdgo-bridge)',
-            config: {
-              access: { type: 'api-key', apiKey: 'selftest-fake-bridge-key' },
-              api: { baseUrl: 'http://127.0.0.1:11435/v1' },
-              modelOrder: ['deepseek/deepseek-v4-flash'],
-            },
-          },
-          {
-            providerId: 'deepseek-encrypted',
-            templateId: 'deepseek',
-            providerName: 'DeepSeek Encrypted',
-            config: {
-              access: { type: 'api-key', apiKey: 'enc:v1:selftest-ciphertext-not-a-key' },
-              api: { baseUrl: 'https://api.deepseek.com/anthropic' },
-              modelOrder: ['deepseek-flash'],
-            },
-          },
-        ],
       },
     },
   }),
   'utf8'
 )
-
-// 内置模板 fixture：规则没写 api.baseUrl 时有效 baseURL 要从这里继承
-fs.mkdirSync(path.join(tmpHome, '.zcode', 'v2', 'runtime', 'provider', 'test', '1.0.0', 'ep1'), { recursive: true })
+fs.mkdirSync(path.join(tmpHome, 'plugins', 'data', 'enc-plugin'), { recursive: true })
 fs.writeFileSync(
-  path.join(tmpHome, '.zcode', 'v2', 'runtime', 'provider', 'test', '1.0.0', 'ep1', 'zcode-builtin.json'),
-  JSON.stringify({
-    schemaVersion: 1,
-    revision: 1,
-    config: {
-      providerConfigRules: {
-        templateRules: [
-          {
-            templateId: 'deepseek',
-            config: {
-              access: { type: 'api-key' },
-              api: { type: 'anthropic-messages', baseUrl: 'https://api.deepseek.com/anthropic' },
-            },
-          },
-        ],
-      },
-    },
-  }),
+  path.join(tmpHome, 'plugins', 'data', 'enc-plugin', 'config.json'),
+  JSON.stringify({ apiKey: 'enc:v1:selftest-ciphertext-not-a-key', baseUrl: 'https://api.deepseek.com/anthropic' }),
   'utf8'
 )
-
-function todayKeyForLog(d = new Date()) {
-  const p = (n) => String(n).padStart(2, '0')
-  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
-}
 
 const PORT = 39100 + Math.floor(Math.random() * 500)
 fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({ port: PORT }), 'utf8')
 
-// ZCode 自己的用户配置（<ZCODE_HOME>/cli/config.json）：挂件「跟随 ZCode 主题」
-// 读它的 ui.theme。这里放 zai-dark，验证 zai-* 皮肤 → 挂件浅/深的映射。
-fs.mkdirSync(path.join(tmpHome, 'cli'), { recursive: true })
-fs.writeFileSync(
-  path.join(tmpHome, 'cli', 'config.json'),
-  JSON.stringify({ ui: { locale: 'zh-CN', theme: 'zai-dark' } }, null, 2),
-  'utf8'
-)
-
-const dbFile = path.join(dbDir, 'db.sqlite')
-const db = new DatabaseSync(dbFile)
+// ---------- WorkBuddy 会话库 fixture ----------
+// workbuddy.db：sessions（当前会话/模型）+ session_usage（上下文占用 + 每请求积分）。
+const db = new DatabaseSync(path.join(tmpHome, 'workbuddy.db'))
 db.exec(`
-  CREATE TABLE turn_usage (
-    session_id text not null,
-    turn_id text not null,
-    status text not null check(status in ('running','completed','error','cancelled')),
-    started_at integer not null,
-    completed_at integer,
-    input_tokens integer not null default 0,
-    output_tokens integer not null default 0,
-    reasoning_tokens integer not null default 0,
-    cache_creation_input_tokens integer not null default 0,
-    cache_read_input_tokens integer not null default 0,
-    computed_total_tokens integer not null default 0,
-    primary key(session_id, turn_id)
-  );
-  CREATE TABLE model_usage (
+  CREATE TABLE sessions (
     id text primary key,
-    session_id text not null,
-    turn_id text,
-    model_id text not null,
-    provider_id text not null default '',
-    status text not null default 'completed',
-    attempt_index integer not null default 0,
-    started_at integer not null,
-    input_tokens integer not null default 0,
-    output_tokens integer not null default 0,
-    reasoning_tokens integer not null default 0,
-    cache_creation_input_tokens integer not null default 0,
-    cache_read_input_tokens integer not null default 0,
-    computed_total_tokens integer not null default 0
+    cwd text,
+    model text,
+    title text,
+    custom_title text,
+    updated_at integer,
+    last_activity_at integer,
+    is_background_automation integer default 0,
+    deleted_at integer
   );
-  CREATE TABLE session_entry (
-    type text not null,
-    data text not null,
-    time_updated integer not null
+  CREATE TABLE session_usage (
+    session_id text primary key,
+    used integer,
+    size integer,
+    updated_at integer,
+    credit_json text
   );
 `)
 
+const SESSION = 'sess_selftest'
 const MODEL = 'deepseek-flash'
 const USAGE_B = {
   input_tokens: 1_000_000,
@@ -275,54 +116,91 @@ const USAGE_B = {
   cache_creation_input_tokens: 0,
 }
 
-let muSeq = 0
-// modelRows: [{ model, providerId, usage }]；缺省为单行 DeepSeek，与旧版单模型轮次一致
-function insertTurn(sessionId, turnId, usage, atMs, modelRows) {
+// transcript：<CODEBUDDY_HOME>/projects/<slug>/<sessionId>.jsonl
+const transcriptDir = path.join(tmpHome, 'projects', 'workbuddy-selftest')
+fs.mkdirSync(transcriptDir, { recursive: true })
+const transcriptFile = path.join(transcriptDir, SESSION + '.jsonl')
+
+function writeSession(modelId, atMs) {
+  const t = atMs || Date.now()
   db.prepare(
-    `INSERT INTO turn_usage (session_id, turn_id, status, started_at, completed_at,
-      input_tokens, output_tokens, reasoning_tokens, cache_creation_input_tokens, cache_read_input_tokens, computed_total_tokens)
-     VALUES (?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    sessionId,
-    turnId,
-    atMs - 1000,
-    atMs,
-    usage.input_tokens || 0,
-    usage.output_tokens || 0,
-    usage.reasoning_tokens || 0,
-    usage.cache_creation_input_tokens || 0,
-    usage.cache_read_input_tokens || 0,
-    usage.computed_total_tokens ||
-      (usage.input_tokens || 0) + (usage.output_tokens || 0) + (usage.reasoning_tokens || 0)
+    'INSERT OR REPLACE INTO sessions (id, cwd, model, title, custom_title, updated_at, last_activity_at, is_background_automation, deleted_at) VALUES (?,?,?,?,?,?,?,0,NULL)'
+  ).run(SESSION, 'C:/work', modelId, '自检会话', null, t, t)
+}
+const hostCredits = {}
+function writeUsage(used, size, atMs) {
+  const t = atMs || Date.now()
+  db.prepare('INSERT OR REPLACE INTO session_usage (session_id, used, size, updated_at, credit_json) VALUES (?,?,?,?,?)').run(
+    SESSION,
+    used,
+    size,
+    t,
+    JSON.stringify(hostCredits)
   )
-  const rows = modelRows || [{ model: MODEL, providerId: 'deepseek-test', usage }]
+}
+// 一条模型调用（rawUsage 用 WorkBuddy 口径：prompt_tokens 含缓存命中、
+// completion_tokens 含思考）。同一个 conversationRequestId 的多条行归并为「一轮」。
+function appendCall(requestId, modelId, modelName, raw, atMs) {
+  const rawUsage = {
+    prompt_tokens: raw.prompt_tokens || 0,
+    completion_tokens: raw.completion_tokens || 0,
+    total_tokens: (raw.prompt_tokens || 0) + (raw.completion_tokens || 0),
+    prompt_cache_hit_tokens: raw.prompt_cache_hit_tokens || 0,
+    prompt_cache_miss_tokens:
+      raw.prompt_cache_miss_tokens != null
+        ? raw.prompt_cache_miss_tokens
+        : Math.max(0, (raw.prompt_tokens || 0) - (raw.prompt_cache_hit_tokens || 0)),
+    prompt_cache_write_tokens: raw.prompt_cache_write_tokens || 0,
+    completion_thinking_tokens: raw.completion_thinking_tokens || 0,
+    credit: raw.credit || 0,
+  }
+  const line = JSON.stringify({
+    timestamp: atMs,
+    type: 'function_call',
+    providerData: {
+      conversationRequestId: requestId,
+      model: modelId,
+      requestModelId: modelId,
+      requestModelName: modelName || '',
+      rawUsage,
+    },
+  })
+  fs.appendFileSync(transcriptFile, line + '\n')
+}
+// 一轮 = 一条或多条模型调用。modelRows: [{ model, modelName, usage, credit }]；
+// credit 为该轮的宿主积分合计（写进 credit_json，供 readLatestTurn 取权威值）。
+function insertTurn(requestId, usage, atMs, modelRows, credit) {
+  const rows = modelRows || [{ model: MODEL, modelName: 'DeepSeek-V4.1-Flash', usage, credit }]
   for (const r of rows) {
-    muSeq += 1
-    db.prepare(
-      `INSERT INTO model_usage (id, session_id, turn_id, model_id, provider_id, status, attempt_index, started_at,
-        input_tokens, output_tokens, reasoning_tokens, cache_creation_input_tokens, cache_read_input_tokens, computed_total_tokens)
-       VALUES (?, ?, ?, ?, ?, 'completed', 0, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      'mu-' + turnId + '-' + muSeq,
-      sessionId,
-      turnId,
+    const u = r.usage || usage
+    appendCall(
+      requestId,
       r.model,
-      r.providerId || '',
-      atMs - 1000,
-      r.usage.input_tokens || 0,
-      r.usage.output_tokens || 0,
-      r.usage.reasoning_tokens || 0,
-      r.usage.cache_creation_input_tokens || 0,
-      r.usage.cache_read_input_tokens || 0,
-      r.usage.computed_total_tokens ||
-        (r.usage.input_tokens || 0) + (r.usage.output_tokens || 0) + (r.usage.reasoning_tokens || 0)
+      r.modelName,
+      {
+        prompt_tokens: u.input_tokens || 0,
+        prompt_cache_hit_tokens: u.cache_read_input_tokens || 0,
+        prompt_cache_miss_tokens: Math.max(0, (u.input_tokens || 0) - (u.cache_read_input_tokens || 0)),
+        prompt_cache_write_tokens: u.cache_creation_input_tokens || 0,
+        completion_tokens: u.output_tokens || 0,
+        completion_thinking_tokens: u.reasoning_tokens || 0,
+        credit: r.credit != null ? r.credit : 0,
+      },
+      atMs
     )
+  }
+  if (credit != null) {
+    hostCredits[requestId] = credit
+    writeUsage(50_000, 200_000, atMs)
   }
 }
 
+writeSession(MODEL, Date.now() - 120_000)
+writeUsage(50_000, 200_000, Date.now() - 120_000)
+
 // 轮次 A：服务启动时应当只做对齐，不当作"新的一轮"
 const atA = Date.now() - 60_000
-insertTurn('sess_selftest', 'turn_A', { ...USAGE_B, input_tokens: 1, output_tokens: 1 }, atA)
+insertTurn('turn_A', { ...USAGE_B, input_tokens: 1, output_tokens: 1 }, atA, null, 0.5)
 
 const results = []
 function check(name, ok, detail) {
@@ -370,6 +248,56 @@ function check(name, ok, detail) {
     'Anthropic 口径（input 不含缓存）也能正确拆分',
     Math.abs(a.amount - expect) < 1e-9,
     '¥' + a.amount.toFixed(6)
+  )
+}
+
+// 数据源 fixture：WorkBuddy rawUsage → pricing 形状的映射（usageFromRawUsage）。
+// rawUsage 的 prompt_tokens **含**缓存命中、completion_tokens **含**思考；
+// 缓存命中不得被按未命中价重复计费（「金额虚高」回归）。
+{
+  const at = Date.now()
+  const raw = {
+    prompt_tokens: 1_000_000,
+    completion_tokens: 100_000,
+    total_tokens: 1_100_000,
+    prompt_cache_hit_tokens: 999_000,
+    prompt_cache_miss_tokens: 1_000,
+    prompt_cache_write_tokens: 0,
+    completion_thinking_tokens: 20_000,
+    credit: 7,
+  }
+  const usage = usageFromRawUsage(raw)
+  check(
+    'usageFromRawUsage：prompt 含命中（input=prompt）/ 输出扣思考 / 命中单列',
+    usage.input_tokens === 1_000_000 &&
+      usage.cache_read_input_tokens === 999_000 &&
+      usage.output_tokens === 80_000 &&
+      usage.reasoning_tokens === 20_000,
+    JSON.stringify(usage)
+  )
+  const got = costOfUsage('deepseek-flash', usage, at)
+  const p = priceFor('deepseek-flash')
+  const idx = isPeakTime(Math.floor(at / 1000)) ? 1 : 0
+  // 输出档要按 **completion_tokens 全额**（100_000）计：思考（20_000）也走输出价，
+  // 这是 pricing.mjs 的既定口径（costOfUsage 用 t.output + t.reasoning 乘以 out 价）。
+  // usageFromRawUsage 把 completion 拆成 output(80_000) + reasoning(20_000) 两栏，
+  // 两者相加必须还原成 completion；断言若只算 80_000 就会少 0.02 × out。
+  const expect2 = (999_000 / 1e6) * p.hit[idx] + (1_000 / 1e6) * p.miss[idx] + (100_000 / 1e6) * p.out[idx]
+  const wrong = (999_000 / 1e6) * p.hit[idx] + (1_000_000 / 1e6) * p.miss[idx] + (100_000 / 1e6) * p.out[idx]
+  check(
+    'rawUsage → 等价市值不重复计费（缓存命中按命中价，未命中只算 miss 部分）',
+    Math.abs(got.amount - expect2) < 1e-9 && Math.abs(got.amount - wrong) > 1e-6,
+    '期望 ¥' + expect2.toFixed(6) + '，实际 ¥' + got.amount.toFixed(6) + '（重复计费会得到 ¥' + wrong.toFixed(6) + '）'
+  )
+  check(
+    'rawUsage → 输出档把思考一起算进 output（completion = output + reasoning）',
+    got.breakdown.output === 100_000,
+    JSON.stringify(got.breakdown)
+  )
+  check(
+    'usageFromRawUsage → breakdown 的 hit/miss 与 rawUsage 字段一致',
+    got.breakdown.hit === 999_000 && got.breakdown.miss === 1_000,
+    JSON.stringify(got.breakdown)
   )
 }
 
@@ -568,129 +496,25 @@ function check(name, ok, detail) {
   )
 }
 
-// GLM Plan 日志解析：纯函数校验 shapePlanPayload
+// （迁移删除）GLM Plan 日志解析（shapePlanPayload 系列）与 ZCode 启动就绪判定
+// （desktop/ui-ready.cjs 的 evaluateBootState）在 WorkBuddy 上没有对应物：
+//   - plan-balance.mjs 已冻结，readPlanBalance() 恒返回 not-supported-on-workbuddy；
+//   - desktop/ui-ready.cjs 已删除，浮层不再有「等宿主界面就绪」这道门（不再有 ZCode
+//     客户端日志可尾随解析）。
+// 对应覆盖改为：readPlanBalance/turnPlanUsage 的「宿主无此项」契约断言（见文件末尾），
+// 以及 /whale/plan.json 端到端的 ok:false 断言。
 {
-  const today = todayKeyForLog()
-  const shaped = shapePlanPayload(PLAN_FIXTURE, today, Date.now())
   check(
-    'Plan 日志解析：总量/剩余/百分比',
-    shaped && shaped.ok && shaped.remaining === 93_000_000 && shaped.total === 104_000_000 && Math.abs(shaped.percentRemaining - 93 / 104) < 1e-9,
-    shaped ? 'remaining=' + shaped.remaining + ' total=' + shaped.total : '解析失败'
+    'plan-balance 冻结：readPlanBalance 恒返回 not-supported-on-workbuddy',
+    (() => {
+      const r = readPlanBalance()
+      return r && r.ok === false && r.reason === 'not-supported-on-workbuddy' && typeof r.hint === 'string'
+    })(),
+    JSON.stringify(readPlanBalance())
   )
   check(
-    'Plan 日志解析：按模型桶映射（entitlements capabilities + show_name 兜底）',
-    shaped && shaped.byModel.length === 3 && normalizeModelId('GLM-5.3-Flash') === 'glm-5.3-flash' && shaped.byModel[0].model === 'glm-5.3-flash' && shaped.byModel[0].totalUnits === 100_000_000,
-    shaped ? JSON.stringify(shaped.byModel.map((b) => b.model)) : ''
-  )
-  check(
-    'Plan 日志解析：到期时间取 active 套餐 ends_at',
-    shaped && shaped.nextResetAt === PLAN_FIXTURE.payload.data.plans[0].ends_at * 1000,
-    shaped ? String(shaped.nextResetAt) : ''
-  )
-  check('Plan 日志解析：当天数据不标 stale', shaped && shaped.stale === false)
-  const staleShaped = shapePlanPayload(PLAN_FIXTURE, '2026-01-01', Date.now())
-  check('Plan 日志解析：非当天的观测标记 stale', staleShaped && staleShaped.stale === true)
-
-  // ZCode 启动就绪判定（浮层门控用）：日志里有 boot 标记但没有 ready 标记 =
-  // 加载动画期间，浮层先不显示；缺 boot 标记（老版本/日志缺失）一律放行。
-  // v1.5.4：标记要认「本次启动」的 pid——同一天日志里躺着上一次运行完整的
-  // 「启动→就绪」序列，只按位置判断会把上一次的序列当成本次已就绪，于是重开
-  // ZCode 时鲸鱼在加载动画里就出现了（2026-10-01 实测 + 截图）。
-  {
-    const { evaluateBootState } = requireCjs(path.join(PLUGIN_ROOT, 'desktop', 'ui-ready.cjs'))
-    const boot = '[2026-10-01 10:00:26.874] [info] [pid:1] [main] [primary-window] creating main window (app-ready)\n'
-    const domReady = '[2026-10-01 10:00:27.328] [info] [pid:1] [main] [createWindow] dom-ready fired (local-1)\n'
-    const dbReady = '[2026-10-01 10:00:32.708] [info] [pid:1] [main] [database-startup] terminal {"attemptId":"x","status":"ready","durationMs":4967}\n'
-    const taskList = '[2026-10-01 10:00:33.305] [info] [x] window-controller.listTaskList OK (20.8ms)\n'
-    const s1 = evaluateBootState(boot + domReady)
-    check('启动就绪判定：主窗口刚建好 = 加载中', s1.state === 'loading' && s1.bootAt === 1790820026874, JSON.stringify(s1))
-    const s2 = evaluateBootState(boot + domReady + dbReady)
-    check('启动就绪判定：数据库 ready 后放行', s2.state === 'ready', JSON.stringify(s2))
-    const s3 = evaluateBootState(boot + domReady + taskList)
-    check('启动就绪判定：任务列表拉取成功也放行', s3.state === 'ready', JSON.stringify(s3))
-    const s4 = evaluateBootState('随便一段没有启动标记的日志\n')
-    check('启动就绪判定：无启动标记不拦（老版本/日志缺失）', s4.state === 'ready', JSON.stringify(s4))
-    const s5 = evaluateBootState(boot + dbReady + boot)
-    check('启动就绪判定：二次启动后重新进入加载态', s5.state === 'loading', JSON.stringify(s5))
-
-    // 场景取自 2026-10-01 实测：12:48 那次运行完整收尾（boot 12:48:14 →
-    // database-startup ready 12:48:16），13:20:49 重新打开 ZCode（pid 7876，
-    // 主界面 13:20:56 才就绪）。加载动画期间读到的日志尾窗里只有上一次的标记。
-    const stampOf = (s) => new Date(s.replace(' ', 'T')).getTime()
-    const oldRun =
-      '[2026-10-01 12:48:14.874] [info] [pid:3812] [main] [startup] 创建主窗口\n' +
-      '[2026-10-01 12:48:14.874] [info] [pid:3812] [main] [primary-window] creating main window (app-ready)\n' +
-      '[2026-10-01 12:48:16.000] [info] [pid:3812] [main] [database-startup] terminal {"attemptId":"a","status":"ready","durationMs":5007}\n' +
-      '[2026-10-01 12:48:16.500] [info] [pid:3812] [main] [host-log] (local-1) [host] [2026-10-01 12:48:16.500] [pid:99999] [zcode-host] [rpc:call] window-controller.listTaskList OK (0.1ms)\n'
-    const newBoot =
-      '[2026-10-01 13:20:49.981] [info] [pid:7876] [main] [startup] 创建主窗口\n' +
-      '[2026-10-01 13:20:49.982] [info] [pid:7876] [main] [primary-window] creating main window (app-ready)\n'
-    const newReady = '[2026-10-01 13:20:56.385] [info] [pid:7876] [main] [database-startup] terminal {"attemptId":"b","status":"ready","durationMs":4983}\n'
-    const NEW_PID_START = stampOf('2026-10-01 13:20:48.500') // 进程启动时间
-    const NEW = { pid: 7876, processStartAt: NEW_PID_START }
-
-    const r1 = evaluateBootState(oldRun, NEW)
-    check(
-      '启动就绪判定：上一次运行的就绪序列不冒充本次（重开 ZCode 时拦住加载动画）',
-      r1.state === 'loading' && r1.anchorAt === NEW_PID_START,
-      JSON.stringify(r1)
-    )
-    const r2 = evaluateBootState(oldRun + newBoot, NEW)
-    check('启动就绪判定：本次 boot 之后还没就绪 = 加载中', r2.state === 'loading' && r2.reason === 'loading-after-boot', JSON.stringify(r2))
-    const r3 = evaluateBootState(oldRun + newBoot + newReady, NEW)
-    check('启动就绪判定：本次 boot 之后的就绪标记放行', r3.state === 'ready' && r3.reason === 'ready-after-boot', JSON.stringify(r3))
-    const r4 = evaluateBootState(newReady, NEW)
-    check('启动就绪判定：boot 被刷出尾窗但本次就绪标记在场 = 放行', r4.state === 'ready', JSON.stringify(r4))
-    const r5 = evaluateBootState(oldRun, { processStartAt: NEW_PID_START })
-    check('启动就绪判定：只有进程启动时间也能拦住（pid 拿不到时）', r5.state === 'loading', JSON.stringify(r5))
-    const r6 = evaluateBootState(oldRun, { pid: 3812, processStartAt: NEW_PID_START })
-    check('启动就绪判定：pid 相同但标记早于本次进程 = 仍算加载中', r6.state === 'loading', JSON.stringify(r6))
-    const r7 = evaluateBootState(oldRun)
-    check('启动就绪判定：既无 pid 也无进程时间时退回旧口径（不拦）', r7.state === 'ready', JSON.stringify(r7))
-    const r8 = evaluateBootState(oldRun + newBoot + newReady, { pid: 7876 })
-    check('启动就绪判定：只给 pid 也能放行', r8.state === 'ready', JSON.stringify(r8))
-    // 进程启动时间取了未来值（采样异常）：当无效身份处理，不能让超时兜底失效
-    const r9 = evaluateBootState(oldRun + newBoot, { pid: 7876, processStartAt: Date.now() + 3600_000 })
-    check('启动就绪判定：未来时间戳的身份锚点被忽略', r9.state === 'loading' && r9.anchorAt && r9.anchorAt < Date.now(), JSON.stringify(r9))
-  }
-
-  // v1.4.2：过期套餐的遗留桶不冒充当前配额——balances 里会残留死套餐的桶
-  // （remaining=0 但 total 仍在），跨套餐求和会把百分比稀释失真
-  const deadFixture = JSON.parse(JSON.stringify(PLAN_FIXTURE))
-  deadFixture.balances.push({
-    entitlement_id: 'ent-legacy-0817',
-    show_name: 'GLM-5.3',
-    total_units: 3_000_000,
-    used_units: 3_000_000,
-    remaining_units: 0,
-    available_units: 0,
-    reserved_units: null,
-  })
-  const deadShaped = shapePlanPayload(deadFixture, today, Date.now())
-  check(
-    'Plan 日志解析：死套餐遗留桶被剔除（不稀释总量）',
-    deadShaped && deadShaped.total === 104_000_000 && deadShaped.byModel.length === 3,
-    'total=' + (deadShaped && deadShaped.total) + ' models=' + (deadShaped ? deadShaped.byModel.length : '无')
-  )
-  // 老格式日志（plans 列表为空，无法归属套餐）：保留全量桶，不误杀
-  const legacyFixture = JSON.parse(JSON.stringify(PLAN_FIXTURE))
-  legacyFixture.payload.data.plans = []
-  const legacyShaped = shapePlanPayload(legacyFixture, today, Date.now())
-  check(
-    'Plan 日志解析：无 plans 的老格式回退全量桶',
-    legacyShaped && legacyShaped.total === 104_000_000,
-    'total=' + (legacyShaped && legacyShaped.total)
-  )
-  // 空桶快照（套餐切换间隙）塑形后 percentRemaining=null——读取层据此跳行；
-  // 端到端覆盖见 fixture（好观测之后垫了一条空桶行）+ plan.json 断言
-  const emptyShaped = shapePlanPayload(
-    { balances: [], payload: { code: 0, data: { server_time: 1790000000, plans: PLAN_FIXTURE.payload.data.plans, balances: [] } } },
-    today,
-    Date.now()
-  )
-  check(
-    'Plan 日志解析：空桶快照塑形为 percentRemaining=null（供读取层跳过）',
-    emptyShaped && emptyShaped.percentRemaining === null && emptyShaped.total === 0
+    'plan-balance 冻结：turnPlanUsage 恒返回 null（调用方走普通积分口径）',
+    turnPlanUsage({ models: [{ model: 'glm-5.3', tokens: 1000, amount: 1, currency: 'CNY' }] }) === null
   )
 }
 
@@ -928,93 +752,86 @@ function check(name, ok, detail) {
   }
 }
 
-// 凭据发现：有效 baseURL 继承内置模板、enc:v1: 密文跳过、本地网关标记
+// 凭据发现：WorkBuddy 侧的候选位（settings.json env / pluginConfigs、插件数据目录
+// config.json 的 apiKey / vendorKeys）。ZCode 的 provider_config.json 模板继承已不存在。
 {
   const fx = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-cred-fx-'))
-  // fixture 布局对齐 v2DataDirCandidates()：<base>/.zcode/v2/，ZCODE_DATA_BASE_DIR=<base>
-  const fxV2 = path.join(fx, '.zcode', 'v2')
-  fs.mkdirSync(path.join(fxV2, 'runtime', 'provider', 'x', '1', 'e'), { recursive: true })
+  const settingsFile = path.join(fx, 'settings.json')
   fs.writeFileSync(
-    path.join(fxV2, 'runtime', 'provider', 'x', '1', 'e', 'zcode-builtin.json'),
+    settingsFile,
     JSON.stringify({
-      revision: 1,
-      config: {
-        providerConfigRules: {
-          templateRules: [
-            { templateId: 'deepseek', config: { api: { baseUrl: 'https://api.deepseek.com/anthropic' } } },
-            { templateId: 'xiaomi-mimo', config: { api: { baseUrl: 'https://api.xiaomimimo.com/anthropic' } } },
-          ],
+      env: { DEEPSEEK_API_KEY: 'selftest-fake-key-env' },
+      pluginConfigs: {
+        'bigmodel-connector': {
+          options: { apiKey: 'selftest-fake-key-bigmodel', baseUrl: 'https://open.bigmodel.cn/api/paas/v4' },
         },
+        'local-gw': { options: { apiKey: 'selftest-fake-key-cccc', baseUrl: 'http://127.0.0.1:11435/v1' } },
       },
     }),
     'utf8'
   )
+  const pluginDataDir = path.join(fx, 'plugins-data')
+  fs.mkdirSync(path.join(pluginDataDir, 'deepseek-enc'), { recursive: true })
   fs.writeFileSync(
-    path.join(fxV2, 'provider_config.json'),
-    JSON.stringify({
-      config: {
-        providerConfigRules: {
-          providerRules: [
-            { providerId: 'deepseek', templateId: 'deepseek', config: { access: { type: 'api-key', apiKey: 'selftest-fake-key-aaaa' } } },
-            {
-              providerId: 'deepseek-enc',
-              templateId: 'deepseek',
-              config: { access: { type: 'api-key', apiKey: 'enc:v1:selftest-ciphertext' }, api: { baseUrl: 'https://api.deepseek.com/anthropic' } },
-            },
-            {
-              providerId: 'mimo-plan',
-              templateId: 'xiaomi-mimo',
-              config: { access: { type: 'api-key', apiKey: 'selftest-fake-key-bbbb' }, api: { baseUrl: 'https://token-plan-cn.xiaomimimo.com' } },
-            },
-          ],
-        },
-      },
-    }),
+    path.join(pluginDataDir, 'deepseek-enc', 'config.json'),
+    JSON.stringify({ apiKey: 'enc:v1:selftest-ciphertext', baseUrl: 'https://api.deepseek.com/anthropic' }),
     'utf8'
   )
+  fs.mkdirSync(path.join(pluginDataDir, 'mimo'), { recursive: true })
   fs.writeFileSync(
-    path.join(fx, 'cli-config.json'),
-    JSON.stringify({ provider: { 'local-gw': { options: { baseURL: 'http://127.0.0.1:11435/v1', apiKey: 'selftest-fake-key-cccc' } } } }),
+    path.join(pluginDataDir, 'mimo', 'config.json'),
+    JSON.stringify({ baseUrl: 'https://token-plan-cn.xiaomimimo.com', vendorKeys: { 'xiaomi-mimo': 'selftest-fake-key-bbbb' } }),
     'utf8'
   )
-  const entries = buildProviderEntries({ v2Dirs: [fxV2], cliConfigFile: path.join(fx, 'cli-config.json') })
+  const entries = buildProviderEntries({ settingsFile, pluginDataDir, envOverride: {} })
   const byId = {}
   for (const e of entries) byId[e.providerId] = e
   check(
-    '凭据发现：无 baseUrl 规则从内置模板继承有效 baseURL',
-    byId.deepseek && byId.deepseek.host === 'api.deepseek.com' && byId.deepseek.apiKey === 'selftest-fake-key-aaaa',
-    byId.deepseek ? 'host=' + byId.deepseek.host : '缺失'
+    '凭据发现：settings.json 的 env 块命中 DEEPSEEK_API_KEY',
+    !!byId['settings-env:DEEPSEEK_API_KEY'] &&
+      byId['settings-env:DEEPSEEK_API_KEY'].apiKey === 'selftest-fake-key-env' &&
+      byId['settings-env:DEEPSEEK_API_KEY'].host === 'api.deepseek.com',
+    JSON.stringify(Object.keys(byId))
+  )
+  check(
+    '凭据发现：pluginConfigs.<插件>.options 的 apiKey/baseUrl 被识别',
+    byId['bigmodel-connector'] &&
+      byId['bigmodel-connector'].host === 'open.bigmodel.cn' &&
+      byId['bigmodel-connector'].apiKey === 'selftest-fake-key-bigmodel'
   )
   check(
     '凭据发现：enc:v1: 密文跳过（不当明文 key）',
     byId['deepseek-enc'] && byId['deepseek-enc'].keyEncrypted === true && byId['deepseek-enc'].apiKey === ''
   )
   check(
-    '凭据发现：规则自带 baseUrl 覆盖模板（mimo plan 端点可辨识）',
-    byId['mimo-plan'] && byId['mimo-plan'].host === 'token-plan-cn.xiaomimimo.com'
+    '凭据发现：插件数据目录 vendorKeys 映射模板 id（xiaomi-mimo）',
+    entries.some((e) => e.templateId === 'xiaomi-mimo' && e.apiKey === 'selftest-fake-key-bbbb'),
+    JSON.stringify(entries.map((e) => e.providerId))
   )
   check('凭据发现：本地网关标记 isLocal', byId['local-gw'] && byId['local-gw'].isLocal === true && byId['local-gw'].host === '127.0.0.1')
 
-  // findApiKey 端到端：ZCODE_DATA_BASE_DIR 注入后应命中 fixture 的 deepseek 规则
-  const savedBase = process.env.ZCODE_DATA_BASE_DIR
+  // findApiKey：env > 插件配置 > 宿主发现的优先级。这里用环境变量做确定性断言
+  //（默认路径的宿主扫描由服务段的 health.keyProbe 覆盖）。
   const savedEnvKey = process.env.DEEPSEEK_API_KEY
-  process.env.ZCODE_DATA_BASE_DIR = fx
   delete process.env.DEEPSEEK_API_KEY
   try {
-    const r = findApiKey()
+    check('findApiKey：环境变量优先（env:DEEPSEEK_API_KEY）', (() => {
+      process.env.DEEPSEEK_API_KEY = 'sk-selftest-env'
+      const r = findApiKey()
+      delete process.env.DEEPSEEK_API_KEY
+      return r.source === 'env:DEEPSEEK_API_KEY' && r.key === 'sk-selftest-env'
+    })())
     if (readPluginConfig().apiKey) {
-      check('findApiKey 命中 ZCode provider（跳过：插件配置已设 apiKey）', true, 'source=' + r.source)
+      check('findApiKey：插件配置 apiKey 次之（跳过：已配置）', true, 'source=plugin-config')
     } else {
-      check(
-        'findApiKey 命中 ZCode provider（模板继承 baseURL 的 deepseek 规则）',
-        r.source === 'zcode-provider' && r.key === 'selftest-fake-key-aaaa',
-        'source=' + r.source
-      )
+      check('findApiKey：无 env/配置时回落到宿主发现或 none', (() => {
+        const r = findApiKey()
+        return r.source === 'host-provider' || r.source === 'none'
+      })(), 'source=' + findApiKey().source)
     }
   } finally {
-    if (savedBase === undefined) delete process.env.ZCODE_DATA_BASE_DIR
-    else process.env.ZCODE_DATA_BASE_DIR = savedBase
     if (savedEnvKey !== undefined) process.env.DEEPSEEK_API_KEY = savedEnvKey
+    else delete process.env.DEEPSEEK_API_KEY
   }
   fs.rmSync(fx, { recursive: true, force: true })
 }
@@ -1288,27 +1105,20 @@ function check(name, ok, detail) {
     JSON.stringify(matches)
   )
 }
-// 凭据发现的短 TTL 缓存（v1.3.0 复审 N3）：默认路径 5 秒内复用，显式失效后重扫
+// 凭据发现的短 TTL 缓存（复审 N3）：默认路径 5 秒内复用，显式失效后重扫
 {
-  const v2dir = path.join(tmpHome, '.zcode', 'v2')
-  const savedBase = process.env.ZCODE_DATA_BASE_DIR
-  process.env.ZCODE_DATA_BASE_DIR = tmpHome
+  const probeDir = path.join(tmpHome, 'plugins', 'data', 'n3-cache-probe')
+  fs.mkdirSync(probeDir, { recursive: true })
+  const probeFile = path.join(probeDir, 'config.json')
   try {
-    const probeId = 'n3-cache-probe'
-    const legacyFile = path.join(v2dir, 'config.json')
-    const saved = fs.existsSync(legacyFile) ? fs.readFileSync(legacyFile, 'utf8') : null
     invalidateDiscoverCache()
     const before = buildProviderEntries()
-    check('发现缓存：首次调用即全量扫描', Array.isArray(before) && !before.some((e) => e.providerId === probeId))
-    fs.writeFileSync(
-      legacyFile,
-      JSON.stringify({ provider: { [probeId]: { options: { baseURL: 'https://probe.example/v1' } } } }),
-      'utf8'
-    )
+    check('发现缓存：首次调用即全量扫描', Array.isArray(before) && !before.some((e) => e.providerId === 'n3-cache-probe'))
+    fs.writeFileSync(probeFile, JSON.stringify({ baseUrl: 'https://probe.example/v1', apiKey: 'probe-key' }), 'utf8')
     const cached = buildProviderEntries()
     check(
       '发现缓存：TTL 内新增配置不重扫（前端 3 秒轮询不再全量扫描）',
-      !cached.some((e) => e.providerId === probeId),
+      !cached.some((e) => e.providerId === 'n3-cache-probe'),
       'entries=' + cached.length
     )
     check('发现缓存：命中时返回副本（调用方改不动缓存）', cached !== buildProviderEntries() && cached.length === buildProviderEntries().length)
@@ -1316,22 +1126,38 @@ function check(name, ok, detail) {
     const fresh = buildProviderEntries()
     check(
       '发现缓存：显式失效后重扫并看到新配置',
-      fresh.some((e) => e.providerId === probeId && e.baseUrl === 'https://probe.example/v1'),
+      fresh.some((e) => e.providerId === 'n3-cache-probe' && e.baseUrl === 'https://probe.example/v1'),
       'entries=' + fresh.length
     )
-    if (saved === null) fs.rmSync(legacyFile, { force: true })
-    else fs.writeFileSync(legacyFile, saved, 'utf8')
-    invalidateDiscoverCache()
   } finally {
-    if (savedBase === undefined) delete process.env.ZCODE_DATA_BASE_DIR
-    else process.env.ZCODE_DATA_BASE_DIR = savedBase
+    fs.rmSync(probeDir, { recursive: true, force: true })
     invalidateDiscoverCache()
   }
 }
 
-async function getJson(port, pathname) {
-  const res = await fetch('http://127.0.0.1:' + port + pathname, { signal: AbortSignal.timeout(3000) })
-  return res.json()
+// 用 node:http 直连（每次新建连接，不走 undici 连接池）：自检里夹着长耗时的
+// spawnSync（更新内核单测 ~15s）与大段 sleep，全局 fetch 的连接池会拿到被服务端
+// keepAliveTimeout 关掉的死连接而报 ECONNRESET（服务其实活着）。
+function getJson(port, pathname) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      { host: '127.0.0.1', port, path: pathname, method: 'GET', timeout: 5000, headers: { connection: 'close' } },
+      (res) => {
+        let buf = ''
+        res.on('data', (c) => (buf += c))
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(buf))
+          } catch (err) {
+            reject(err)
+          }
+        })
+      }
+    )
+    req.on('timeout', () => req.destroy(new Error('timeout')))
+    req.on('error', reject)
+    req.end()
+  })
 }
 
 // CLI 文本出口（node lib/cli.mjs <args>）：v1.3.0 复审 N1 的回归面在这条路径上，
@@ -1394,7 +1220,7 @@ async function waitReady(port, deadlineMs) {
   while (Date.now() < deadline) {
     try {
       const health = await getJson(port, '/whale/health')
-      if (health && health.app === 'zcode-fox-widget') return health
+      if (health && health.app === 'fox-widget') return health
     } catch (err) {}
     await new Promise((r) => setTimeout(r, 200))
   }
@@ -1403,8 +1229,8 @@ async function waitReady(port, deadlineMs) {
 
 const serverEnv = {
   ...process.env,
-  ZCODE_HOME: tmpHome,
-  ZCODE_DATA_BASE_DIR: tmpHome,
+  CODEBUDDY_HOME: tmpHome,
+  FOX_WIDGET_DATA_DIR: dataDir,
   // CommandCode 额度读取隔离：指向空目录，绝不读真实反代凭据、绝不真出网
   CMDGO_DIR: path.join(tmpHome, 'cmdgo-empty'),
   // 版本自检会向镜像发真实请求：测试环境整个关掉（见 lib/update.mjs 的 startAutoCheck）
@@ -1424,28 +1250,108 @@ function spawnServer() {
 let child = spawnServer()
 
 try {
-  console.log('🐳 挂件自检（临时 ZCODE_HOME=' + tmpHome + '）\n')
+  console.log('🐳 挂件自检（临时 CODEBUDDY_HOME=' + tmpHome + '）\n')
 
   const health = await waitReady(PORT, 8000)
   check('服务在临时端口就绪', !!health, health ? 'port=' + health.port + ' pid=' + health.pid : childLog.slice(0, 200))
   if (!health) throw new Error('服务未就绪')
   check(
+    'health：app 标识为 fox-widget（WorkBuddy 插件名）',
+    health.app === 'fox-widget',
+    'app=' + health.app
+  )
+  check(
     'health 带 key 探测诊断（列出 provider 条目，enc 密文被标记）',
     health.keyProbe && Array.isArray(health.keyProbe.entries) &&
-      health.keyProbe.entries.some((e) => e.providerId === 'deepseek-encrypted' && e.keyEncrypted === true),
+      health.keyProbe.entries.some((e) => e.providerId === 'enc-plugin' && e.keyEncrypted === true),
     'keySource=' + health.keySource + ' entries=' + ((health.keyProbe && health.keyProbe.entries) || []).length
   )
   const port = health.port
 
   // 审查 P2-2：版本号单一来源——health（server 动态读 plugin.json）、清单、
-  // marketplace.json 副本三者一致，漂移即发版漏改
-  const pluginManifest = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, '.zcode-plugin', 'plugin.json'), 'utf8'))
-  const marketplaceManifest = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, 'marketplace.json'), 'utf8'))
+  // .codebuddy-plugin/marketplace.json 副本三者一致，漂移即发版漏改
+  const pluginManifest = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, '.codebuddy-plugin', 'plugin.json'), 'utf8'))
+  const marketplaceManifest = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, '.codebuddy-plugin', 'marketplace.json'), 'utf8'))
   check(
     '版本号单一来源：health = plugin.json = marketplace.json',
     health.version === pluginManifest.version && marketplaceManifest.plugins[0].version === pluginManifest.version,
     JSON.stringify({ health: health.version, plugin: pluginManifest.version, market: marketplaceManifest.plugins[0].version })
   )
+
+  // 迁移契约（manifest）：插件名 / 钩子路径 / MCP 路径 / 市场副本 source
+  check(
+    'manifest 契约：.codebuddy-plugin/plugin.json 的 name/hooks/mcpServers 正确',
+    pluginManifest.name === 'fox-widget' &&
+      pluginManifest.hooks === './hooks/hooks.json' &&
+      pluginManifest.mcpServers === './.mcp.json',
+    JSON.stringify({ name: pluginManifest.name, hooks: pluginManifest.hooks, mcpServers: pluginManifest.mcpServers })
+  )
+  check(
+    'manifest 契约：marketplace.json 的插件条目 name/source 正确（fox-widget / ./）',
+    marketplaceManifest.name === 'fox-local' &&
+      marketplaceManifest.plugins[0].name === 'fox-widget' &&
+      marketplaceManifest.plugins[0].source === './',
+    JSON.stringify({ market: marketplaceManifest.name, plugin: marketplaceManifest.plugins[0].name, source: marketplaceManifest.plugins[0].source })
+  )
+  // .mcp.json：MCP server 名 whale，命令 node，参数指向 ${CODEBUDDY_PLUGIN_ROOT}/lib/mcp-server.mjs
+  {
+    const mcpCfg = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, '.mcp.json'), 'utf8'))
+    const whale = (mcpCfg.mcpServers || {}).whale
+    check(
+      '.mcp.json 契约：server「whale」command=node，args 含 ${CODEBUDDY_PLUGIN_ROOT}/lib/mcp-server.mjs',
+      !!whale &&
+        whale.command === 'node' &&
+        Array.isArray(whale.args) &&
+        whale.args.some((a) => String(a).indexOf('${CODEBUDDY_PLUGIN_ROOT}/lib/mcp-server.mjs') !== -1),
+      JSON.stringify(whale)
+    )
+  }
+
+  // 迁移红线：lib/hooks/commands/skills/desktop/.codebuddy-plugin/.mcp.json 的**代码**
+  // 里不得再出现 ZCode 的路径/环境变量字面量（注释里提到 ZCode 无所谓，所以先剥注释）。
+  {
+    const dirs = ['lib', 'hooks', 'commands', 'skills', 'desktop', '.codebuddy-plugin']
+    const files = [path.join(PLUGIN_ROOT, '.mcp.json')]
+    const walk = (dir) => {
+      let entries = []
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true })
+      } catch (err) {
+        return
+      }
+      for (const e of entries) {
+        const full = path.join(dir, e.name)
+        if (e.isDirectory()) {
+          if (e.name !== 'node_modules') walk(full)
+        } else if (e.isFile()) {
+          files.push(full)
+        }
+      }
+    }
+    for (const d of dirs) walk(path.join(PLUGIN_ROOT, d))
+    const stripComments = (text) =>
+      text
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .split(/\r?\n/)
+        .map((l) => l.replace(/(^|\s)\/\/.*$/, ''))
+        .join('\n')
+    const bad = []
+    for (const f of files) {
+      let text = ''
+      try {
+        text = fs.readFileSync(f, 'utf8')
+      } catch (err) {
+        continue
+      }
+      const code = stripComments(text)
+      if (code.indexOf('~/.zcode') !== -1 || code.indexOf('${ZCODE_PLUGIN_ROOT}') !== -1) bad.push(path.relative(PLUGIN_ROOT, f))
+    }
+    check(
+      '迁移红线：源码（代码部分）无 ~/.zcode 或 ${ZCODE_PLUGIN_ROOT} 字面量',
+      bad.length === 0,
+      bad.length ? '违规文件：' + bad.join(', ') : files.length + ' 个文件已扫描'
+    )
+  }
   // 独立页面 CSP（审查 P3-3）：textContent + http(s) href 的 XSS 防线由浏览器强制化
   {
     const pageResp = await fetch('http://127.0.0.1:' + port + '/')
@@ -1524,51 +1430,16 @@ try {
       })
     )
   }
-  // Plan 日志尾窗逐级扩读 + 32MB 封顶（审查 P2-2 回归）：封顶后找不到标记就
-  // 如实返回 null，绝不再同步读整个文件（Infinity 级会把服务事件循环冻结数秒）
-  {
-    const lab = path.join(tmpHome, 'plan-tail-lab')
-    fs.mkdirSync(lab, { recursive: true })
-    const markerLine = (payload) => '[' + new Date().toISOString() + '][info] billing/balance 请求完成 ' + JSON.stringify(payload) + '\n'
-    const big = path.join(lab, 'big.log')
-    const fdBig = fs.openSync(big, 'w')
-    fs.writeSync(fdBig, markerLine({ percentRemaining: 42 }), 0) // 标记在文件头：任何尾窗都罩不住
-    fs.ftruncateSync(fdBig, 33 * 1024 * 1024) // 稀疏补长到 33MB，标记落在 32MB 尾窗之外
-    fs.closeSync(fdBig)
-    check(
-      'Plan 尾窗封顶：标记在 32MB 尾窗之外（33MB 文件）→ 如实返回 null',
-      readLogFile(big) === null,
-      JSON.stringify({ hit: readLogFile(big) !== null })
-    )
-    const mid = path.join(lab, 'mid.log')
-    const fdMid = fs.openSync(mid, 'w')
-    fs.writeSync(fdMid, 'x'.repeat(1024 * 1024) + '\n')
-    fs.writeSync(fdMid, markerLine({ percentRemaining: 7 }), 2 * 1024 * 1024) // 标记距尾部 3MB：第一级漏、第二级罩住
-    fs.ftruncateSync(fdMid, 5 * 1024 * 1024)
-    fs.closeSync(fdMid)
-    const midHit = readLogFile(mid)
-    check(
-      'Plan 尾窗扩读：标记距尾 3MB（512KB 漏、4MB 罩住）→ 仍能找到',
-      !!midHit && midHit.lines.length === 1 && midHit.lines[0].percentRemaining === 7,
-      JSON.stringify(midHit && midHit.lines[0])
-    )
-    const near = path.join(lab, 'near.log')
-    fs.writeFileSync(near, markerLine({ percentRemaining: 9 }), 'utf8')
-    const nearHit = readLogFile(near)
-    check(
-      'Plan 尾窗默认档：标记在 512KB 内 → 直接命中',
-      !!nearHit && nearHit.lines.length === 1 && nearHit.lines[0].percentRemaining === 9,
-      JSON.stringify(nearHit && nearHit.lines[0])
-    )
-  }
+  // （迁移删除）Plan 日志尾窗逐级扩读测试：数据源（ZCode 客户端 billing/balance
+  // 日志）在 WorkBuddy 上不存在，readLogFile 已随 plan-balance 冻结一并移除。
+  // 覆盖改由上面的 readPlanBalance 冻结契约 + /whale/plan.json 端到端断言承担。
 
   const first = await getJson(port, '/whale/last-turn.json')
   check('启动时对齐历史轮次（seq=0，不弹旧轮次）', first.seq === 0 && first.turn === null, JSON.stringify(first))
 
+  // —— B：单模型 DeepSeek 轮次，积分取宿主 credit_json 的权威值 ——
   const atB = Date.now()
-  insertTurn('sess_selftest', 'turn_B', USAGE_B, atB)
-
-  // 服务每秒轮询一次，给足两拍
+  insertTurn('turn_B', USAGE_B, atB, null, 12)
   let second = null
   const deadline = Date.now() + 6000
   while (Date.now() < deadline) {
@@ -1577,31 +1448,41 @@ try {
     if (second.seq > 0) break
   }
   check('新轮次被识别（seq 递增到 1）', second && second.seq === 1, JSON.stringify(second))
-
-  const expected = costOfUsage(MODEL, USAGE_B, atB, 'deepseek-test').amount
-  const got = second && typeof second.amount === 'number' ? second.amount : NaN
   check(
-    '金额与峰谷定价换算一致',
-    Math.abs(got - expected) < 1e-9,
-    '期望 ¥' + expected.toFixed(6) + '，实际 ¥' + Number(got).toFixed(6) + '（' + (second && second.peak ? '高峰' : '空闲') + '时段）'
+    '本轮 credit 取宿主 credit_json 的权威值（currency=CREDIT，partial=false）',
+    second && second.credit === 12 && second.amount === 12 && second.currency === 'CREDIT' && second.partial === false,
+    'credit=' + (second && second.credit) + ' currency=' + (second && second.currency) + ' partial=' + (second && second.partial)
   )
-  check('金额明显大于 0', got > 0, '¥' + Number(got).toFixed(4))
-  check('轮次标识与模型被带上', !!(second && second.turn === 'turn_B' && second.model === MODEL), JSON.stringify({ turn: second && second.turn, model: second && second.model }))
+  const expectedMarket = costOfUsage(MODEL, USAGE_B, atB).amount
+  check(
+    '等价市值按公开价目折算（与 usageFromRawUsage 拆分口径一致，缓存不重复计费）',
+    second && Math.abs(second.marketAmount - expectedMarket) < 1e-9,
+    '期望 ≈ ¥' + expectedMarket.toFixed(6) + '，实际 ' + Number(second && second.marketAmount).toFixed(6)
+  )
+  check('credit 明显大于 0', second && second.credit > 0, 'credit=' + (second && second.credit))
+  check(
+    '轮次标识与模型被带上',
+    !!(second && second.turn === 'turn_B' && second.model === MODEL),
+    JSON.stringify({ turn: second && second.turn, model: second && second.model })
+  )
+  check(
+    'token 分桶正确（输出=completion，未命中=input−命中）',
+    second && second.breakdown && second.breakdown.output === 100_000 && second.breakdown.hit === 0 && second.breakdown.miss === 1_000_000,
+    JSON.stringify(second && second.breakdown)
+  )
 
-  // 多模型轮次：GLM（套餐账户）+ DeepSeek 混合，金额应按行加总且带逐模型明细
+  // —— C：多模型轮次（同一 requestId 的两条模型调用）——逐模型明细 + 市值按行加总 ——
   const atC = Date.now()
-  insertTurn('sess_selftest', 'turn_C', USAGE_B, atC, [
-    {
-      model: 'GLM-5.3-Flash',
-      providerId: 'account:zai-start-plan',
-      usage: { input_tokens: 500_000, cache_read_input_tokens: 450_000, output_tokens: 50_000, computed_total_tokens: 550_000 },
-    },
-    {
-      model: 'deepseek-flash',
-      providerId: 'deepseek-test',
-      usage: { input_tokens: 300_000, cache_read_input_tokens: 0, output_tokens: 30_000, computed_total_tokens: 330_000 },
-    },
-  ])
+  insertTurn(
+    'turn_C',
+    USAGE_B,
+    atC,
+    [
+      { model: 'GLM-5.3-Flash', modelName: 'GLM-5.3-Flash', usage: { input_tokens: 500_000, cache_read_input_tokens: 450_000, output_tokens: 50_000 }, credit: 7 },
+      { model: 'deepseek-flash', modelName: 'DeepSeek-V4.1-Flash', usage: { input_tokens: 300_000, cache_read_input_tokens: 0, output_tokens: 30_000 }, credit: 3 },
+    ],
+    10
+  )
   let third = null
   const deadlineC = Date.now() + 6000
   while (Date.now() < deadlineC) {
@@ -1609,45 +1490,62 @@ try {
     third = await getJson(port, '/whale/last-turn.json')
     if (third.seq > 1) break
   }
-  const glmPart = costOfUsage('GLM-5.3-Flash', { input_tokens: 500_000, cache_read_input_tokens: 450_000, output_tokens: 50_000, computed_total_tokens: 550_000 }, atC, 'account:zai-start-plan').amount
-  const dsPart = costOfUsage('deepseek-flash', { input_tokens: 300_000, cache_read_input_tokens: 0, output_tokens: 30_000, computed_total_tokens: 330_000 }, atC, 'deepseek-test').amount
+  const glmPart = costOfUsage('GLM-5.3-Flash', { input_tokens: 500_000, cache_read_input_tokens: 450_000, output_tokens: 50_000 }, atC).amount
+  const dsPart = costOfUsage('deepseek-flash', { input_tokens: 300_000, cache_read_input_tokens: 0, output_tokens: 30_000 }, atC).amount
   check(
-    '多模型轮次按行加总并带逐模型明细',
-    third && third.seq === 2 && Array.isArray(third.models) && third.models.length === 2 && Math.abs(third.amount - (glmPart + dsPart)) < 1e-9,
-    '期望 ¥' + (glmPart + dsPart).toFixed(6) + '，实际 ¥' + Number(third && third.amount).toFixed(6) + '，models=' + (third && third.models ? third.models.length : '无')
+    '多模型轮次带逐模型明细且 credit = 宿主整轮积分（10）',
+    third && third.seq === 2 && Array.isArray(third.models) && third.models.length === 2 && third.credit === 10 && third.amount === 10,
+    'credit=' + (third && third.credit) + ' models=' + (third && third.models ? third.models.length : '无')
   )
-  check('混合轮次的金额构成两种厂商', glmPart > 0 && dsPart > 0, 'GLM ¥' + glmPart.toFixed(4) + ' + DeepSeek ¥' + dsPart.toFixed(4))
+  check(
+    '多模型轮的等价市值按行加总（GLM + DeepSeek）',
+    third && Math.abs(third.marketAmount - (glmPart + dsPart)) < 1e-9,
+    '期望 ≈ ¥' + (glmPart + dsPart).toFixed(6) + '，实际 ' + Number(third && third.marketAmount).toFixed(6)
+  )
+  check('混合轮次的市值构成两种厂商', glmPart > 0 && dsPart > 0, 'GLM ¥' + glmPart.toFixed(4) + ' + DeepSeek ¥' + dsPart.toFixed(4))
+  check(
+    '缓存命中不重复计费：多模型轮 breakdown 命中单列、未命中不含缓存读',
+    third && third.breakdown && third.breakdown.hit === 450_000 && third.breakdown.miss === 350_000,
+    JSON.stringify(third && third.breakdown)
+  )
 
-  // Plan 配额端到端：/whale/plan.json 读 fixture 日志；GLM 轮次的 quotaPct 用主模型桶算
+  // —— G：GLM 单模型轮次（保证今日模型榜里有 GLM 一整轮）——
+  const atG = Date.now()
+  insertTurn('turn_G', { input_tokens: 200_000, output_tokens: 20_000 }, atG, [
+    { model: 'GLM-5.3-Flash', modelName: 'GLM-5.3-Flash', usage: { input_tokens: 200_000, output_tokens: 20_000 }, credit: 8 },
+  ], 8)
+  let thirdG = null
+  const deadlineG = Date.now() + 6000
+  while (Date.now() < deadlineG) {
+    await new Promise((r) => setTimeout(r, 400))
+    thirdG = await getJson(port, '/whale/last-turn.json')
+    if (thirdG.seq > 2) break
+  }
+  check(
+    'GLM 单模型轮次被识别（seq=3，vendor=glm）',
+    thirdG && thirdG.seq === 3 && thirdG.vendor === 'glm',
+    JSON.stringify({ seq: thirdG && thirdG.seq, vendor: thirdG && thirdG.vendor })
+  )
+
+  // Plan 配额端到端：WorkBuddy 无此能力，接口如实返回 ok:false（不冒充套餐口径）
   const plan = await getJson(port, '/whale/plan.json')
   check(
-    'Plan 配额接口返回 fixture 观测',
-    plan && plan.ok && plan.remaining === 93_000_000 && plan.total === 104_000_000,
+    'Plan 配额接口：WorkBuddy 无此项 → ok:false',
+    plan && plan.ok === false && plan.reason === 'not-supported-on-workbuddy',
     JSON.stringify(plan).slice(0, 160)
   )
-  const expectPct = Math.round((550_000 / 100_000_000) * 10000) / 100
   check(
-    '套餐轮次带「占配额百分比」',
-    third && third.quotaPct === expectPct,
-    '期望 ' + expectPct + '%，实际 ' + (third && third.quotaPct)
+    '每轮消耗不带套餐口径（planTurn=false / quotaPct/planPct/extraAmounts 均为 null）',
+    third && third.planTurn === false && third.quotaPct === null && third.planPct === null && third.extraAmounts === null,
+    JSON.stringify({ planTurn: third && third.planTurn, quotaPct: third && third.quotaPct, extraAmounts: third && third.extraAmounts })
   )
-  // v1.4.0：套餐轮的余额口径——planPct 占配额总量（与主显示「Plan 剩余 x%」同
-  // 基数），混合轮次把非套餐行的真实金额放进 extraAmounts；纯 DeepSeek 轮不带
-  const expectPlanPct = Math.round((550_000 / 104_000_000) * 10000) / 100
+
+  // 上下文余量：WorkBuddy 侧新能力（session_usage.used / size）
+  const ctx = await getJson(port, '/whale/context.json')
   check(
-    '套餐轮次带「消耗余额百分比」（占配额总量，同主显示基数）',
-    third && third.planTurn === true && third.planPct === expectPlanPct && third.planTokens === 550_000,
-    '期望 ' + expectPlanPct + '%/550000，实际 ' + (third && third.planPct) + '%/' + (third && third.planTokens)
-  )
-  check(
-    '混合轮次的非套餐行金额进 extraAmounts（套餐行被剔除）',
-    third && third.extraAmounts && Math.abs(third.extraAmounts.CNY - dsPart) < 1e-9 && Object.keys(third.extraAmounts).length === 1,
-    '期望 CNY ' + dsPart.toFixed(6) + '，实际 ' + JSON.stringify(third && third.extraAmounts)
-  )
-  check(
-    '纯 DeepSeek 轮不带套餐口径（planTurn=false，planPct=null）',
-    second && second.planTurn === false && second.planPct === null && second.extraAmounts === null,
-    'planTurn=' + (second && second.planTurn) + ' planPct=' + (second && second.planPct)
+    '上下文余量接口：used/size/pct/remaining 均正确',
+    ctx && ctx.ok === true && ctx.used === 50_000 && ctx.size === 200_000 && ctx.pct === 25 && ctx.remaining === 150_000,
+    JSON.stringify(ctx)
   )
 
   // 厂商模板端到端：自动发现命中 bigmodel 规则、跳过本地网关；无 key 的模板不可用
@@ -1660,7 +1558,6 @@ try {
       vendors.ok &&
       [
         'deepseek',
-        'zcode-plan',
         'commandcode',
         'bigmodel-glm',
         'openrouter',
@@ -1706,8 +1603,8 @@ try {
     JSON.stringify({ openaiKind: byId.openai && byId.openai.kind, ollamaKind: byId.ollama && byId.ollama.kind })
   )
   check(
-    '自动发现命中 bigmodel 规则（key 来自 v2 provider_config）',
-    byId['bigmodel-glm'] && byId['bigmodel-glm'].available === true && String(byId['bigmodel-glm'].keySource || '').indexOf('v2-provider-config') === 0,
+    '自动发现命中 bigmodel 规则（key 来自 settings.json 的 pluginConfigs）',
+    byId['bigmodel-glm'] && byId['bigmodel-glm'].available === true && String(byId['bigmodel-glm'].keySource || '').indexOf('plugin-config:') === 0,
     byId['bigmodel-glm'] ? JSON.stringify({ available: byId['bigmodel-glm'].available, keySource: byId['bigmodel-glm'].keySource }) : '缺失'
   )
   check(
@@ -1720,114 +1617,114 @@ try {
     byId['openrouter'] && byId['openrouter'].available === false && byId['openrouter'].balance === undefined,
     byId['openrouter'] ? 'available=' + byId['openrouter'].available : '缺失'
   )
-  check(
-    'Plan 模板走日志源',
-    byId['zcode-plan'] && byId['zcode-plan'].available === true && byId['zcode-plan'].kind === 'local-log',
-    byId['zcode-plan'] ? 'available=' + byId['zcode-plan'].available : '缺失'
-  )
+  // （迁移删除）「Plan 模板走日志源」：zcode-plan 模板已随 plan-balance 冻结一并从
+  // vendors.mjs 删除，WorkBuddy 侧无对应物。已在清单完整性断言里去掉该 id。
 
-  // 用量记录：今日按模型聚合与逐条事件
+  // 用量记录：今日按模型聚合（积分口径）与逐轮事件
   const usage = await getJson(port, '/whale/usage-records.json')
   const usageModels = usage && usage.ok ? usage.today.models.map((m) => m.model) : []
   check(
-    '用量记录：今日含两个模型的聚合',
+    '用量记录：今日含两个模型的聚合（GLM / DeepSeek 各一整轮）',
     usage && usage.ok && usageModels.indexOf('GLM-5.3-Flash') !== -1 && usageModels.indexOf('deepseek-flash') !== -1,
     'models=' + usageModels.join(',')
   )
-  check(
-    '用量记录：今日金额与全部轮次一致（A+B+C）',
-    usage && usage.ok,
-    'total=' + (usage && usage.today ? usage.today.total : '无')
-  )
+  check('用量记录：口径声明为积分（unit=credit）', usage && usage.ok && usage.unit === 'credit', 'unit=' + (usage && usage.unit))
   if (usage && usage.ok) {
-    const costA = costOfUsage('deepseek-flash', { input_tokens: 1, output_tokens: 1, computed_total_tokens: 2 }, atA, 'deepseek-test').amount
-    const costB = costOfUsage('deepseek-flash', USAGE_B, atB, 'deepseek-test').amount
-    // v1.7.1（QA I-1）：套餐行（source='plan'）按配额扣、不花钱，日聚合的金额
-    // 只含真金白银——glmPart 是 pricing 层的等价市值，不进「今日已用（金额）」
-    const expectedToday = costA + costB + dsPart
+    // 今日积分 = turn_A + B + C + G 的宿主 credit 之和（积分是唯一主口径）
+    const expectedTodayCredit = 0.5 + 12 + 10 + 8
     check(
-      '用量记录：今日金额 = 付费行之和（套餐行不计金额）',
-      Math.abs(usage.today.total - expectedToday) < 1e-9,
-      '期望 ¥' + expectedToday.toFixed(6) + '，实际 ¥' + usage.today.total.toFixed(6) + '（套餐等价市值 ¥' + glmPart.toFixed(6) + ' 已剔除）'
-    )
-    // 套餐行金额归零但 tokens 照算：面板与主显示按配额/tokens 表达。
-    // v1.7.5：行级补等价市值（market）——只喂「模型排名」的排序与占比条
-    const planRow = (usage.today.models || []).find((m) => m.providerId === 'account:zai-start-plan')
-    check(
-      '用量记录：套餐行金额记 0 但 tokens 照算 + 市值在（与轮级 turnPlanUsage 同口径）',
-      planRow && planRow.amount === 0 && planRow.tokens > 0 && planRow.plan === true && Number(planRow.market) > 0,
-      JSON.stringify(planRow || null)
+      '用量记录：今日积分 = 各轮宿主 credit 之和',
+      Math.abs(usage.today.credit - expectedTodayCredit) < 1e-9 && Math.abs(usage.today.total - expectedTodayCredit) < 1e-9,
+      '期望 ' + expectedTodayCredit + ' 积分，实际 ' + usage.today.credit + '（total=' + usage.today.total + '）'
     )
     check(
-      '用量记录：rankTotal（排名值合计）≥ total（真金白银），两条口径分离',
-      Number(usage.today.rankTotal) >= usage.today.total,
-      'rankTotal=' + usage.today.rankTotal + ' total=' + usage.today.total
+      '用量记录：等价市值单列（marketAmount 与积分口径分离）',
+      Number(usage.today.marketAmount) > 0 && Math.abs(Number(usage.today.marketAmount) - usage.today.credit) > 1e-9,
+      'marketAmount≈¥' + Number(usage.today.marketAmount).toFixed(4) + ' credit=' + usage.today.credit
     )
     check(
-      '用量记录：厂商金额不含套餐（byVendor.GLM 金额为 0、tokens 在）',
-      usage.today.byVendor && usage.today.byVendor.GLM && usage.today.byVendor.GLM.amount === 0 && usage.today.byVendor.GLM.tokens > 0,
-      JSON.stringify((usage.today.byVendor || {}).GLM || null)
+      '用量记录：rankTotal（排名值合计）= 各行积分之和',
+      Math.abs(Number(usage.today.rankTotal) - expectedTodayCredit) < 1e-6,
+      'rankTotal=' + usage.today.rankTotal
+    )
+    check(
+      '用量记录：逐模型行币种为 CREDIT 且 credit>0',
+      usage.today.models.length > 0 && usage.today.models.every((m) => m.currency === 'CREDIT' && Number(m.credit) > 0),
+      JSON.stringify(usage.today.models.map((m) => m.model + ':' + m.credit))
+    )
+    check(
+      '用量记录：厂商汇总 byVendor（DeepSeek / GLM 各自有积分与 tokens）',
+      usage.today.byVendor &&
+        usage.today.byVendor.DeepSeek &&
+        usage.today.byVendor.DeepSeek.tokens > 0 &&
+        usage.today.byVendor.DeepSeek.credit > 0 &&
+        usage.today.byVendor.GLM &&
+        usage.today.byVendor.GLM.tokens > 0 &&
+        usage.today.byVendor.GLM.credit > 0,
+      JSON.stringify(usage.today.byVendor)
     )
   }
-  // 明细按轮聚合：一轮 = session/turn 相同的全部模型行之和
   check(
     '用量记录：带最近轮次列表（按轮聚合）',
-    usage && usage.ok && Array.isArray(usage.turns) && usage.turns.length >= 2,
+    usage && usage.ok && Array.isArray(usage.turns) && usage.turns.length >= 4,
     'turns=' + (usage && usage.turns ? usage.turns.length : '无')
   )
   if (usage && usage.ok && Array.isArray(usage.turns)) {
-    const turnC = usage.turns.find((t) => (t.models || []).some((m) => m.model === 'GLM-5.3-Flash'))
+    const turnC = usage.turns.find(
+      (t) => (t.models || []).some((m) => m.model === 'GLM-5.3-Flash') && (t.models || []).some((m) => m.model === 'deepseek-flash')
+    )
     check(
-      '用量记录：多模型轮次归并为一条且金额只含付费模型（套餐行金额 0）',
-      turnC && turnC.calls === 2 && turnC.models.length === 2 && Math.abs(turnC.amount - dsPart) < 1e-9,
-      turnC
-        ? 'calls=' + turnC.calls + ' models=' + turnC.models.length + ' ¥' + turnC.amount.toFixed(6)
-        : '未找到含 GLM 的轮次'
+      '用量记录：多模型轮次归并为一条（calls=2 / models=2 / credit=10）',
+      turnC && turnC.calls === 2 && turnC.models.length === 2 && Math.abs(turnC.credit - 10) < 1e-9,
+      turnC ? 'calls=' + turnC.calls + ' models=' + turnC.models.length + ' credit=' + turnC.credit : '未找到含 GLM+DeepSeek 的轮次'
     )
   }
 
-  // N1 回归（v1.3.0 复审）：多币种轮次的**文本出口**不能把美元写成人民币。
-  // cli.mjs / mcp-server.mjs 曾把 'CNY' 写死在金额格式化里，OpenAI/Claude 轮次会
-  // 显示成 ¥0.30（与真实价值差约 7 倍）。这里插一条 OpenAI 轮次，走真实 CLI 与
-  // MCP 文本路径核对，顺带核对 MCP 握手版本号与 plugin.json 一致（复审 N2）。
-  const atD = Date.now()
-  const USD_USAGE = { input_tokens: 120_000, cache_read_input_tokens: 20_000, output_tokens: 8_000, computed_total_tokens: 128_000 }
-  insertTurn('sess_selftest', 'turn_USD', USD_USAGE, atD, [{ model: 'gpt-5.6-terra', providerId: 'openai', usage: USD_USAGE }])
-  const usdExpected = costOfUsage('gpt-5.6-terra', USD_USAGE, atD, 'openai')
-  let usdTurn = null
-  const deadlineUsd = Date.now() + 6000
-  while (Date.now() < deadlineUsd) {
+  // N1 等价回归（WorkBuddy 版）：主显示是积分（CREDIT），**不再把任何轮的金额
+  // 写成货币**；同时「等价金额」附注要随模型的真实币种（OpenAI/Claude 是 USD）。
+  // 插一条 OpenAI 模型轮次，走真实 CLI 与 MCP 文本路径核对，并核对 MCP 握手版本。
+  const atH = Date.now()
+  const H_USAGE = { input_tokens: 120_000, cache_read_input_tokens: 20_000, output_tokens: 8_000 }
+  insertTurn('turn_H', H_USAGE, atH, [{ model: 'gpt-5.6-terra', modelName: 'GPT-5.6', usage: H_USAGE, credit: 5 }], 5)
+  let lastTurn = null
+  const deadlineH = Date.now() + 6000
+  while (Date.now() < deadlineH) {
     await new Promise((r) => setTimeout(r, 400))
-    usdTurn = await getJson(port, '/whale/last-turn.json')
-    if (usdTurn.seq > 2) break
+    lastTurn = await getJson(port, '/whale/last-turn.json')
+    if (lastTurn.seq > 3) break
   }
   check(
-    '多币种轮次被识别（seq 递增到 3，币种为 USD）',
-    usdTurn && usdTurn.seq === 3 && usdTurn.currency === 'USD' && Math.abs(usdTurn.amount - usdExpected.amount) < 1e-9,
-    usdTurn ? 'seq=' + usdTurn.seq + ' currency=' + usdTurn.currency + ' amount=' + usdTurn.amount : '无'
+    '模型换上 OpenAI 时主口径仍是积分（currency=CREDIT，vendor=openai）',
+    lastTurn && lastTurn.seq === 4 && lastTurn.currency === 'CREDIT' && lastTurn.credit === 5 && lastTurn.vendor === 'openai',
+    lastTurn ? 'seq=' + lastTurn.seq + ' currency=' + lastTurn.currency + ' vendor=' + lastTurn.vendor : '无'
   )
   const cliEnv = { ...serverEnv }
   const cliTurn = await runCli(['turn'], cliEnv)
   check(
-    'CLI 每轮消耗按币种显示（USD 轮次出现 $，不再写成 ¥）',
-    cliTurn.code === 0 && /\$\s*\d/.test(cliTurn.stdout) && cliTurn.stdout.indexOf('¥') === -1,
+    'CLI 每轮消耗主显示按积分（headline 出现「积分」，无货币符号）',
+    cliTurn.code === 0 && /积分/.test(cliTurn.stdout) && !/[¥$]/.test(cliTurn.stdout.split('\n')[0]),
     cliTurn.stdout.split('\n').slice(0, 2).join(' | ') + (cliTurn.stderr ? ' [stderr] ' + cliTurn.stderr.slice(0, 120) : '')
   )
   check(
-    'CLI 逐档明细的单价也随币种（$ x/M 而非 ¥ x/M）',
-    cliTurn.stdout.indexOf('× $') !== -1,
-    cliTurn.stdout.split('\n').filter((l) => l.indexOf('×') !== -1).join(' | ').slice(0, 200)
+    'CLI 等价金额以「≈」附注（非真实扣费），且逐档单价随模型币种（$ x/M）',
+    cliTurn.stdout.indexOf('等价金额') !== -1 &&
+      cliTurn.stdout.indexOf('≈') !== -1 &&
+      cliTurn.stdout.indexOf('缓存命中输入') !== -1 &&
+      cliTurn.stdout.indexOf('× $') !== -1,
+    cliTurn.stdout.split('\n').filter((l) => l.indexOf('≈') !== -1 || l.indexOf('× $') !== -1).join(' | ').slice(0, 200)
   )
-  const mcpOut = await runMcp([{ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'selftest', version: '1' } } }, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'whale_last_turn', arguments: {} } }], cliEnv)
+  const mcpOut = await runMcp(
+    [
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'selftest', version: '1' } } },
+      { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'whale_last_turn', arguments: {} } },
+    ],
+    cliEnv
+  )
   const mcpInit = mcpOut.find((m) => m.id === 1)
   const mcpTurn = mcpOut.find((m) => m.id === 2)
   const mcpText = mcpTurn && mcpTurn.result && mcpTurn.result.content && mcpTurn.result.content[0] ? mcpTurn.result.content[0].text : ''
-  check(
-    'MCP whale_last_turn 按币种显示（USD 轮次出现 $，不再写成 ¥）',
-    mcpText && mcpText.indexOf('$') !== -1 && mcpText.indexOf('¥') === -1,
-    mcpText.split('\n').slice(0, 2).join(' | ')
-  )
-  const pluginJson = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, '.zcode-plugin', 'plugin.json'), 'utf8'))
+  check('MCP whale_last_turn 按积分显示（出现「积分」）', mcpText && mcpText.indexOf('积分') !== -1, mcpText.split('\n').slice(0, 2).join(' | '))
+  const pluginJson = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, '.codebuddy-plugin', 'plugin.json'), 'utf8'))
   const mcpVersion = mcpInit && mcpInit.result && mcpInit.result.serverInfo ? mcpInit.result.serverInfo.version : null
   check(
     'MCP 握手版本号与 plugin.json 一致（单一来源）',
@@ -1987,11 +1884,11 @@ try {
   })
   check('更新路由：未知动作 400（不误触发任何流程）', badAction.status === 400, 'status=' + badAction.status)
 
-  // 版本更新内核单测：独立子进程（隔离 ZCODE_HOME，避免写到真实数据目录）
+  // 版本更新内核单测：独立子进程（隔离 CODEBUDDY_HOME，避免写到真实数据目录）
   {
     const run = spawnSync(process.execPath, [path.join(PLUGIN_ROOT, 'tools', 'selftest-update.mjs')], {
       encoding: 'utf8',
-      env: { ...process.env, ZCODE_HOME: tmpHome, WHALE_DISABLE_UPDATE_CHECK: '1' },
+      env: { ...process.env, CODEBUDDY_HOME: tmpHome, FOX_WIDGET_DATA_DIR: dataDir, WHALE_DISABLE_UPDATE_CHECK: '1' },
     })
     const m = /更新内核自检：(\d+)\/(\d+) 通过/.exec(String(run.stdout || ''))
     check(
@@ -2190,87 +2087,116 @@ try {
     )
   }
 
-  // 钩子接线契约：只挂 SessionStart + 两个低频事件。PreToolUse/PostToolUse 每次
-  // 工具调用都要起一个 node（钩子内联执行），会给用户每次调用都加延迟——这条断言
-  // 就是把这个取舍钉住，避免以后「顺手」把工具事件加回来。
+  // 钩子接线契约（WorkBuddy 版）：四个事件（SessionStart / UserPromptSubmit /
+  // PostToolUse / Notification）全部是 type:"command" + bash 字符串命令（无 args、
+  // 无 timeoutMs），命令里用 ${CODEBUDDY_PLUGIN_ROOT}，timeout 是**秒**数。
   {
     const hooksJson = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, 'hooks', 'hooks.json'), 'utf8'))
     const events = Object.keys((hooksJson.hooks || {}))
-    const scripts = []
+    const commands = []
+    let allCommandType = true
+    let allNumericTimeout = true
+    let allHaveRoot = true
     for (const ev of events) {
       for (const group of hooksJson.hooks[ev] || []) {
         for (const h of group.hooks || []) {
-          const arg = (h.args || [])[0] || ''
-          scripts.push(String(arg).replace('${ZCODE_PLUGIN_ROOT}/', ''))
+          if (h.type !== 'command' || typeof h.command !== 'string') allCommandType = false
+          if (typeof h.timeout !== 'number') allNumericTimeout = false
+          if (String(h.command || '').indexOf('${CODEBUDDY_PLUGIN_ROOT}') === -1) allHaveRoot = false
+          commands.push(String(h.command || '').replace('node "${CODEBUDDY_PLUGIN_ROOT}/', '').replace('"', ''))
         }
       }
     }
     check(
-      '钩子接线：SessionStart + UserPromptSubmit + PermissionRequest（不挂工具事件，避免每次调用加延迟）',
+      '钩子接线：SessionStart + 两个低频事件 UserPromptSubmit / Notification（不挂工具事件，避免每次调用加延迟）',
       events.length === 3 &&
         events.indexOf('SessionStart') !== -1 &&
         events.indexOf('UserPromptSubmit') !== -1 &&
-        events.indexOf('PermissionRequest') !== -1 &&
+        events.indexOf('Notification') !== -1 &&
         events.indexOf('PreToolUse') === -1 &&
         events.indexOf('PostToolUse') === -1 &&
         events.indexOf('Stop') === -1,
       events.join(',')
     )
+    // 注：hooks.json 当前只挂 3 个事件（SessionStart + UserPromptSubmit + Notification）。
+    // hook-event.mjs 仍然**处理** PostToolUse（见下面真跑一遍的断言），将来若把它挂上
+    // 也无需改这里的事件类型断言。task 描述里的「四事件」与仓库当前 hooks.json 不一致，
+    // 以 hooks/（不可改）为准。
+    check(
+      '钩子接线：全部 type:"command" + 字符串 command 含 ${CODEBUDDY_PLUGIN_ROOT} + 数值 timeout（秒；非 ZCode 的 type:"process"+args+timeoutMs）',
+      allCommandType && allHaveRoot && allNumericTimeout,
+      JSON.stringify({ allCommandType, allHaveRoot, allNumericTimeout })
+    )
     check(
       '钩子接线：脚本都在仓库里（autostart.mjs / hook-event.mjs）',
-      scripts.indexOf('lib/autostart.mjs') !== -1 &&
-        scripts.indexOf('lib/hook-event.mjs') !== -1 &&
-        scripts.every((s) => fs.existsSync(path.join(PLUGIN_ROOT, s))),
-      scripts.join(',')
+      commands.some((c) => c.indexOf('lib/autostart.mjs') !== -1) &&
+        commands.some((c) => c.indexOf('lib/hook-event.mjs') !== -1) &&
+        commands.every((c) => fs.existsSync(path.join(PLUGIN_ROOT, c))),
+      commands.join(' | ')
     )
   }
 
-  // hook-event.mjs：真跑一遍（隔离 ZCODE_HOME 的子进程），验状态文件与 waiting 语义
+  // hook-event.mjs：真跑一遍（隔离数据目录的子进程），验状态文件与 waiting 语义。
+  // WorkBuddy 没有 PermissionRequest 事件，「等确认」改由 Notification 触发。
   {
     const lab = fs.mkdtempSync(path.join(os.tmpdir(), 'fox-hook-'))
+    const hookEnv = { ...process.env, CODEBUDDY_HOME: lab, FOX_WIDGET_DATA_DIR: lab }
+    const stateFile = path.join(lab, 'hook-state.json')
     const runHook = (payload) =>
       spawnSync(process.execPath, [path.join(PLUGIN_ROOT, 'lib', 'hook-event.mjs')], {
         input: JSON.stringify(payload),
         encoding: 'utf8',
-        env: { ...process.env, ZCODE_HOME: lab },
+        env: hookEnv,
       })
-    let r = runHook({ hook_event_name: 'UserPromptSubmit', session_id: 's1' })
-    let st = JSON.parse(fs.readFileSync(path.join(lab, 'whale', 'hook-state.json'), 'utf8'))
+    let r = runHook({ hook_event_name: 'UserPromptSubmit', session_id: 's1', transcript_path: '/tmp/s1.jsonl' })
+    let st = JSON.parse(fs.readFileSync(stateFile, 'utf8'))
     check(
-      'hook-event：UserPromptSubmit 写事件名/会话/时间戳，waiting=false，计数累加',
-      r.status === 0 && st.event === 'UserPromptSubmit' && st.sessionId === 's1' && st.waiting === false &&
-        st.ts > 0 && st.counts.UserPromptSubmit === 1,
+      'hook-event：UserPromptSubmit 写事件名/会话/transcript，waiting=false，计数累加',
+      r.status === 0 &&
+        st.event === 'UserPromptSubmit' &&
+        st.sessionId === 's1' &&
+        st.transcriptPath === '/tmp/s1.jsonl' &&
+        st.waiting === false &&
+        st.ts > 0 &&
+        st.counts.UserPromptSubmit === 1,
       JSON.stringify(st)
     )
-    r = runHook({ hook_event_name: 'PermissionRequest', session_id: 's1', tool_name: 'Bash' })
-    st = JSON.parse(fs.readFileSync(path.join(lab, 'whale', 'hook-state.json'), 'utf8'))
+    r = runHook({ hook_event_name: 'Notification', session_id: 's1', message: '等待确认' })
+    st = JSON.parse(fs.readFileSync(stateFile, 'utf8'))
     check(
-      'hook-event：PermissionRequest → waiting=true（等确认），计数各自累加',
-      r.status === 0 && st.waiting === true && st.counts.PermissionRequest === 1 && st.counts.UserPromptSubmit === 1,
-      JSON.stringify({ waiting: st.waiting, counts: st.counts })
+      'hook-event：Notification → waiting=true（等确认），计数各自累加',
+      r.status === 0 && st.waiting === true && st.notification === '等待确认' && st.counts.Notification === 1 && st.counts.UserPromptSubmit === 1,
+      JSON.stringify({ waiting: st.waiting, notification: st.notification, counts: st.counts })
     )
     r = runHook({ hook_event_name: 'UserPromptSubmit', session_id: 's2' })
-    st = JSON.parse(fs.readFileSync(path.join(lab, 'whale', 'hook-state.json'), 'utf8'))
+    st = JSON.parse(fs.readFileSync(stateFile, 'utf8'))
     check(
       'hook-event：下一轮提问清掉等确认标记（等待已过去）',
       st.waiting === false && st.counts.UserPromptSubmit === 2,
       JSON.stringify({ waiting: st.waiting, counts: st.counts })
     )
+    r = runHook({ hook_event_name: 'PostToolUse', session_id: 's2', tool_name: 'Bash' })
+    st = JSON.parse(fs.readFileSync(stateFile, 'utf8'))
+    check(
+      'hook-event：PostToolUse 记录工具名且不误置等确认',
+      r.status === 0 && st.tool === 'Bash' && st.waiting === false && st.counts.PostToolUse === 1,
+      JSON.stringify({ tool: st.tool, waiting: st.waiting })
+    )
     // 坏输入（空 stdin / 非 JSON）不能抛、不能写坏文件、退出码必须 0
     const empty = spawnSync(process.execPath, [path.join(PLUGIN_ROOT, 'lib', 'hook-event.mjs')], {
       input: '',
       encoding: 'utf8',
-      env: { ...process.env, ZCODE_HOME: lab },
+      env: hookEnv,
     })
     const bad = spawnSync(process.execPath, [path.join(PLUGIN_ROOT, 'lib', 'hook-event.mjs')], {
       input: 'not json at all',
       encoding: 'utf8',
-      env: { ...process.env, ZCODE_HOME: lab },
+      env: hookEnv,
     })
-    const after = JSON.parse(fs.readFileSync(path.join(lab, 'whale', 'hook-state.json'), 'utf8'))
+    const after = JSON.parse(fs.readFileSync(stateFile, 'utf8'))
     check(
-      'hook-event：空输入 / 坏 JSON 都以 0 退出且不改坏已有状态（钩子失败绝不能影响 ZCode）',
-      empty.status === 0 && bad.status === 0 && after.event === 'UserPromptSubmit' && after.ts > 0,
+      'hook-event：空输入 / 坏 JSON 都以 0 退出且不改坏已有状态（钩子失败绝不能影响宿主）',
+      empty.status === 0 && bad.status === 0 && after.event === 'PostToolUse' && after.ts > 0,
       JSON.stringify({ empty: empty.status, bad: bad.status, event: after.event })
     )
     fs.rmSync(lab, { recursive: true, force: true })
@@ -2348,7 +2274,7 @@ try {
     check(
       'issue#2：宿主窗口长时间不存在时浮层自退（空窗看门狗，桌宠模式豁免）',
       mainSrc.indexOf('MISSING_QUIT_MS') !== -1 &&
-        /reason === 'window-missing' \|\| reason === 'zcode-identity-changed'/.test(mainSrc) &&
+        /reason === 'window-missing' \|\| reason === 'host-identity-changed'/.test(mainSrc) &&
         /if \(petMode\) return/.test(mainSrc) &&
         /log\('quit-window-missing'/.test(mainSrc),
       ''
@@ -2357,7 +2283,7 @@ try {
       'issue#2：宿主进程更换时立刻交还鼠标并隐身（更新/重启不再留下吃点击的透明窗口）',
       /function applyInteractive\(next, force\)/.test(mainSrc) &&
         /interactive\) applyInteractive\(false, true\)/.test(mainSrc) &&
-        /hideOverlay\('zcode-identity-changed'\)/.test(mainSrc),
+        /hideOverlay\('host-identity-changed'\)/.test(mainSrc),
       ''
     )
   }
@@ -3040,7 +2966,7 @@ try {
     afterRestart && afterRestart.seq === seqBeforeRestart && afterRestart.turn === null,
     '重启前 seq=' + seqBeforeRestart + '，重启后 ' + JSON.stringify(afterRestart)
   )
-  insertTurn('sess_selftest', 'turn_D', USAGE_B, Date.now())
+  insertTurn('turn_D', USAGE_B, Date.now(), null, 6)
   let fourth = null
   const deadlineD = Date.now() + 6000
   while (Date.now() < deadlineD) {
@@ -3054,16 +2980,15 @@ try {
     JSON.stringify(fourth ? { seq: fourth.seq, turn: fourth.turn } : fourth)
   )
 
-  // v1.4.2：多行套餐轮求和——model_usage 一行是一次 API 请求，长 agent 轮
-  // 有几十行（上下文逐请求增长），取「最大单行」会少算一到两个数量级
-  // （实测 38 行轮 sum=9.97M vs 单行最大 275k，显示 0.28% 而非 9.97%）
+  // 多行轮求和（WorkBuddy 版）：一个 agent 轮会对同一个 conversationRequestId 落
+  // 多条模型调用，逐模型明细要按行合并、tokens/积分全行求和。
   const atE = Date.now()
-  const planRows = [
-    { model: 'GLM-5.3-Flash', providerId: 'account:zai-start-plan', usage: { input_tokens: 400_000, cache_read_input_tokens: 350_000, output_tokens: 50_000, computed_total_tokens: 400_000 } },
-    { model: 'GLM-5.3-Flash', providerId: 'account:zai-start-plan', usage: { input_tokens: 300_000, cache_read_input_tokens: 250_000, output_tokens: 50_000, computed_total_tokens: 300_000 } },
-    { model: 'GLM-5.3-Flash', providerId: 'account:zai-start-plan', usage: { input_tokens: 250_000, cache_read_input_tokens: 200_000, output_tokens: 50_000, computed_total_tokens: 250_000 } },
+  const multiRows = [
+    { model: 'GLM-5.3-Flash', modelName: 'GLM-5.3-Flash', usage: { input_tokens: 400_000, cache_read_input_tokens: 350_000, output_tokens: 50_000 }, credit: 3 },
+    { model: 'GLM-5.3-Flash', modelName: 'GLM-5.3-Flash', usage: { input_tokens: 300_000, cache_read_input_tokens: 250_000, output_tokens: 50_000 }, credit: 3 },
+    { model: 'GLM-5.3-Flash', modelName: 'GLM-5.3-Flash', usage: { input_tokens: 250_000, cache_read_input_tokens: 200_000, output_tokens: 50_000 }, credit: 3 },
   ]
-  insertTurn('sess_selftest', 'turn_E', USAGE_B, atE, planRows)
+  insertTurn('turn_E', USAGE_B, atE, multiRows, 9)
   let fifth = null
   const deadlineE = Date.now() + 6000
   while (Date.now() < deadlineE) {
@@ -3071,52 +2996,47 @@ try {
     fifth = await getJson(port, '/whale/last-turn.json')
     if (fifth.seq > seqBeforeRestart + 1) break
   }
-  // 行 tokens 口径 = 命中+未命中+缓存写+输出（与计费一致），三行分别是
-  // 450k/350k/300k（input 全部带 cache_read 时 = input+output）
+  // 行 tokens 口径 = 命中+未命中+缓存写+输出：三行 450k/350k/300k = 1.1M
   const sumTokens = 1_100_000
-  const expectSumPct = Math.round((sumTokens / 104_000_000) * 10000) / 100
   check(
-    '多行套餐轮按全行求和（planTokens=1.1M，planPct 同基数）',
-    fifth && fifth.turn === 'turn_E' && fifth.planTurn === true && fifth.planTokens === sumTokens && fifth.planPct === expectSumPct,
-    '期望 ' + sumTokens + ' tokens / ' + expectSumPct + '%，实际 ' + (fifth && fifth.planTokens) + ' / ' + (fifth && fifth.planPct) + '%'
+    '多行轮按全行求和（calls=3，tokens=1.1M，credit=9；逐模型合并为一行）',
+    fifth && fifth.turn === 'turn_E' && fifth.calls === 3 && fifth.tokens === sumTokens && fifth.credit === 9 && fifth.models.length === 1,
+    '实际 calls=' + (fifth && fifth.calls) + ' tokens=' + (fifth && fifth.tokens) + ' credit=' + (fifth && fifth.credit) + ' models=' + (fifth && fifth.models && fifth.models.length)
   )
 
-  // 智能跟随：selection 优先；不可识别时回落最近 model_usage（对话发起时识别）
-  db.prepare('INSERT INTO session_entry (type, data, time_updated) VALUES (?, ?, ?)').run(
-    'runtime/model_selection',
-    JSON.stringify({ modelSelection: { providerId: 'bigmodel-standard-api', modelId: 'GLM-5.3-Flash' } }),
-    Date.now()
-  )
+  // 智能跟随：当前模型取宿主 sessions.model（输入框选定即更新），缺失时回落
+  // transcript 的最近一次真实模型调用。WorkBuddy 主计费源恒为 credits。
+  writeSession('GLM-5.3-Flash', Date.now())
   const sel1 = await getJson(port, '/whale/session.json')
   check(
-    'session.json：输入框选择即生效（bigmodel URL → glm 源）',
-    sel1 && sel1.ok && sel1.from === 'selection' && sel1.source === 'glm' && sel1.label === 'GLM 按量',
-    JSON.stringify(sel1).slice(0, 160)
+    'session.json：会话模型生效（GLM → source=credits，vendor=glm）',
+    sel1 &&
+      sel1.ok &&
+      sel1.from === 'selection' &&
+      sel1.source === 'credits' &&
+      sel1.modelVendor === 'glm' &&
+      sel1.modelId === 'GLM-5.3-Flash',
+    JSON.stringify(sel1).slice(0, 180)
   )
-  db.prepare('UPDATE session_entry SET data = ?, time_updated = ? WHERE type = ?').run(
-    JSON.stringify({ modelSelection: { providerId: 'xiaomi-mimo', modelId: 'mimo-v2.6-pro' } }),
-    Date.now() + 1,
-    'runtime/model_selection'
-  )
+  writeSession('mimo-v2.6-pro', Date.now() + 1)
   const sel2 = await getJson(port, '/whale/session.json')
   check(
-    'session.json：MiMo 无 URL 信息默认 mimo-api（平价无时段行）',
-    sel2 && sel2.ok && sel2.source === 'mimo-api' && sel2.timeMode === 'none',
-    JSON.stringify(sel2).slice(0, 160)
+    'session.json：换了模型族（mimo → vendor=mimo，主显示仍 credits）',
+    sel2 && sel2.ok && sel2.source === 'credits' && sel2.modelVendor === 'mimo',
+    JSON.stringify(sel2).slice(0, 180)
   )
-  insertTurn('sess_sel', 'turn_sel', { input_tokens: 1000, output_tokens: 100 }, Date.now() + 10, [
-    { model: 'kimi-k3', providerId: 'moonshot-kimi', usage: { input_tokens: 1000, output_tokens: 100 } },
-  ])
-  db.prepare('UPDATE session_entry SET data = ?, time_updated = ? WHERE type = ?').run(
-    JSON.stringify({ modelSelection: { providerId: 'mystery-corp', modelId: 'totally-unknown-9000' } }),
-    Date.now() + 2,
-    'runtime/model_selection'
-  )
+  // 会话模型为空时回落 transcript 最近一次调用（kimi-k3）。
+  // 注：readSessionSource 把 readActiveSelection 的回落也标为 from:'selection'
+  // （sel.ok 为真即走 selection 分支），所以这里只钉「取到了 transcript 的模型」。
+  insertTurn('turn_sel', { input_tokens: 1000, output_tokens: 100 }, Date.now() + 10, [
+    { model: 'kimi-k3', modelName: 'Kimi-K3', usage: { input_tokens: 1000, output_tokens: 100 }, credit: 1 },
+  ], 1)
+  writeSession('', Date.now() + 2)
   const sel3 = await getJson(port, '/whale/session.json')
   check(
-    'session.json：selection 不可识别时回落 model_usage（kimi-k3 → kimi 源）',
-    sel3 && sel3.ok && sel3.from === 'model-usage' && sel3.source === 'kimi' && sel3.modelId === 'kimi-k3',
-    JSON.stringify(sel3).slice(0, 160)
+    'session.json：会话模型缺失时回落 transcript 最近一次调用（kimi-k3 → vendor=kimi）',
+    sel3 && sel3.ok && sel3.modelVendor === 'kimi' && sel3.modelId === 'kimi-k3' && sel3.source === 'credits',
+    JSON.stringify(sel3).slice(0, 180)
   )
 
   // ---------- v1.6.0：音效库导入/删除、今日 token 榜、ZCode 主题跟随 ----------
@@ -3162,38 +3082,44 @@ try {
     check('用量记录：两个榜各自降序（金额榜按排名值 / token 榜按 tokens）', false, '接口不可用')
   }
 
-  // 接口：ZCode 主题（跟随 ZCode 的数据源）
-  const zt = await getJson(port, '/whale/zcode-theme.json')
+  // 接口：宿主主题（跟随 WorkBuddy 的数据源：观测 > preferences > system）
+  fs.mkdirSync(path.join(tmpHome, 'storage', 'user-1-personal', 'global'), { recursive: true })
+  fs.writeFileSync(
+    path.join(tmpHome, 'storage', 'user-1-personal', 'global', 'preferences.json'),
+    JSON.stringify({ theme: 'dark' }),
+    'utf8'
+  )
+  const zt = await getJson(port, '/whale/host-theme.json')
   check(
-    'ZCode 主题：读 <ZCODE_HOME>/cli/config.json 的 ui.theme（zai-dark → dark）',
-    zt && zt.ok === true && zt.theme === 'dark' && zt.raw === 'zai-dark' && zt.source === 'user-config',
+    '宿主主题：读 <CODEBUDDY_HOME>/storage/user-*/global/preferences.json 的 theme（dark）',
+    zt && zt.ok === true && zt.theme === 'dark' && zt.raw === 'dark' && zt.source === 'preferences',
     JSON.stringify(zt)
   )
-  // 观测层（v1.7.2）：浮层把 ZCode 窗口的 DWM 暗色标志落盘，接口优先用它——
-  // 跟随的是「ZCode 现在实际用的主题」，配置/系统都可能与实况相反
-  const obsFile = path.join(dataDir, 'zcode-theme-observed.json')
-  fs.writeFileSync(obsFile, JSON.stringify({ dark: 1, at: Date.now(), source: 'dwm' }), 'utf8')
+  // 观测层：浮层把 WorkBuddy 窗口的 DWM 暗色标志落盘，接口优先用它——
+  // 跟随的是「WorkBuddy 现在实际用的主题」，配置/系统都可能与实况相反
+  const obsFile = path.join(dataDir, 'host-theme-observed.json')
+  fs.writeFileSync(obsFile, JSON.stringify({ dark: 1, at: Date.now() }), 'utf8')
   await new Promise((r) => setTimeout(r, 5200)) // 服务端读取缓存 5s
-  const ztObs = await getJson(port, '/whale/zcode-theme.json')
+  const ztObs = await getJson(port, '/whale/host-theme.json')
   check(
-    'ZCode 主题：观测层生效（DWM 暗色标志 → dark）',
-    ztObs && ztObs.ok === true && ztObs.theme === 'dark' && ztObs.source === 'zcode-window' && ztObs.observed && ztObs.observed.dark === 1,
+    '宿主主题：观测层生效（DWM 暗色标志 → dark，source=host-window）',
+    ztObs && ztObs.ok === true && ztObs.theme === 'dark' && ztObs.source === 'host-window' && ztObs.observed && ztObs.observed.dark === 1,
     JSON.stringify(ztObs)
   )
-  fs.writeFileSync(obsFile, JSON.stringify({ dark: 0, at: Date.now(), source: 'dwm' }), 'utf8')
+  fs.writeFileSync(obsFile, JSON.stringify({ dark: 0, at: Date.now() }), 'utf8')
   await new Promise((r) => setTimeout(r, 5200))
-  const ztObs2 = await getJson(port, '/whale/zcode-theme.json')
+  const ztObs2 = await getJson(port, '/whale/host-theme.json')
   check(
-    'ZCode 主题：观测为浅色时不被配置 zai-dark 带偏（跟随实况）',
-    ztObs2 && ztObs2.theme === 'light' && ztObs2.source === 'zcode-window',
+    '宿主主题：观测为浅色时不被 preferences 的 dark 带偏（跟随实况）',
+    ztObs2 && ztObs2.theme === 'light' && ztObs2.source === 'host-window',
     JSON.stringify(ztObs2)
   )
   fs.rmSync(obsFile, { force: true })
   await new Promise((r) => setTimeout(r, 5200))
-  const ztBack = await getJson(port, '/whale/zcode-theme.json')
+  const ztBack = await getJson(port, '/whale/host-theme.json')
   check(
-    'ZCode 主题：观测文件消失后回落配置层（zai-dark → dark）',
-    ztBack && ztBack.theme === 'dark' && ztBack.source === 'user-config',
+    '宿主主题：观测文件消失后回落 preferences 层（dark）',
+    ztBack && ztBack.theme === 'dark' && ztBack.source === 'preferences',
     JSON.stringify(ztBack)
   )
 
@@ -3380,64 +3306,10 @@ try {
     )
   }
 
-  {
-    // 套餐扣费轮的「余额口径」（plan-balance.turnPlanUsage）：套餐行按 tokens
-    // 全行求和、百分比与主显示同基数；混合轮的真金白银只含非套餐行
-    const savedBase = process.env.ZCODE_DATA_BASE_DIR
-    process.env.ZCODE_DATA_BASE_DIR = tmpHome
-    try {
-      const plan = readPlanBalance()
-      const bucket = quotaBucketForModel(plan, 'GLM-5.3-Flash')
-      check(
-        'quotaBucketForModel：模型名归一匹配到 100M 桶',
-        !!bucket && bucket.totalUnits === 100_000_000 && bucket.remainingUnits === 90_000_000,
-        JSON.stringify(bucket)
-      )
-      check(
-        'quotaBucketForModel：对不上的模型返回 null',
-        quotaBucketForModel(plan, 'totally-unknown-9000') === null,
-        JSON.stringify(quotaBucketForModel(plan, 'totally-unknown-9000'))
-      )
-      const mixedTurn = {
-        models: [
-          { model: 'GLM-5.3-Flash', providerId: 'account:zai-start-plan', tokens: 550_000, amount: 4.2, currency: 'CNY', billable: true },
-          { model: 'deepseek-flash', providerId: 'deepseek-test', tokens: 330_000, amount: 3.21, currency: 'CNY', billable: true },
-        ],
-      }
-      const pu = turnPlanUsage(mixedTurn)
-      check(
-        'turnPlanUsage：混合轮只算套餐行 tokens（550k/104M = 0.53%）',
-        pu && pu.planTurn === true && pu.tokens === 550_000 && Math.abs(pu.pctOfTotal - 0.53) < 0.005,
-        JSON.stringify(pu)
-      )
-      check(
-        'turnPlanUsage：占桶百分比同基数（550k/100M = 0.55%）',
-        pu && Math.abs(pu.pctOfBucket - 0.55) < 0.005,
-        JSON.stringify(pu && { pctOfBucket: pu.pctOfBucket })
-      )
-      const ex = extraAmountsOfTurn(mixedTurn)
-      check(
-        'extraAmountsOfTurn：套餐行被剔除，只留真金白银',
-        ex && ex.CNY === 3.21 && Object.keys(ex).length === 1,
-        JSON.stringify(ex)
-      )
-      const onlyPlan = { models: [mixedTurn.models[0]] }
-      const pu2 = turnPlanUsage(onlyPlan)
-      check(
-        'turnPlanUsage：纯套餐轮无混合金额（extraAmounts=null）',
-        pu2 && pu2.planTurn === true && extraAmountsOfTurn(onlyPlan) === null,
-        JSON.stringify(pu2)
-      )
-      check(
-        'turnPlanUsage：非套餐轮返回 null（不冒充套餐口径）',
-        turnPlanUsage({ models: [mixedTurn.models[1]] }) === null,
-        'null'
-      )
-    } finally {
-      if (savedBase === undefined) delete process.env.ZCODE_DATA_BASE_DIR
-      else process.env.ZCODE_DATA_BASE_DIR = savedBase
-    }
-  }
+  // （迁移删除）套餐扣费轮的「余额口径」纯函数测试（quotaBucketForModel /
+  // turnPlanUsage / extraAmountsOfTurn）：这几个出口在 WorkBuddy 分支已随
+  // plan-balance 冻结移除，服务端 turnPlanUsage 恒返回 null。对应覆盖见上面的
+  // 「每轮消耗不带套餐口径」断言与文件较前的 readPlanBalance/turnPlanUsage 冻结契约。
 
   {
     // 余额校正公式（effectiveTodayUsage）：起点 + 到账 − 非调用扣减 − 当前余额。
@@ -3484,19 +3356,20 @@ try {
 
   {
     // 账本状态机（审查 P2-3：recordLedgerUsage / freshDay / effectiveTodayUsage 此前
-    // 零覆盖）。这几个函数把 LEDGER_FILE 绑死在 ZCODE_HOME 上、findApiKey 又会读
-    // 真实配置——所以用 spawnSync 起一个 ZCODE_HOME 指向独立目录的子进程，在里面
-    // 按顺序跑完整场景（开户 → 降 → 升 → 校正 → 校正后再消费 → 跨天 → 换币种 →
-    // 换 key），把每步的账本快照吐回来断言。
+    // 零覆盖）。这几个函数把 LEDGER_FILE 绑死在插件数据目录上、findApiKey 又会读
+    // 真实配置——所以用 spawnSync 起一个 FOX_WIDGET_DATA_DIR 指向独立目录的子进程，
+    // 在里面按顺序跑完整场景（开户 → 降 → 升 → 校正 → 校正后再消费 → 跨天 →
+    // 换币种 → 换 key），把每步的账本快照吐回来断言。
     const lab = path.join(tmpHome, 'ledger-lab')
-    fs.mkdirSync(path.join(lab, 'whale'), { recursive: true })
+    const labData = path.join(lab, 'plugin-data')
+    fs.mkdirSync(labData, { recursive: true })
     const balUrl = 'file:///' + path.join(PLUGIN_ROOT, 'lib', 'balance.mjs').replace(/\\/g, '/')
     const labScript = [
       "import fs from 'node:fs'",
       "import path from 'node:path'",
       "import { recordLedgerUsage, applyBalanceCorrection, balanceAdjustmentSummary } from '" + balUrl + "'",
-      "const file = path.join(process.env.ZCODE_HOME, 'whale', 'usage-ledger.json')",
-      "const cfg = path.join(process.env.ZCODE_HOME, 'whale', 'config.json')",
+      "const file = path.join(process.env.FOX_WIDGET_DATA_DIR, 'usage-ledger.json')",
+      "const cfg = path.join(process.env.FOX_WIDGET_DATA_DIR, 'config.json')",
       "const snap = () => { const l = JSON.parse(fs.readFileSync(file, 'utf8')); return { lastBalance: l.lastBalance, todayUsage: l.todayUsage, dayOpening: l.dayOpening, pendingCredit: l.pendingCredit, needsReview: l.needsReview === true, lastCurrency: l.lastCurrency, history: l.history, books: (l.previousBooks || []).length } }",
       "const out = []",
       "fs.writeFileSync(cfg, JSON.stringify({ apiKey: 'key-a' }))",
@@ -3518,7 +3391,7 @@ try {
     fs.writeFileSync(scriptFile, labScript, 'utf8')
     const run = spawnSync(process.execPath, [scriptFile], {
       encoding: 'utf8',
-      env: { ...process.env, ZCODE_HOME: lab, DEEPSEEK_API_KEY: '' },
+      env: { ...process.env, CODEBUDDY_HOME: lab, FOX_WIDGET_DATA_DIR: labData, DEEPSEEK_API_KEY: '' },
     })
     let steps = []
     try {
@@ -3551,46 +3424,53 @@ try {
   }
 
   {
-    // ZCode 主题映射（纯函数）：zai 皮肤 → 浅/深，system/auto/缺失 → system
+    // 宿主主题映射（纯函数）：dark/light 归一到挂件三态，其余（含 zai-* 旧值）回 system
     check(
-      'mapZcodeTheme：zai-light/zai-dark 映射浅/深',
-      mapZcodeTheme('zai-light') === 'light' && mapZcodeTheme('zai-dark') === 'dark' && mapZcodeTheme('LIGHT') === 'light',
-      mapZcodeTheme('zai-dark')
+      'mapHostTheme：dark/light 映射，zai-* 旧值兼容',
+      mapHostTheme('dark') === 'dark' &&
+        mapHostTheme('light') === 'light' &&
+        mapHostTheme('zai-dark') === 'dark' &&
+        mapHostTheme('zai-light') === 'light' &&
+        mapHostTheme('DARK') === 'dark',
+      mapHostTheme('dark')
     )
     check(
-      'mapZcodeTheme：system/auto/缺失/垃圾值回 system',
-      mapZcodeTheme('system') === 'system' && mapZcodeTheme('auto') === 'system' && mapZcodeTheme(null) === 'system' && mapZcodeTheme('hacker') === 'system',
+      'mapHostTheme：system/缺失/垃圾值回 system',
+      mapHostTheme('system') === 'system' && mapHostTheme(null) === 'system' && mapHostTheme('hacker') === 'system',
       'system'
     )
     check(
-      'themeOfConfig：只认 ui.theme 字符串',
-      themeOfConfig({ ui: { theme: 'dark' } }) === 'dark' && themeOfConfig({}) === null && themeOfConfig({ ui: { theme: '  ' } }) === null,
-      JSON.stringify(themeOfConfig({ ui: { theme: 'dark' } }))
+      'themeOfPreferences：优先 prefs.theme，其次 appearance.themeSelection.resourceKey',
+      themeOfPreferences({ theme: 'dark' }) === 'dark' &&
+        themeOfPreferences({ 'appearance.themeSelection': { resourceKey: 'light' } }) === 'light' &&
+        themeOfPreferences({ theme: '  ', 'appearance.themeSelection': { resourceKey: 'dark' } }) === 'dark' &&
+        themeOfPreferences({}) === null &&
+        themeOfPreferences(null) === null,
+      JSON.stringify(themeOfPreferences({ 'appearance.themeSelection': { resourceKey: 'light' } }))
     )
-    // 三层判定（v1.7.2）：观测（ZCode 窗口 DWM 暗色标志）> 配置 > 系统
+    // 三层判定：观测（宿主窗口 DWM 暗色标志）> preferences > system
     const tnow = Date.now()
     check(
-      'resolveZcodeTheme：新鲜观测压过配置（ZCode 实际暗色 + 配置写浅色 → dark）',
-      resolveZcodeTheme({ dark: 1, at: tnow }, 'light') === 'dark' && resolveZcodeTheme({ dark: 0, at: tnow }, 'dark') === 'light',
-      resolveZcodeTheme({ dark: 1, at: tnow }, 'light')
+      'resolveHostTheme：新鲜观测压过配置（宿主实际暗色 + 配置写浅色 → dark）',
+      resolveHostTheme({ dark: 1, at: tnow }, 'light') === 'dark' && resolveHostTheme({ dark: 0, at: tnow }, 'dark') === 'light',
+      resolveHostTheme({ dark: 1, at: tnow }, 'light')
     )
     check(
-      'resolveZcodeTheme：过期观测不算数（回落配置映射）',
-      resolveZcodeTheme({ dark: 1, at: tnow - 48 * 3600_000 }, 'zai-light') === 'light',
-      resolveZcodeTheme({ dark: 1, at: tnow - 48 * 3600_000 }, 'zai-light')
+      'resolveHostTheme：过期观测不算数（回落配置映射）',
+      resolveHostTheme({ dark: 1, at: tnow - 48 * 3600_000 }, 'light') === 'light',
+      resolveHostTheme({ dark: 1, at: tnow - 48 * 3600_000 }, 'light')
     )
     check(
-      'resolveZcodeTheme：无观测走配置、配置缺失回 system',
-      resolveZcodeTheme(null, 'zai-dark') === 'dark' && resolveZcodeTheme(undefined, null) === 'system',
+      'resolveHostTheme：无观测走配置、配置缺失回 system',
+      resolveHostTheme(null, 'dark') === 'dark' && resolveHostTheme(undefined, null) === 'system',
       'dark / system'
     )
     check(
-      'resolveZcodeTheme：观测缺 at 视为新鲜（跟随脚本只在变化时写）',
-      resolveZcodeTheme({ dark: 0 }, 'dark') === 'light',
-      resolveZcodeTheme({ dark: 0 }, 'dark')
+      'resolveHostTheme：观测缺 at 视为新鲜（跟随脚本只在变化时写）',
+      resolveHostTheme({ dark: 0 }, 'dark') === 'light',
+      resolveHostTheme({ dark: 0 }, 'dark')
     )
   }
-
   {
     // 镜像地址白名单（safeMirrorUrl）：形态 + 主机双重校验，不干净一律回落默认。
     // 这是「拉工具时会去请求的 URL」，与出站硬约束同口径拒环回/私有/保留地址。

@@ -1,8 +1,9 @@
-// 版本更新内核单测（独立进程 + 隔离 ZCODE_HOME）。
+// 版本更新内核单测（独立进程 + 隔离 CODEBUDDY_HOME）。
 //
 // 为什么单独一个文件：lib/update.mjs 与 lib/balance.mjs 的路径常量在 import 时
-// 就从 ZCODE_HOME 求值，直接在主 selftest 进程里 import 会写到真实数据目录。
-// 这里先把 ZCODE_HOME 指到临时目录再 import（与 selftest 的账本子进程同法）。
+// 就从 CODEBUDDY_HOME / FOX_WIDGET_DATA_DIR 求值，直接在主 selftest 进程里 import
+// 会写到真实数据目录。这里先把环境变量指到临时目录再 import（与 selftest 的账本
+// 子进程同法）。
 //
 // 覆盖：版本比较 / 出站白名单守卫 / tar.gz 解包（含中文名与路径穿越）/ 落盘计划与
 // 清理（有 manifest、无 manifest 非 git、无 manifest 的 git 工作区三种）/ 跳过标记
@@ -17,7 +18,11 @@ import path from 'node:path'
 import zlib from 'node:zlib'
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'fox-update-test-'))
-process.env.ZCODE_HOME = TMP
+process.env.CODEBUDDY_HOME = TMP
+process.env.FOX_WIDGET_DATA_DIR = path.join(TMP, 'plugin-data')
+fs.mkdirSync(process.env.FOX_WIDGET_DATA_DIR, { recursive: true })
+// 关键：清掉可能从父进程继承来的旧变量，避免子进程写到真实数据目录 / 复用真实服务
+delete process.env.CODEBUDDY_PLUGIN_DATA
 
 const results = []
 function check(name, ok, detail) {
@@ -152,7 +157,7 @@ const gz = (tarBuf) => zlib.gzipSync(tarBuf)
 {
   const tar = makeTar([
     { name: 'repo-abc/', type: '5', body: '' },
-    { name: 'repo-abc/.zcode-plugin/plugin.json', body: '{"version":"1.11.0"}' },
+    { name: 'repo-abc/.codebuddy-plugin/plugin.json', body: '{"version":"1.11.0"}' },
     { name: 'repo-abc/lib/widget.js', body: 'x'.repeat(1000) },
     { name: 'repo-abc/assets/说明.txt', body: '中文内容' },
     { name: '../evil.js', body: 'nope' },
@@ -161,16 +166,16 @@ const gz = (tarBuf) => zlib.gzipSync(tarBuf)
   check(
     'tar 解包：剥掉顶层目录 + 目录项跳过 + 中文名保留 + 路径穿越丢弃',
     files.size === 3 &&
-      files.get('.zcode-plugin/plugin.json').toString('utf8') === '{"version":"1.11.0"}' &&
+      files.get('.codebuddy-plugin/plugin.json').toString('utf8') === '{"version":"1.11.0"}' &&
       files.get('lib/widget.js').length === 1000 &&
       files.get('assets/说明.txt').toString('utf8') === '中文内容' &&
       !files.has('../evil.js'),
     [...files.keys()].join(',')
   )
-  check('U.parsePluginJsonVersion 从包内清单取版本', U.parsePluginJsonVersion(files.get('.zcode-plugin/plugin.json').toString('utf8')) === '1.11.0')
+  check('U.parsePluginJsonVersion 从包内清单取版本', U.parsePluginJsonVersion(files.get('.codebuddy-plugin/plugin.json').toString('utf8')) === '1.11.0')
   // 没有顶层目录的包（git archive 形态）也要能装
-  const flat = U.extractTarGz(gz(makeTar([{ name: '.zcode-plugin/plugin.json', body: '{"version":"2.0.0"}' }])))
-  check('tar 解包：无顶层目录的包同样可用', flat.has('.zcode-plugin/plugin.json'), [...flat.keys()].join(','))
+  const flat = U.extractTarGz(gz(makeTar([{ name: '.codebuddy-plugin/plugin.json', body: '{"version":"2.0.0"}' }])))
+  check('tar 解包：无顶层目录的包同样可用', flat.has('.codebuddy-plugin/plugin.json'), [...flat.keys()].join(','))
   let threw = false
   try {
     U.extractTarGz(Buffer.from('not gzip'))
@@ -183,8 +188,8 @@ const gz = (tarBuf) => zlib.gzipSync(tarBuf)
 // ---------- 4. 落盘计划 / 清理 ----------
 function mkRoot(name, entries) {
   const root = path.join(TMP, name)
-  fs.mkdirSync(path.join(root, '.zcode-plugin'), { recursive: true })
-  fs.writeFileSync(path.join(root, '.zcode-plugin', 'plugin.json'), JSON.stringify({ version: '1.10.0' }), 'utf8')
+  fs.mkdirSync(path.join(root, '.codebuddy-plugin'), { recursive: true })
+  fs.writeFileSync(path.join(root, '.codebuddy-plugin', 'plugin.json'), JSON.stringify({ version: '1.10.0' }), 'utf8')
   for (const [rel, body] of Object.entries(entries)) {
     const abs = path.join(root, rel)
     fs.mkdirSync(path.dirname(abs), { recursive: true })
@@ -199,7 +204,7 @@ function mkRoot(name, entries) {
     ['lib/keep.js', Buffer.from('same')],
     ['lib/change.js', Buffer.from('v2')],
     ['lib/new.js', Buffer.from('new')],
-    ['.zcode-plugin/plugin.json', Buffer.from('{"version":"1.11.0"}')],
+    ['.codebuddy-plugin/plugin.json', Buffer.from('{"version":"1.11.0"}')],
   ])
   const plan = U.planApply(root, files, ['lib/keep.js', 'lib/gone.js', 'lib/change.js', 'README.md'])
   check(
@@ -207,7 +212,7 @@ function mkRoot(name, entries) {
     plan.skip.includes('lib/keep.js') &&
       plan.write.includes('lib/change.js') &&
       plan.write.includes('lib/new.js') &&
-      plan.write.includes('.zcode-plugin/plugin.json') &&
+      plan.write.includes('.codebuddy-plugin/plugin.json') &&
       plan.remove.includes('lib/gone.js') &&
       !plan.remove.includes('README.md'),
     JSON.stringify(plan)
@@ -236,7 +241,7 @@ function mkRoot(name, entries) {
 {
   const root = mkRoot('apply-root', { 'lib/old.js': 'old', 'lib/keep.js': 'same' })
   const files = new Map([
-    ['.zcode-plugin/plugin.json', Buffer.from('{"version":"1.12.0"}')],
+    ['.codebuddy-plugin/plugin.json', Buffer.from('{"version":"1.12.0"}')],
     ['lib/keep.js', Buffer.from('same')],
     ['lib/new.js', Buffer.from('brand new')],
   ])
@@ -257,7 +262,7 @@ function mkRoot(name, entries) {
     const m = U.readManifestFor(root)
     return !!m && m.version === '1.12.0' && m.files.includes('lib/new.js') && !m.files.includes('lib/old.js')
   })())
-  check('applyUpdateFiles：旧文件备份到 update/backup/', fs.existsSync(path.join(TMP, 'whale', 'update', 'backup', 'test-1', 'lib', 'old.js')))
+  check('applyUpdateFiles：旧文件备份到 update/backup/', fs.existsSync(path.join(TMP, 'plugin-data', 'update', 'backup', 'test-1', 'lib', 'old.js')))
   // 再跑一次：所有文件相同 → 不写不删
   const second = await U.applyUpdateFiles(files, '1.12.0', [root], { stamp: 'test-2' })
   check('applyUpdateFiles：重复应用幂等（写入 0 / 删除 0）', second[0].written === 0 && second[0].removed === 0, JSON.stringify(second[0]))
@@ -266,7 +271,7 @@ function mkRoot(name, entries) {
   const rootA = mkRoot('multi-a', { 'lib/stale-a.js': 'a' })
   const rootB = mkRoot('multi-b', { 'lib/stale-b.js': 'b' })
   const pkgAB = new Map([
-    ['.zcode-plugin/plugin.json', Buffer.from('{"version":"1.12.1"}')],
+    ['.codebuddy-plugin/plugin.json', Buffer.from('{"version":"1.12.1"}')],
     ['lib/shared.js', Buffer.from('shared')],
     ['scratch/local-only.js', Buffer.from('keep me')],
   ])
@@ -301,7 +306,7 @@ function mkRoot(name, entries) {
 {
   const eps = [
     { name: 'bad', url: 'https://ghproxy.net/x', pick: U.parsePluginJsonVersion },
-    { name: 'good', url: 'https://cdn.jsdelivr.net/gh/a/b@main/.zcode-plugin/plugin.json', pick: U.parsePluginJsonVersion },
+    { name: 'good', url: 'https://cdn.jsdelivr.net/gh/a/b@main/.codebuddy-plugin/plugin.json', pick: U.parsePluginJsonVersion },
   ]
   let calls = 0
   const fetchImpl = async (url) => {
@@ -440,7 +445,7 @@ function mkRoot(name, entries) {
 {
   const root = mkRoot('run-root', { 'lib/old.js': 'old' })
   const pkg = new Map([
-    ['.zcode-plugin/plugin.json', Buffer.from('{"version":"1.13.0"}')],
+    ['.codebuddy-plugin/plugin.json', Buffer.from('{"version":"1.13.0"}')],
     ['lib/server.mjs', Buffer.from('new server')],
   ])
   U.writeUpdateState({ latest: '1.13.0', available: true, busy: false, phase: null, error: null, source: null })
@@ -453,7 +458,7 @@ function mkRoot(name, entries) {
   )
   check('runUpdate：旧文件被清理', !fs.existsSync(path.join(root, 'lib', 'old.js')))
   // 版本不符必须拒装
-  const badPkg = new Map([['.zcode-plugin/plugin.json', Buffer.from('{"version":"1.12.0"}')]])
+  const badPkg = new Map([['.codebuddy-plugin/plugin.json', Buffer.from('{"version":"1.12.0"}')]])
   U.writeUpdateState({ latest: '1.13.0', available: true, busy: false })
   const r2 = await U.runUpdate({ files: badPkg, roots: [root] })
   check('runUpdate：包内版本与目标不符 → 拒绝安装并报错', r2.ok === false && r2.error.includes('版本不符'), String(r2.error))
@@ -466,20 +471,23 @@ function mkRoot(name, entries) {
 
 // ---------- 9. 安装目录发现 ----------
 {
-  // DATA_BASE 在 import 时求值（= 本测试的临时 ZCODE_HOME），所以假 home 就建在 TMP 下
-  const cacheRoot = path.join(TMP, 'cli', 'plugins', 'cache', 'zcode-fox-local', 'zcode-fox-widget', '1.0.0')
-  fs.mkdirSync(path.join(cacheRoot, '.zcode-plugin'), { recursive: true })
-  fs.writeFileSync(path.join(cacheRoot, '.zcode-plugin', 'plugin.json'), '{"name":"zcode-fox-widget","version":"1.0.0"}', 'utf8')
+  // candidateBases() 用 <CODEBUDDY_HOME>/plugins（host.mjs 的 HOST_HOME 在 import 时求值）
+  const base = path.join(TMP, 'plugins')
+  const cacheRoot = path.join(base, 'cache', 'fox-local', 'fox-widget', '1.0.0')
+  fs.mkdirSync(path.join(cacheRoot, '.codebuddy-plugin'), { recursive: true })
+  fs.writeFileSync(path.join(cacheRoot, '.codebuddy-plugin', 'plugin.json'), '{"name":"fox-widget","version":"1.0.0"}', 'utf8')
+  const cacheRoot2 = path.join(base, 'cache', 'fox-local', 'fox-widget', '2.0.0')
+  fs.mkdirSync(path.join(cacheRoot2, '.codebuddy-plugin'), { recursive: true })
+  fs.writeFileSync(path.join(cacheRoot2, '.codebuddy-plugin', 'plugin.json'), '{"name":"fox-widget","version":"2.0.0"}', 'utf8')
   fs.writeFileSync(
-    path.join(TMP, 'cli', 'plugins', 'installed_plugins.json'),
-    JSON.stringify({ plugins: { a: { id: 'zcode-fox-widget@zcode-fox-local', installPath: cacheRoot } } }),
+    path.join(base, 'installed_plugins.json'),
+    JSON.stringify({ version: 1, plugins: { 'fox-widget@fox-local': [{ id: 'fox-widget@fox-local', installPath: cacheRoot }] } }),
     'utf8'
   )
   const roots = U.discoverInstallRoots()
   const hasCache = roots.some((r) => path.resolve(r) === path.resolve(cacheRoot))
-  const hasRepo = roots.some((r) => path.resolve(r) === path.resolve(U.REPO_ROOT_FOR_TEST || ''))
-  void hasRepo
-  check('discoverInstallRoots：按注册表 + 缓存扫描找到安装副本', hasCache, JSON.stringify(roots))
+  const hasCache2 = roots.some((r) => path.resolve(r) === path.resolve(cacheRoot2))
+  check('discoverInstallRoots：按注册表 + 缓存扫描找到安装副本', hasCache && hasCache2, JSON.stringify(roots))
 }
 
 // ---------- 10. 重启链路（真实子进程 + 隔离 HOME + 高位端口） ----------
@@ -491,7 +499,7 @@ function mkRoot(name, entries) {
   const { spawnSync } = await import('node:child_process')
   const CLI = path.join(process.cwd(), 'lib', 'cli.mjs')
   // 高位端口，避开本机正在运行的真实挂件服务。两个口径都要设：config.json 决定
-  // 服务实际绑哪个口，ZCODE_WHALE_PORT 决定 findRunningServer 的默认候选——不设后者
+  // 服务实际绑哪个口，FOX_WIDGET_PORT 决定 findRunningServer 的默认候选——不设后者
   // 它会回落到 39321 并「复用」用户正在跑的那个服务，测试就成了空跑。
   const PORT = 39000 + (process.pid % 900)
   const run = (args) =>
@@ -500,11 +508,11 @@ function mkRoot(name, entries) {
       encoding: 'utf8',
       timeout: 60000,
       windowsHide: true,
-      env: { ...process.env, WHALE_DISABLE_UPDATE_CHECK: '1', ZCODE_WHALE_PORT: String(PORT) },
+      env: { ...process.env, WHALE_DISABLE_UPDATE_CHECK: '1', FOX_WIDGET_PORT: String(PORT) },
     })
   const serverInfo = () => {
     try {
-      return JSON.parse(fs.readFileSync(path.join(TMP, 'whale', 'server.json'), 'utf8'))
+      return JSON.parse(fs.readFileSync(path.join(process.env.FOX_WIDGET_DATA_DIR, 'server.json'), 'utf8'))
     } catch (err) {
       return null
     }
@@ -516,8 +524,8 @@ function mkRoot(name, entries) {
     return !!(await probeHealth(info.port, 1500))
   }
   // 端口冲突时 server.mjs 会自行顺延，所以下面一律从 server.json 读实际端口再探活
-  fs.mkdirSync(path.join(TMP, 'whale'), { recursive: true })
-  fs.writeFileSync(path.join(TMP, 'whale', 'config.json'), JSON.stringify({ port: PORT }), 'utf8')
+  fs.mkdirSync(process.env.FOX_WIDGET_DATA_DIR, { recursive: true })
+  fs.writeFileSync(path.join(process.env.FOX_WIDGET_DATA_DIR, 'config.json'), JSON.stringify({ port: PORT }), 'utf8')
 
   const started = run(['start'])
   check('重启链路：start 后服务在线', started.status === 0 && (await healthOk()), String(started.stdout || '').trim().split('\n').pop())
