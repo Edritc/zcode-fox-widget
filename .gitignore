@@ -3,6 +3,9 @@
 node_modules/
 *.log
 
+# 宿主 AI 的工作记忆目录（会话状态，不是项目资料）
+.workbuddy/
+
 # 本机数据目录（配置、账本、Electron 运行时）不在这里，但以防有人拷贝进来
 desktop-runtime/
 

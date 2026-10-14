@@ -1,12 +1,13 @@
-// ZCode狐娘小挂件（zcode-fox-widget）的桌面浮层窗口。
+// WorkBuddy狐娘小挂件（fox-widget）的桌面浮层窗口。
 //
-// ZCode 插件无法往客户端界面注入内容，所以这里用独立 Electron 窗口把挂件页面
-// 「浮」在 ZCode 上。为了让它表现得像界面的一部分：
-//   - 窗口矩形始终对齐 ZCode 主窗口（由 desktop/follow-window.ps1 常驻探测位置）
-//   - 通过 owner 关系让系统处理联动：ZCode 最小化 → 浮层跟着隐藏；
-//     ZCode 退出 → 浮层跟着销毁
+// WorkBuddy 插件同样无法往客户端界面注入内容（在 app.asar 里没搜到 panel/view
+// 类注入契约），所以这里用独立 Electron 窗口把挂件页面「浮」在 WorkBuddy 上。
+// 为了让它表现得像界面的一部分：
+//   - 窗口矩形始终对齐 WorkBuddy 主窗口（由 desktop/follow-window.ps1 常驻探测位置）
+//   - 通过 owner 关系让系统处理联动：WorkBuddy 最小化 → 浮层跟着隐藏；
+//     WorkBuddy 退出 → 浮层跟着销毁
 //   - 透明、无边框、不进任务栏、始终置顶
-//   - **默认鼠标穿透**：不在鲸鱼/气泡/菜单上时点击落到下面的 ZCode，不挡操作
+//   - **默认鼠标穿透**：不在鲸鱼/气泡/菜单上时点击落到下面的 WorkBuddy，不挡操作
 //
 // 非 Windows 平台拿不到窗口信息，退回「覆盖整个工作区」的静态浮层。
 const { app, BrowserWindow, ipcMain, screen, shell } = require('electron')
@@ -14,7 +15,6 @@ const { spawn } = require('node:child_process')
 const path = require('node:path')
 const fs = require('node:fs')
 const os = require('node:os')
-const { evaluateBootState, readNewestLogTail } = require('./ui-ready.cjs')
 
 const PORT = Number(process.env.WHALE_PORT) || 39321
 const TARGET_URL = 'http://127.0.0.1:' + PORT + '/'
@@ -41,6 +41,16 @@ app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
 app.commandLine.appendSwitch('disable-renderer-backgrounding')
 app.commandLine.appendSwitch('disable-background-timer-throttling')
 
+// 浮层自己的数据目录：与 lib/host.mjs 的算法保持一致（宿主注入
+// CODEBUDDY_PLUGIN_DATA；浮层是 lib/overlay.mjs 拉起的，那里会把它带进环境变量）。
+// 浮层是独立的 Electron 进程，不 import ESM 的 lib/，所以这里复制一份最小实现。
+const DATA_DIR = (() => {
+  const fromEnv = process.env.FOX_WIDGET_DATA_DIR || process.env.CODEBUDDY_PLUGIN_DATA
+  if (fromEnv) return fromEnv
+  const sanitize = (id) => String(id).replace(/[^a-zA-Z0-9\-_]/g, '-')
+  return path.join(os.homedir(), '.workbuddy', 'plugins', 'data', sanitize('fox-widget@fox-local'))
+})()
+
 // 排查用日志：常开。这是冻结/点击取证的黑匣子，必须覆盖 hook 自启的日常
 // 实例（v1.4.2 及以前只在 WHALE_DEBUG_PORT 实例写入，日常冻结拿不到第一
 // 现场）。设 WHALE_OVERLAY_LOG=0 可显式关闭；CDP 调试口仍只按
@@ -48,7 +58,7 @@ app.commandLine.appendSwitch('disable-background-timer-throttling')
 // 防长期写爆。
 const DEBUG_LOG = process.env.WHALE_OVERLAY_LOG === '0'
   ? null
-  : path.join(os.homedir(), '.zcode', 'whale', 'overlay-debug.log')
+  : path.join(DATA_DIR, 'overlay-debug.log')
 try {
   if (DEBUG_LOG && fs.statSync(DEBUG_LOG).size > 5 * 1024 * 1024) {
     fs.rmSync(DEBUG_LOG + '.1', { force: true })
@@ -58,6 +68,7 @@ try {
 function log(...parts) {
   if (!DEBUG_LOG) return
   try {
+    fs.mkdirSync(path.dirname(DEBUG_LOG), { recursive: true })
     fs.appendFileSync(DEBUG_LOG, new Date().toISOString() + ' ' + parts.join(' ') + '\n')
   } catch (err) {}
 }
@@ -106,7 +117,7 @@ function clampFollowInterval(value) {
 let followIntervalMs = clampFollowInterval(process.env.WHALE_FOLLOW_INTERVAL_MS || FOLLOW_INTERVAL_DEFAULT)
 
 // 桌宠模式（页面经 whale:pet-mode 设置）：挂件一直浮在所有窗口最上层，
-// ZCode 失焦、被别的应用盖住时**不隐身**（普通模式会隐身，见 applyZCodeBounds）。
+// ZCode 失焦、被别的应用盖住时**不隐身**（普通模式会隐身，见 applyHostBounds）。
 // 另外周期性重申置顶层级——别的应用（任务管理器、部分安装器/游戏）也会把自己
 // 设成 topmost 抢到前面，重申一次就能拉回来；频率 3s，开销可忽略。
 const PET_TOPMOST_MS = 3000
@@ -137,7 +148,7 @@ function setPetMode(value) {
       const b = win.getBounds()
       applyFrame({ x: 0, y: 0, width: b.width, height: b.height, pet: 1 })
     } else if (lastFollowerMsg) {
-      applyZCodeBounds(lastFollowerMsg)
+      applyHostBounds(lastFollowerMsg)
     }
   }
   log('pet-mode', petMode ? 'on' : 'off')
@@ -181,7 +192,7 @@ function createWindow() {
     focusable: process.platform !== 'win32',
     show: false,
     alwaysOnTop: true,
-    title: 'ZCode狐娘小挂件',
+    title: 'WorkBuddy狐娘小挂件',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -321,10 +332,10 @@ function startFollower() {
       // 记下最后一条跟随消息：启动加载门控就绪后要靠它补一次显示
       lastFollowerMsg = msg
       // 身份先于判定处理：换了 ZCode 进程就把门控归零，紧随其后的这次
-      // applyZCodeBounds 才会去做「这一次启动」的判定（顺序不能反）
-      noteZCodeIdentity(msg)
-      noteZcodeTheme(msg)
-      applyZCodeBounds(msg)
+      // applyHostBounds 才会去做「这一次启动」的判定（顺序不能反）
+      noteHostIdentity(msg)
+      noteHostTheme(msg)
+      applyHostBounds(msg)
     }
   })
   child.stderr.on('data', (chunk) => log('follower-stderr', chunk.toString('utf8').slice(0, 200)))
@@ -371,110 +382,84 @@ function followerCommand(cmd) {
 // 画到偏离窗口的地方（实测页面 (0,0) 的方块跑到窗口外的屏幕左上角）。
 let lastViewport = null
 
-// ---------- ZCode 启动就绪门控 ----------
-// ZCode 启动时主窗口先显示加载动画、约 6 秒后主界面才就绪（实测 3.14.4：
-// 创建主窗口 10:00:26.9 → database-startup ready 10:00:32.7 → listTaskList OK
-// 10:00:33.3）。浮层只跟随窗口矩形，所以加载动画期间就把鲸鱼画了出来。用客户端
-// 日志里的启动标记判定：最近一次启动有 boot 标记但还没有 ready 标记 = 加载中，
-// 此时不显示（沿用透明度隐身），就绪后自动补一次显示。
+// ---------- 「宿主启动就绪」门控：**已移除** ----------
 //
-// 判定必须认「这一次启动」：日志是当天累积的，上一次运行的标记还在里面，浮层
-// 跟随脚本报上来的目标窗口 pid（+ 进程启动时间）就是归属依据——身份一变，
-// 门控立刻归零重判（2026-10-01 实测：不归零时重开 ZCode，鲸鱼在加载动画里
-// 照样出现，因为上一次的「启动→就绪」序列被判成了本次已就绪）。
-// 兜底：没有 boot 标记（老版本/日志缺失）一律放行；锚点时间超过 30 秒仍没有
-// ready 标记也放行——标记改名绝不能变成"鲸鱼永远不出现"。
-const UI_READY_TIMEOUT_MS = 30000
-const UI_READY_POLL_MS = 600
-// 初值 false：第一条跟随消息就去做一次判定（读取失败/无标记一律放行，见
-// refreshUiReady），否则初值 true 会把首次检查整个跳过、加载动画期间照样显示
-let uiReady = false
-let uiReadyPoll = null
+// ZCode 侧的形态：宿主启动时主窗口先放加载动画、约 6 秒后主界面才就绪，浮层只
+// 跟随窗口矩形，于是鲸鱼在加载动画期间就冒了出来。ZCode 版用「解析客户端日志里
+// 的启动标记 + 用 pid 归属到本次启动」做门控（原 desktop/ui-ready.cjs）。
+//
+// WorkBuddy 分支**刻意整块去掉**（MIGRATION-PLAN-WORKBUDDY §Phase 3.1 的决策）：
+//   WorkBuddy 的启动标记与日志格式不同、未实测到可用锚点，而门控的失效方向很差——
+//   标记改名/日志缺失会变成「鲸鱼永远不出现」，比「加载动画期早出现一会儿」严重
+//   得多。宁可在加载期早出现，也不冒永不出现的风险。加载期浮层只是跟着窗口矩形，
+//   不会吃点击（默认鼠标穿透），所以代价很小。
+//
+// 保留的东西：进程身份跟踪（换宿主进程 = 立刻交还鼠标并隐身），这条与门控无关，
+// 解决的是「更新程序无法关闭宿主」那个形态（ZCode 侧 issue #2）。
 let lastFollowerMsg = null
-// 当前跟随的 ZCode 进程身份（跟随脚本上报）
-let zcodePid = 0
-let zcodePidStart = 0
+// 当前跟随的宿主进程身份（跟随脚本上报）
+let hostPid = 0
+let hostPidStart = 0
 
-// 跟随消息里的进程身份变了 = 换了一次 ZCode 运行（重启/退出重开/跟随目标换窗口）。
-// 门控必须回到「未就绪」，否则上一次运行留下的 uiReady=true 会把整个加载期放行。
-function noteZCodeIdentity(msg) {
+// 跟随消息里的进程身份变了 = 换了一次宿主运行（重启/退出重开/跟随目标换窗口）。
+function noteHostIdentity(msg) {
   const pid = Number(msg && msg.pid) || 0
   if (!pid) return
   const start = Number(msg && msg.pidStart) || 0
-  if (pid === zcodePid && (!start || start === zcodePidStart)) return
-  const hadPrev = zcodePid > 0 // 首次识别不算「换了进程」（否则白白多一次隐身与空窗计时）
-  log('zcode-identity', 'pid=' + pid + ' start=' + (start || 0) + ' prev=' + zcodePid + '/' + (zcodePidStart || 0))
-  zcodePid = pid
-  zcodePidStart = start
-  uiReady = false
-  // 换了宿主进程（ZCode 重启 / 更新）：立刻交还鼠标并隐身。留着接管态会让
-  // 透明置顶窗口继续盖在新起来的宿主（或其安装程序）上吃点击——issue #2
-  // 的「更新程序无法关闭 ZCode」正是这个形态。
+  if (pid === hostPid && (!start || start === hostPidStart)) return
+  const hadPrev = hostPid > 0 // 首次识别不算「换了进程」（否则白白多一次隐身与空窗计时）
+  log('host-identity', 'pid=' + pid + ' start=' + (start || 0) + ' prev=' + hostPid + '/' + (hostPidStart || 0))
+  hostPid = pid
+  hostPidStart = start
+  // 换了宿主进程（WorkBuddy 重启 / 更新）：立刻交还鼠标并隐身。留着接管态会让
+  // 透明置顶窗口继续盖在新起来的宿主（或其安装程序）上吃点击——ZCode 侧
+  // issue #2 的「更新程序无法关闭宿主」正是这个形态。
   if (!hadPrev) return
   try {
     if (interactive) applyInteractive(false, true)
   } catch (err) {}
   try {
-    if (win && !win.isDestroyed()) hideOverlay('zcode-identity-changed')
+    if (win && !win.isDestroyed()) hideOverlay('host-identity-changed')
   } catch (err) {}
 }
 
-// ---------- ZCode 当前主题的观测 ----------
-// 跟随脚本顺手读目标窗口的 DWM 沉浸式暗色标志（ZCode 壳层按自己的主题设置
-// nativeTheme，见其 app 包），这就是「ZCode 目前用的什么主题」。落盘给挂件
-// 服务的 /whale/zcode-theme.json 用（lib/zcode-theme.mjs 合并：观测 > 配置 > 系统）。
-const ZCODE_THEME_OBS_FILE = path.join(os.homedir(), '.zcode', 'whale', 'zcode-theme-observed.json')
-let zcodeThemeObserved = -1
-let zcodeThemeObsWrittenAt = 0
+// ---------- 宿主当前主题的观测 ----------
+// 跟随脚本顺手读目标窗口的 DWM 沉浸式暗色标志（WorkBuddy 桌面端同为 Electron，
+// 壳层按自己的主题设置 nativeTheme），这就是「WorkBuddy 目前用的什么主题」。
+// 落盘给挂件服务的 /whale/host-theme.json 用（lib/host-theme.mjs 合并：
+// 观测 > preferences.json > 系统）。
+const HOST_THEME_OBS_FILE = path.join(DATA_DIR, 'host-theme-observed.json')
+let hostThemeObserved = -1
+let hostThemeObsWrittenAt = 0
 
-function writeZcodeThemeObserved(force) {
-  const dark = zcodeThemeObserved
+function writeHostThemeObserved(force) {
+  const dark = hostThemeObserved
   if (dark !== 0 && dark !== 1) return
   const now = Date.now()
   // 观测没变时按 30s 节流写盘（只为保鲜时间戳），变了立刻写
-  if (!force && now - zcodeThemeObsWrittenAt < 30000) return
-  zcodeThemeObsWrittenAt = now
+  if (!force && now - hostThemeObsWrittenAt < 30000) return
+  hostThemeObsWrittenAt = now
   try {
-    fs.mkdirSync(path.dirname(ZCODE_THEME_OBS_FILE), { recursive: true })
-    fs.writeFileSync(ZCODE_THEME_OBS_FILE, JSON.stringify({ dark, at: now, source: 'dwm' }))
+    fs.mkdirSync(path.dirname(HOST_THEME_OBS_FILE), { recursive: true })
+    fs.writeFileSync(HOST_THEME_OBS_FILE, JSON.stringify({ dark, at: now, source: 'dwm' }))
   } catch (err) {}
 }
 
-function noteZcodeTheme(msg) {
+function noteHostTheme(msg) {
   const dark = Number(msg && msg.dark)
   if (dark !== 0 && dark !== 1) return
-  const changed = dark !== zcodeThemeObserved
-  zcodeThemeObserved = dark
-  writeZcodeThemeObserved(changed)
-  if (changed) log('zcode-theme-observed', String(dark))
+  const changed = dark !== hostThemeObserved
+  hostThemeObserved = dark
+  writeHostThemeObserved(changed)
+  if (changed) log('host-theme-observed', String(dark))
 }
 
 // 观测文件保鲜：跟随消息只在状态变化时到来，长时间不变也要刷时间戳，免得读取端
-// 把仍然有效的观测当过期（TTL 见 lib/zcode-theme.mjs）。每 60s 内部还有 30s 节流。
-setInterval(() => writeZcodeThemeObserved(false), 60000)
-
-function refreshUiReady() {
-  try {
-    const tail = readNewestLogTail(262144)
-    if (!tail) {
-      uiReady = true
-    } else {
-      const r = evaluateBootState(tail.text, { pid: zcodePid, processStartAt: zcodePidStart })
-      if (r.state === 'loading' && r.anchorAt && Date.now() - r.anchorAt > UI_READY_TIMEOUT_MS) {
-        uiReady = true // 标记缺失/改名：超时放行
-      } else {
-        uiReady = r.state !== 'loading'
-      }
-      log('ui-gate', r.state + ' reason=' + r.reason + ' pid=' + (zcodePid || 0) + ' anchor=' + (r.anchorAt || 0))
-    }
-  } catch (err) {
-    uiReady = true
-  }
-  return uiReady
-}
+// 把仍然有效的观测当过期（TTL 见 lib/host-theme.mjs）。每 60s 内部还有 30s 节流。
+setInterval(() => writeHostThemeObserved(false), 60000)
 
 // 空窗看门狗：宿主窗口消失超过 MISSING_QUIT_MS 就一起退出，别赖在桌面上。
-// 只统计「窗口不存在」这一段（window-missing / 宿主换了进程），被盖住与加载中都不算。
+// 只统计「窗口不存在」这一段（window-missing / 宿主换了进程），被盖住不算。
 const MISSING_QUIT_MS = 30000
 let missingSince = 0
 function hideOverlay(reason) {
@@ -484,11 +469,11 @@ function hideOverlay(reason) {
     win.setIgnoreMouseEvents(true) // 无 forward：隐身期间页面不许再驱动接管
     win.setOpacity(0)
   }
-  // 宿主窗口「不存在了」（不是被盖住、也不是在加载）超过一段时间就退出：
-  // 更新 ZCode 时旧进程退、新进程还没起来，会出现一段「目标进程还在、窗口没了」
-  // 的空窗；此时浮层是一块不该存在的透明置顶窗口，盖在安装程序上会吃点击
-  //（issue #2「无法关闭 ZCode」）。被盖住 / 加载中都不算（那是正常状态）。
-  if (reason === 'window-missing' || reason === 'zcode-identity-changed') {
+  // 宿主窗口「不存在了」（不是被盖住）超过一段时间就退出：更新宿主时旧进程退、
+  // 新进程还没起来，会出现一段「目标进程还在、窗口没了」的空窗；此时浮层是一块
+  // 不该存在的透明置顶窗口，盖在安装程序上会吃点击（ZCode 侧 issue #2
+  // 「无法关闭宿主」正是这个形态）。被盖住不算（那是正常状态）。
+  if (reason === 'window-missing' || reason === 'host-identity-changed') {
     if (!missingSince) missingSince = Date.now()
   }
   log('hidden', reason)
@@ -504,24 +489,10 @@ setInterval(() => {
   app.quit()
 }, 10000)
 
-// 加载期挂一个轻量轮询：就绪后立刻补一次显示（跟随脚本只在状态变化时发消息，
-// 加载期间不会有新的 show 消息到来）
-function ensureUiReadyPoll() {
-  if (uiReadyPoll) return
-  uiReadyPoll = setInterval(() => {
-    if (refreshUiReady()) {
-      clearInterval(uiReadyPoll)
-      uiReadyPoll = null
-      log('ui-ready')
-      if (lastFollowerMsg) applyZCodeBounds(lastFollowerMsg)
-    }
-  }, UI_READY_POLL_MS)
-}
-
-function applyZCodeBounds(msg) {
+function applyHostBounds(msg) {
   if (!win || win.isDestroyed()) return
   if (msg.gone) {
-    log('zcode-gone')
+    log('host-gone')
     app.quit()
     return
   }
@@ -536,18 +507,14 @@ function applyZCodeBounds(msg) {
     return
   }
 
-  // show=false：ZCode 最小化、被别的应用盖住，或窗口暂时找不到。
+  // show=false：宿主最小化、被别的应用盖住，或窗口暂时找不到。
   // 透明度隐身（而非 win.hide()），原因见 overlayShown 处的注释。
   if (msg.hide || msg.show === false) {
-    hideOverlay(msg.hide ? 'window-missing' : 'zcode-not-foreground')
+    hideOverlay(msg.hide ? 'window-missing' : 'host-not-foreground')
     return
   }
-  // ZCode 还在启动加载中：先隐身等着，就绪后由轮询补显示
-  if (!uiReady && !refreshUiReady()) {
-    hideOverlay('zcode-loading')
-    ensureUiReadyPoll()
-    return
-  }
+  // （WorkBuddy 分支没有「宿主启动就绪」门控，原因见文件上方那段说明——宁可
+  //  在宿主加载动画期间早出现一会儿，也不要因为标记对不上而永不出现。）
 
   let rect = { x: msg.x, y: msg.y, width: msg.w, height: msg.h }
   // 哨兵矩形兜底：最小化窗口的矩形是假的（Windows 报 -32000 一类坐标 + 159x27
@@ -783,10 +750,10 @@ function recreateWindow(reason) {
   interactive = false
   keyboardFocus = false
   overlayShown = false
-  // 启动门控一并归零：重建后的窗口要走「先判定再显示」的原路，别继承旧结论
-  uiReady = false
-  zcodePid = 0
-  zcodePidStart = 0
+  // 跟随目标身份一并归零：重建后的窗口要重新识别宿主进程，
+  // 别把旧身份的结论带过来（会误判「换了进程」而多隐身一次）
+  hostPid = 0
+  hostPidStart = 0
   createWindow()
   recreating = false
 }
@@ -807,9 +774,9 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   app.isQuitting = true
   // 主题观测是「浮层活着时的现值」：退出就删掉，免得下次以旧充新
-  // （读取端另有 24h TTL 兜底，见 lib/zcode-theme.mjs）
+  // （读取端另有 24h TTL 兜底，见 lib/host-theme.mjs）
   try {
-    fs.rmSync(ZCODE_THEME_OBS_FILE, { force: true })
+    fs.rmSync(HOST_THEME_OBS_FILE, { force: true })
   } catch (err) {}
   if (follower) {
     try {

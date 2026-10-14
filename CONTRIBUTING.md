@@ -1,5 +1,8 @@
 # 提交与 PR 规范
 
+> **本仓库是同仓双分支**：`main` = ZCode 产品线，`workbuddy` = WorkBuddy 产品线。
+> 本文的通用规范两边都适用；**分支专属约定**见文末「双分支协作」一节。
+
 本仓库自 `435efb5`（2026-09-29，QA 审查修复）起采用 [Conventional Commits 1.0.0](https://www.conventionalcommits.org/zh-hans/)；其前的 14 个提交为过渡格式（无类型前缀），按「不改写已推送历史」的原则保留原样，不追溯重写。
 
 ## Commit 格式
@@ -19,7 +22,7 @@
 
 ### scope
 
-- 取改动的**主体模块名**，小写：`pricing` `widget` `server` `overlay` `desktop` `balance` `usage-records` `plan-balance` `source` `vendors` `discover` `theme` `bubble` `watcher` `release`…
+- 取改动的**主体模块名**，小写：`pricing` `widget` `server` `overlay` `desktop` `balance` `usage-records` `plan-balance` `source` `vendors` `discover` `theme` `bubble` `watcher` `release`…；WorkBuddy 分支另有 `port`（移植）与 `host`（宿主适配）。
 - 一个提交跨多个模块时：选主体模块，其余在 body 列出；或拆成多个提交。**不用** `+` 连接的复合 scope（如 `billing+security`），**不用版本号当 scope**（如 `fix(v1.4.2)`）。
 - release 提交固定用 `chore(release)`。
 
@@ -41,7 +44,8 @@
 ### 版本号（release 纪律）
 
 - 版本变更必须独立成 `chore(release): vX.Y.Z`，body 列变更清单。**禁止把版本号变更悄悄夹带进 feat/fix**（v1.6.0–v1.7.2 曾四次这样夹带，本条即为教训成文）。
-- 版本号单一来源：`.zcode-plugin/plugin.json`（`lib/paths.mjs` 的 `pluginVersion()` 供 server 的 health 与 MCP 动态读取——审查 P2-2 之前 server.mjs 硬编码第三份，已移除）。release commit 仍需同步改 `marketplace.json` 的版本；selftest 有「health = 清单 = marketplace」一致性断言兜底。`desktop/package.json` 是浮层入口包，版本独立，不在此列。
+- 版本号单一来源：`.codebuddy-plugin/plugin.json`（`lib/paths.mjs` 的 `pluginVersion()` 供 server 的 health 与 MCP 动态读取）。release commit 仍需同步改 `.codebuddy-plugin/marketplace.json` 的版本；selftest 有「health = 清单 = marketplace」一致性断言兜底。`desktop/package.json` 是浮层入口包，版本独立，不在此列。
+- （ZCode 线 `main` 上的对应文件是 `.zcode-plugin/plugin.json` + 根 `marketplace.json`，两分支各自的清单互不混用。）
 
 ## 提交纪律
 
@@ -65,15 +69,69 @@ README / SKILL / commands 的标点与空格漂移是反复出现的问题，这
 
   | 用法 | 不写 |
   | --- | --- |
-  | ZCode狐娘小挂件（产品名；标题/描述/窗口名统一用它；曾用名 Widget of ZCode） | ZCode 版 DeepSeek 余额大肥鱼挂件 / 大肥鱼挂件（指代产品名时） |
-  | GLM Plan（v1.7.8 起；template id 仍是 `zcode-plan`） | ZCode Plan |
-  | 对账口径（v1.7.0 起；值仍是 `ledger` / `token`） | 用量模式 / 用量统计模式 |
+  | WorkBuddy狐娘小挂件（`workbuddy` 分支的产品名；标题/描述/窗口名统一用它） | ZCode狐娘小挂件（那是 `main` 分支的产品名） |
+  | ZCode狐娘小挂件（`main` 分支的产品名） | WorkBuddy狐娘小挂件（本分支名，别混用） |
+  | 订阅积分 · 今日积分 · 本轮 credit（WorkBuddy 主口径） | 余额（本分支里那只是可选厂商卡） |
+  | 上下文余量 | 上下文占用率 / context 使用率 |
+  | 宿主适配层（`lib/host.mjs`） | 宿主差异、平台适配代码 |
+  | 对账口径（值仍是 `ledger` / `token`） | 用量模式 / 用量统计模式 |
   | CommandCode 三重额度 | CommandCode 限额 / 周限额套餐 |
-  | 本机库口径 · 账号口径 | 本机数据 / 云端口径 |
+  | 本机口径 · 账号口径 | 本机数据 / 云端口径 |
   | 记账二级页（=角色名记账=） | 记账面板（那是用量记录面板） |
+
+  > ZCode 线的 `main` 分支另有 `GLM Plan` 与「对账口径（本机库/账号）」等术语；本分支已砍掉 GLM Plan，
+  > 且主口径换成积分，两边的术语表**刻意不完全对齐**——别为了「统一」把本分支的叙事改回余额口径。
 
 ## PR 规范
 
 - 一个 PR 一个主题；描述包含：摘要、背景动机、改动分组（按模块）、兼容性与迁移、测试结果（真实运行的数字）、安全影响、已知限制。
 - 正文措辞与事实一致：测试数字用最近一次真实运行的输出；对历史的描述不夸大（如提交格式、版本轨迹）。
 - 不引入 lint 配置（项目约定）；风格靠本文件与代码评审维持。
+
+## 双分支协作
+
+`main`（ZCode）与 `workbuddy`（WorkBuddy）是**同仓双长寿命分支**：共享内核占全仓七成以上，
+宿主差异集中在 `lib/host.mjs`（WorkBuddy 侧独有）。规矩如下。
+
+### 合并方向与频率
+
+- **`main` 是共享内核的上游**：`widget.js` / `server.mjs` / `pricing.mjs` / `vendors.mjs` /
+  `balance.mjs` / `desktop/` / `tools/` 的修复一律**先落 `main`**，再 `git merge main` 进 `workbuddy`。
+- **`workbuddy` 独有变更**（数据源、清单、钩子、宿主适配层）**只存在于 `workbuddy`**，
+  **禁止反向 merge**（防止 ZCode 清单/钩子被 WorkBuddy 格式污染）。
+- 频率：ZCode 侧每次发版后必同步一次；两次发版之间共享代码有 fix 也单独同步。
+  **长期不同步是最大风险源**——超过 3 个版本未 merge 时，停下来先做同步再继续开发。
+- merge 纪律：每次 `merge main` 后**必须全量跑三套测试**再推送；冲突解决不了时
+  以 `main` 版本为准 + 在 `workbuddy` 侧重新应用适配，**不要手工「揉」出第三种写法**。
+
+### 分支规则
+
+- `workbuddy` **禁止 rebase / force push**，只允许 merge。
+- **不要**把同一个工作目录同时注册给两个宿主当市场——任一端「重新抓取」都会覆盖另一端的认知。
+  WorkBuddy 侧用单独克隆的开发副本（`git clone -b workbuddy <repo> ~/.workbuddy/dev/fox-widget`）。
+
+### 版本号与发版
+
+| | `main`（ZCode 线） | `workbuddy`（WorkBuddy 线） |
+|---|---|---|
+| 版本序列 | `1.x.y` 延续 | 独立序列 `2.x.y` |
+| tag | `v*` | **`wb-v*`** |
+| 清单 | `.zcode-plugin/plugin.json` + 根 `marketplace.json` | `.codebuddy-plugin/plugin.json` + `.codebuddy-plugin/marketplace.json` |
+| 自更新 | 保留镜像链 | **默认关闭**（宿主插件管理与原地覆盖冲突；更新走 `git pull` + 客户端重抓） |
+| CHANGELOG | 单文件，分产品线两节（`## ZCode` / `## WorkBuddy`），共享修复两边都记 | 同左 |
+
+> 注意：GitHub 的 `releases/latest` 对两条产品线是**歧义**的（会返回整体最新，可能是 ZCode 线的 tag），
+> 所以 WorkBuddy 线的更新探测会列出 releases 后只挑 `wb-v*` 前缀里的最高版本。
+
+### 宿主升级监控
+
+WorkBuddy 客户端大版本升级可能改钩子事件表 / db schema / 沙箱策略，
+这会让 `docs/porting/phase-*.md` 里的【实测】结论过期。**每次客户端大版本升级后，
+重跑 `docs/porting/phase-0.md` 的四项验证 + 三套测试**，结论失效的更新那份文档
+（按「时效声明」改写，不要叠加）。
+
+### 谁对什么负责
+
+- 共享内核 bug → 在 ZCode 侧（`main`）修。
+- WorkBuddy 数据源 / 宿主适配 → 在 WorkBuddy 侧（`workbuddy`）修。
+- 两侧都改不动的（如 Electron 版本级行为）→ 写调查报告升级给用户决策。

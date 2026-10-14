@@ -1,12 +1,12 @@
-# Keeps the whale overlay glued to the ZCode main window.
+# Keeps the whale overlay glued to the WorkBuddy main window.
 #
 # Started as a resident child process by desktop/main.cjs, with the overlay's own
 # HWND as argument. It reports two things the main process then applies:
-#   1. The ZCode window rectangle (on every change) -> the overlay positions the
-#      whale inside that rect, so the whale follows ZCode when it is moved or
+#   1. The WorkBuddy window rectangle (on every change) -> the overlay positions the
+#      whale inside that rect, so the whale follows WorkBuddy when it is moved or
 #      resized.
-#   2. Whether the overlay should be visible at all: hidden while ZCode is
-#      minimized and while ZCode is covered by another app. Clicks on the overlay
+#   2. Whether the overlay should be visible at all: hidden while WorkBuddy is
+#      minimized and while WorkBuddy is covered by another app. Clicks on the overlay
 #      itself do not count as "switched away".
 #
 # Why the polling loop is compiled C# instead of plain PowerShell:
@@ -15,29 +15,29 @@
 #   at 40ms just in interpreter overhead (object construction, function calls,
 #   string building). The same loop compiled costs a few microseconds per tick,
 #   which makes even a 16ms interval essentially free and keeps the follow feel
-#   tight. The expensive part - Process.GetProcessesByName to locate the ZCode
+#   tight. The expensive part - Process.GetProcessesByName to locate the WorkBuddy
 #   window and pid lists - stays on a separate time budget (-ProcessCacheMs).
 #
 # Output protocol (one JSON object per line):
 #   {"x":..,"y":..,"w":..,"h":..,"show":bool,"pid":N,"pidStart":MS,"dark":-1|0|1}
-#                                               ZCode rect (physical px), overlay
+#                                               WorkBuddy rect (physical px), overlay
 #                                               visibility, the identity of the
 #                                               process that owns that window (the
 #                                               main process uses it to notice a new
-#                                               ZCode launch and re-run its startup
+#                                               WorkBuddy launch and re-run its startup
 #                                               gate), and that window's DWM
 #                                               immersive-dark flag = which theme
-#                                               ZCode is currently using (dark=1,
+#                                               WorkBuddy is currently using (dark=1,
 #                                               light=0, -1 = attribute unavailable)
-#   {"hide":true}                               ZCode window not found (e.g. restarting)
-#   {"gone":true}                               ZCode exited; the overlay should quit
+#   {"hide":true}                               WorkBuddy window not found (e.g. restarting)
+#   {"gone":true}                               WorkBuddy exited; the overlay should quit
 #
 # NOTE: keep this file pure ASCII. Windows PowerShell 5.1 reads BOM-less .ps1
 # files using the system ANSI code page, so non-ASCII comments can be decoded
 # into bytes that break parsing.
 param(
   [Parameter(Mandatory = $true)][string]$OverlayHwnd,
-  # How often to re-read the ZCode window rectangle. Lower = snappier follow.
+  # How often to re-read the WorkBuddy window rectangle. Lower = snappier follow.
   [int]$IntervalMs = 40,
   # How often to refresh the expensive process/window-handle lookup.
   [int]$ProcessCacheMs = 3000,
@@ -46,7 +46,7 @@ param(
   # recognised. Pass 0 to fall back to matching every process named "electron".
   # The fallback is wrong in the other direction: any *other* Electron app in
   # front would then look like the overlay, keeping the whale visible while
-  # ZCode is covered (v1.3.0 review S4), so a real pid is always preferable.
+  # WorkBuddy is covered (v1.3.0 review S4), so a real pid is always preferable.
   [int]$OverlayPid = 0
 )
 
@@ -58,7 +58,7 @@ if ($IntervalMs -lt 16) { $IntervalMs = 16 }
 if ($IntervalMs -gt 2000) { $IntervalMs = 2000 }
 if ($ProcessCacheMs -lt 500) { $ProcessCacheMs = 500 }
 
-$targetProcess = if ($env:WHALE_TARGET_PROCESS) { $env:WHALE_TARGET_PROCESS } else { 'ZCode' }
+$targetProcess = if ($env:WHALE_TARGET_PROCESS) { $env:WHALE_TARGET_PROCESS } else { 'WorkBuddy' }
 
 $source = @'
 using System;
@@ -99,7 +99,7 @@ public static class WhaleFollow
 
     // Identity of the process that owns the followed window (pid + creation
     // time). Reported to the main process with every state message so it can
-    // tell a NEW ZCode launch apart from the one it is already following: the
+    // tell a NEW WorkBuddy launch apart from the one it is already following: the
     // startup gate keys on this to hide the overlay during the loading splash
     // (a latched "ready" from the previous launch used to let the whale show
     // up in the middle of the splash screen, measured 2026-10-01).
@@ -125,10 +125,10 @@ public static class WhaleFollow
 
     // DWMWA_USE_IMMERSIVE_DARK_MODE (20): the window's dark-mode frame flag.
     // Windows apps set it from their native theme - Electron does it from
-    // nativeTheme, and ZCode drives nativeTheme from its own theme setting
+    // nativeTheme, and WorkBuddy drives nativeTheme from its own theme setting
     // (verified in its app bundle: nativeTheme.themeSource = user's choice).
-    // Reading it tells us which theme ZCode is ACTUALLY using right now; the OS
-    // theme can easily be the opposite (measured: OS light + ZCode dark).
+    // Reading it tells us which theme WorkBuddy is ACTUALLY using right now; the OS
+    // theme can easily be the opposite (measured: OS light + WorkBuddy dark).
     // Returns 1 (dark), 0 (light), or -1 when the attribute is unavailable.
     static int QueryDarkMode(IntPtr hwnd)
     {
@@ -148,10 +148,10 @@ public static class WhaleFollow
     //     Used when a click that dismissed the popup UI was swallowed by the
     //     overlay (the window must take over the whole screen while a menu /
     //     editor is open so it can see the outside click, but the click then
-    //     never reaches ZCode). The main process switches back to
+    //     never reaches WorkBuddy). The main process switches back to
     //     click-through first and asks us to replay, so the user's single
-    //     click both dismisses the popup AND lands in ZCode.
-    //   handback      Give the OS foreground back to the ZCode window. Called
+    //     click both dismisses the popup AND lands in WorkBuddy.
+    //   handback      Give the OS foreground back to the WorkBuddy window. Called
     //     when the overlay releases keyboard focus while it is still the
     //     foreground window (blur() alone hands foreground to the shell).
     //     This process is a child of the overlay, which is the foreground
@@ -198,7 +198,7 @@ public static class WhaleFollow
             // the foreground (to the shell), and "child of the foreground
             // process" no longer holds. AttachThreadInput to whoever owns the
             // foreground now - that synchronizes input state and lets the call
-            // through regardless - and retry a few times until ZCode really
+            // through regardless - and retry a few times until WorkBuddy really
             // has it.
             for (int i = 0; i < 4; i++)
             {
@@ -242,12 +242,12 @@ public static class WhaleFollow
 
     // Largest visible top-level window among the target pids.
     //
-    // Process.MainWindowHandle is NOT trustworthy here: ZCode owns a small
+    // Process.MainWindowHandle is NOT trustworthy here: WorkBuddy owns a small
     // (375x84) always-alive window besides the real UI, and .NET happily returns
     // that one as "main" (measured 2026-10-01: the whale suddenly followed a
     // 251x56 viewport and rendered as a tiny widget near the top edge). Same
     // story during startup, when only the small loading window exists yet.
-    // Picking the largest visible window is what "the ZCode window" means.
+    // Picking the largest visible window is what "the WorkBuddy window" means.
     static IntPtr PickLargestWindow(HashSet<int> pids)
     {
         IntPtr best = IntPtr.Zero;
@@ -297,7 +297,7 @@ public static class WhaleFollow
         // Identity of the followed window's owner (see _targetPid above). Read
         // from the picked HWND, not from the process list, so it always belongs
         // to the window we are actually tracking. Keep the previous values when
-        // no window is found this round: a momentary gap while ZCode restarts
+        // no window is found this round: a momentary gap while WorkBuddy restarts
         // must not look like "the target disappeared".
         int ownerPid = 0;
         if (_targetHwnd != IntPtr.Zero)
@@ -348,7 +348,7 @@ public static class WhaleFollow
         // main process always treats our output as physical pixels and converts
         // it to DIP itself, so without opting in here the whale's viewport gets
         // scaled down a second time on scaled displays and it can never reach
-        // the bottom-right corner of the ZCode window.
+        // the bottom-right corner of the WorkBuddy window.
         try
         {
             // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2; on older Windows the
@@ -401,7 +401,7 @@ public static class WhaleFollow
                     Console.Out.Flush();
                 }
                 // "gone" must require the process itself to be absent, not just the
-                // window: right after ZCode starts, its main window can stay
+                // window: right after WorkBuddy starts, its main window can stay
                 // unfindable for a while (launcher hand-off / updater restarts the
                 // window), and quitting the overlay here leaves the launch page
                 // whale dead until the next hook fires (measured 2026-10-01:
@@ -430,9 +430,9 @@ public static class WhaleFollow
 
                 int w = r.Right - r.Left;
                 int h = r.Bottom - r.Top;
-                // ZCode theme (DWM immersive dark mode attribute): the follow
+                // WorkBuddy theme (DWM immersive dark mode attribute): the follow
                 // script is the only holder of the target HWND; read it here and
-                // let the main process persist it for the "follow ZCode" theme.
+                // let the main process persist it for the "follow WorkBuddy" theme.
                 int dark = QueryDarkMode(z);
                 if (!haveSig || r.Left != lastL || r.Top != lastT || w != lastW || h != lastH || show != lastShow || _targetPid != lastPid || dark != lastDark)
                 {
@@ -447,11 +447,11 @@ public static class WhaleFollow
                         "state show=" + (show ? "true" : "false") +
                         " minimized=" + (minimized ? "true" : "false") +
                         " fgPid=" + fgPid +
-                        " fgIsZCode=" + (fgIsTarget ? "true" : "false") +
+                        " fgIsWorkBuddy=" + (fgIsTarget ? "true" : "false") +
                         " fgIsOverlay=" + (fgIsOverlay ? "true" : "false") +
                         " pid=" + _targetPid + " pidStart=" + ((long)_targetPidStart));
 
-                    // pid / pidStart identify the followed ZCode process: the
+                    // pid / pidStart identify the followed WorkBuddy process: the
                     // main process resets its startup gate when they change (new
                     // launch = hide the overlay until the main window is ready).
                     // dark = DWM immersive-dark flag of that window (-1 = unknown).

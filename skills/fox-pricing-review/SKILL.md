@@ -1,9 +1,9 @@
 ---
 name: fox-pricing-review
-description: 手动复核并更新 ZCode狐娘小挂件（zcode-fox-widget）的多厂商价目（lib/pricing.mjs）。当用户说「复核价目」「更新价目」「价目快照过期了」「核对某家厂商的价格」「DeepSeek/GLM/OpenAI/Claude/Qwen/MiniMax/MiMo/Kimi 调价了」时使用。本项目没有自动价目更新机制，所有价目更新都由用户发起、按本技能流程人工复核后写入仓库。
+description: 手动复核并更新 WorkBuddy狐娘小挂件（fox-widget）的多厂商价目（lib/pricing.mjs）。当用户说「复核价目」「更新价目」「价目快照过期了」「核对某家厂商的价格」「DeepSeek/GLM/OpenAI/Claude/Qwen/MiniMax/MiMo/Kimi 调价了」时使用。本项目没有自动价目更新机制，所有价目更新都由用户发起、按本技能流程人工复核后写入仓库。注意：WorkBuddy 的主口径是订阅积分（宿主算好的 credit，与价目无关），这里的价目只用于「等价金额」参考值与可选的厂商余额卡。
 ---
 
-# ZCode狐娘小挂件 价目复核与更新
+# WorkBuddy狐娘小挂件 价目复核与更新
 
 价目全部在 `lib/pricing.mjs`，文件头注释记录每家的**口径与来源及快照日期**。
 复核 = 用权威来源核对现值 → 把有出入的条目改掉 → 同步断言与文档 → 走部署管道。
@@ -20,7 +20,7 @@ description: 手动复核并更新 ZCode狐娘小挂件（zcode-fox-widget）的
   - `cw`：缓存写价（省略 = 与 miss 同价；Kimi 按 TTL 分两档）。
   - `name`：档位名（展示用）。
 - 模型匹配：`matchTableEntry` 精确名优先、最长前缀兜底（覆盖带日期后缀的模型 id）。
-- **红线**：`splitInputTokens()` 的「input 含缓存」口径**绝不能动**——ZCode 的 input_tokens 是含缓存总输入，拆错会让金额虚高约 25 倍。
+- **红线**：`splitInputTokens()` 的「input 含缓存」口径**绝不能动**——transcript 的 `prompt_tokens` 是含缓存总输入，拆错会让等价金额虚高约 25 倍（WorkBuddy 侧的主口径积分不受影响，但等价金额会离谱）。
 
 ## 二、逐厂商复核清单
 
@@ -48,15 +48,15 @@ description: 手动复核并更新 ZCode狐娘小挂件（zcode-fox-widget）的
 1. **改 `lib/pricing.mjs`**：只改对应厂商的表；同步文件头该家的快照日期与来源注释；估算值保留行内注释惯例（如「缓存写未公布 → 按通行折扣 125% 输入估算」「cw 未公布记 0」）。
 2. **改 `tools/selftest.mjs` 钉死断言**（数值全部写死，改价必改断言）：计价断言集中在「计价口径」段（GLM 系、DeepSeek 峰谷、GPT/Claude/Qwen/MiniMax/Kimi/MiMo 各一条）；另有若干**间接依赖价目的断言**（余额/今日已用、last-turn 金额、USD 折算）——按改动的厂商全数核对，跑 selftest 看哪条红改哪条。
 3. **CHANGELOG.md**：新增 `## vX.Y.Z 调价：…` 小节，写明哪几家、什么口径变了、快照日期。
-4. **版本号**：`lib/server.mjs` 的 `VERSION`、`.zcode-plugin/plugin.json`、`marketplace.json` 三处同步 +1。
+4. **版本号**：`.codebuddy-plugin/plugin.json`、`.codebuddy-plugin/marketplace.json` 两处同步 +1（WorkBuddy 分支的版本号单一来源是 `.codebuddy-plugin/plugin.json`，`pluginVersion()` 直接读它；不再有 `server.mjs` 里硬编码的 `VERSION`）。
 5. **提交与部署**（仓库工作目录执行）：
    ```bash
-   git add lib/pricing.mjs tools/selftest.mjs CHANGELOG.md .zcode-plugin/plugin.json marketplace.json lib/server.mjs
+   git add lib/pricing.mjs tools/selftest.mjs CHANGELOG.md .codebuddy-plugin/plugin.json .codebuddy-plugin/marketplace.json
    git commit -m "pricing(vX.Y.Z): <厂商> 价目复核更新（快照 YYYY-MM-DD）"
-   git --git-dir="<本仓库根目录>/.git" archive HEAD | tar -x -C "<本机插件缓存目录>"
+   # WorkBuddy 侧不走原地覆盖 cache：更新走 git pull + 客户端重抓市场（见 README「更新」）
    node lib/cli.mjs window restart && node lib/cli.mjs stop && node lib/cli.mjs start
    ```
-6. **验证**：`node tools/selftest.mjs` 全绿 → `curl -s http://127.0.0.1:39321/whale/health` 版本正确 → `node lib/cli.mjs turn` 看上一轮逐档明细与改动一致 → 需要看气泡效果用 `node tools/demo.mjs`（假数据，不碰真实账单）。
+6. **验证**：`node tools/selftest.mjs` 全绿 → `curl -s http://127.0.0.1:39321/whale/health` 版本正确 → `node lib/cli.mjs turn` 看上一轮逐档明细与改动一致（注意 `turn` 主数字是积分，等价金额在第二行）→ 需要看气泡效果用 `node tools/demo.mjs`（假数据，不碰真实账单）。
 
 ## 四、只改展示、不改单价的情况
 

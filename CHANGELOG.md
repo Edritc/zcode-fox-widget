@@ -1,6 +1,40 @@
 # 更新日志（Changelog）
 
-本文件记录 ZCode狐娘小挂件（zcode-fox-widget）自 fork 以来（v1.1.0 起）每个版本的变更；各版本在仓库中均有对应的 tag 与 GitHub Release。相邻的小修复版本按合并策略并入组内最后一个版本号（v1.8.7–v1.8.10 并入 v1.8.9；v1.3.1–v1.3.2 并入 v1.3.3、v1.4.1–v1.4.2 并入 v1.4.3、v1.5.1–v1.5.3 并入 v1.5.4、v1.7.1–v1.7.2 并入 v1.7.3、v1.7.5–v1.7.6 并入 v1.7.7、v1.7.8–v1.7.10 并入 v1.7.11、v1.8.3 并入 v1.8.4、v1.9.0-preview 并入 v1.9.0），中间版本号不再单独发版。
+本文件分**两条产品线**两节记录变更（同仓双分支：`main` = ZCode 线，`workbuddy` = WorkBuddy 线）。
+共享内核的修复会在两边都记一条。
+
+- [`## WorkBuddy`](#workbuddy) —— `workbuddy` 分支，产品名 **WorkBuddy狐娘小挂件**（`fox-widget`），tag 前缀 `wb-v`
+- [`## ZCode`](#zcode) —— `main` 分支，产品名 **ZCode狐娘小挂件**（`zcode-fox-widget`），tag 前缀 `v`
+
+---
+
+## WorkBuddy
+
+### wb-v2.0.0 新增：移植到 WorkBuddy（积分口径 + 上下文余量）
+
+> 移植规划见 `MIGRATION-PLAN-WORKBUDDY.md`，分阶段实测与决策记录见 `docs/porting/`，
+> 宿主契约的实测结论见 `docs/porting/phase-0.md`，交接说明见 `HANDOFF-WORKBUDDY-PORT.md`。
+> 基线 = ZCode 线 v1.11.1；本分支版本号另起序列。
+
+- **宿主接入全部换新**：清单 `.zcode-plugin/plugin.json` → `.codebuddy-plugin/plugin.json` + `.codebuddy-plugin/marketplace.json`（`source: "./"`，已在宿主实现层验证合法）；MCP 由清单内联改 `.mcp.json`；钩子由 `type:"process"`+`args`+`timeoutMs` 改 `type:"command"`+bash 字符串+`timeout`（秒）；路径变量 `${ZCODE_PLUGIN_ROOT}` → `${CODEBUDDY_PLUGIN_ROOT}`；数据目录 → 宿主插件数据目录 `${CODEBUDDY_PLUGIN_DATA}`；插件名 `zcode-fox-widget` → `fox-widget`（MCP 工具全名随之变为 `mcp__plugin_fox-widget_whale__*`）。
+- **数据源整体替换（主口径改为订阅积分）**：每轮消耗与今日合计改读宿主 `workbuddy.db` 的 `session_usage`（`credit_json` 是宿主算好的积分）与会话 transcript 的 `providerData.rawUsage`；余额与 34 家厂商模板降级为**可选**附加卡（WorkBuddy 默认没有用户自带凭据——实测 `pluginConfigs` 为空、`models.json` 为 `[]`，这是预期而非故障）。
+- **新增「上下文余量」**：读 `session_usage.used/size`，气泡小字与每轮消耗气泡显示「上下文 xx%」（ZCode 侧没有的能力）。
+- **每日用量聚合改为扫 transcript**：`lib/usage-records.mjs` 重写（按 `conversationRequestId` 归轮、按日汇总宿主 credit；受 60 文件 / 2MB 尾部上限约束，`scannedTranscripts`/`totalTranscripts` 如实暴露范围）。
+- **主题跟随改读宿主**：`lib/zcode-theme.mjs` → `lib/host-theme.mjs`，第二层数据源换成 `~/.workbuddy/storage/user-*/global/preferences.json` 的 `theme`；路由 `/whale/zcode-theme.json` → `/whale/host-theme.json`；「跟随 ZCode」→「跟随 WorkBuddy」。
+- **凭据发现改扫宿主**：`lib/discover.mjs` 重写（环境变量表 / 宿主 `settings.json` 的 `env` 与 `pluginConfigs` / 插件数据目录的 `apiKey` 与 `vendorKeys`）；`provider_config.json` 与 `zcode-builtin.json` 模板继承路径删除。
+- **新增宿主适配层 `lib/host.mjs`**：数据目录、db、主题、进程名、浮层单例特征、环境变量名、事件表差异全部收在一个文件里，把 `git merge main` 的冲突面从「十几个文件散落硬编码」缩到「1 个文件」。
+- **浮层适配**：跟随目标换 `WorkBuddy`（`follow-window.ps1` 默认目标进程改名，文件仍保持纯 ASCII）；**移除「宿主启动就绪」门控**（WorkBuddy 的启动标记未实测到可用锚点，而门控失效方向是「鲸鱼永不出现」，比加载期早出现严重得多）——`desktop/ui-ready.cjs` 删除；浮层单例判定同时接受新旧插件名（两端同装不出现「双角色同屏」）。
+- **「等确认提醒」换事件源**：WorkBuddy **没有 `PermissionRequest` 事件**，改挂 `Notification`（已知会伴随所有宿主通知触发，故默认关闭，并把原始通知文本记入 `hook-state.json` 便于核实）。
+- **自更新默认关闭**：ZCode 式的「原地覆盖所有安装目录」会与宿主的插件管理打架（宿主用目录名 + `installed_plugins.json` 记版本），本分支改为显式设 `FOX_WIDGET_ENABLE_UPDATE_CHECK=1` 才启用；推荐更新方式 = `git pull` + 客户端重抓市场。发版 tag 前缀 `wb-v`，探测读 `workbuddy` 分支并只挑 `wb-v*` 的 release（避免命中 ZCode 线的 tag）。
+- **砍掉 GLM Plan 配额**：唯一数据源是 ZCode 客户端日志，宿主无对应物；`lib/plan-balance.mjs` 冻结（导出接口保留，恒返回 `not-supported-on-workbuddy`），`lib/vendors.mjs` 的 `zcode-plan` 模板删除，`/whale/plan.json` 保留但恒返回不支持。
+- **保留不动**：34 家厂商模板、记账账本与预警、CommandCode 三重额度（移出主显示留在厂商卡层）、角色与配色、按压泡泡、桌宠模式、出站白名单与本地服务加固。
+
+---
+
+## ZCode
+
+> 以下条目是 `main` 分支的历史记录。产品名 **ZCode狐娘小挂件**（`zcode-fox-widget`）。
+> 本文件自 fork 以来（v1.1.0 起）每个版本的变更都记在这里；各版本在仓库中均有对应的 tag 与 GitHub Release。相邻的小修复版本按合并策略并入组内最后一个版本号（v1.8.7–v1.8.10 并入 v1.8.9；v1.3.1–v1.3.2 并入 v1.3.3、v1.4.1–v1.4.2 并入 v1.4.3、v1.5.1–v1.5.3 并入 v1.5.4、v1.7.1–v1.7.2 并入 v1.7.3、v1.7.5–v1.7.6 并入 v1.7.7、v1.7.8–v1.7.10 并入 v1.7.11、v1.8.3 并入 v1.8.4、v1.9.0-preview 并入 v1.9.0），中间版本号不再单独发版。
 
 > 命名说明：v1.8.4 及更早的版本发布时，产品曾使用「ZCode 版 DeepSeek 余额小鲸鱼挂件」「Widget of ZCode」等名称；v1.8.5 起统一为 **ZCode狐娘小挂件**（zcode-fox-widget）。下文条目中的产品名一律按新名称书写，功能与修复的描述保持发布当时的原文。
 

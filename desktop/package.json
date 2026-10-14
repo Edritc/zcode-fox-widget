@@ -1,7 +1,7 @@
 {
-  "name": "zcode-fox-overlay",
-  "version": "1.0.0",
+  "name": "fox-widget-overlay",
+  "version": "2.0.0",
   "private": true,
-  "description": "Transparent always-on-top overlay window that hosts ZCode Fox Widget (zcode-fox-widget).",
+  "description": "Transparent always-on-top overlay window that hosts the WorkBuddy Fox Widget (fox-widget).",
   "main": "main.cjs"
 }
