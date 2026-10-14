@@ -154,6 +154,63 @@ function setPetMode(value) {
   log('pet-mode', petMode ? 'on' : 'off')
 }
 
+// ---------- 页面心跳（僵尸浮层自愈） ----------
+//
+// 【真机实测 2026-10-14，WorkBuddy 5.8.2】Electron 主进程活着、窗口也在
+// （`IsWindowVisible=1`、rect 正常、标题正确），但**渲染进程已经死了**时，窗口
+// 会变成一块空白透明层：桌面上什么都看不到。要命的是所有「它还活着吗」的判据
+// 全都通过 —— `overlay.json` 的 pid 活着、`kill(pid, 0)` 成功、看门狗与钩子的
+// 补活逻辑都认定浮层健康，于是这个僵尸态可以**无限期**留着，用户反复重启宿主
+// 也修不好（浮层不在宿主进程树里，不随宿主退出）。
+//
+// 那次是怎么触发的一并记下，因为它是可复现的：同一条产品线的两个副本同时用
+// 同一个 Electron user-data-dir（`%APPDATA%\fox-widget-overlay`），第二个实例
+// 起来抢 GPUCache 文件锁 → 两边 GPU 进程连环崩（exit_code=-1073741819）→ 正在
+// 用的那个浮层的渲染进程被打死，主进程留下。
+//
+// 这里用**主进程侧**的心跳兜住它：定时让页面吐一个值，超时或报错就重载页面。
+// 不依赖页面配合（页面已经死了，没法自证），也不依赖外部判活。
+const PAGE_BEAT_MS = 30000
+const PAGE_BEAT_TIMEOUT_MS = 5000
+let pageBeatTimer = null
+let pageBeatFails = 0
+let pageBeatOk = 0
+
+function startPageHeartbeat() {
+  if (pageBeatTimer) return
+  pageBeatTimer = setInterval(probePage, PAGE_BEAT_MS)
+  if (pageBeatTimer.unref) pageBeatTimer.unref()
+}
+
+async function probePage() {
+  if (!win || win.isDestroyed()) return
+  const wc = win.webContents
+  if (!wc || wc.isDestroyed()) return
+  if (wc.isLoading()) return // 正在加载/重载：这一拍放过
+  try {
+    const v = await Promise.race([
+      wc.executeJavaScript('1+1'),
+      new Promise((_res, rej) => setTimeout(() => rej(new Error('page-timeout')), PAGE_BEAT_TIMEOUT_MS)),
+    ])
+    if (Number(v) !== 2) throw new Error('page-beat-bad:' + String(v))
+    if (pageBeatFails) log('page-beat-recovered', String(pageBeatFails) + ' fail(s) before')
+    pageBeatFails = 0
+    pageBeatOk++
+  } catch (err) {
+    pageBeatFails++
+    log(
+      'page-beat-fail',
+      '(' + pageBeatFails + '/2) ' + String((err && err.message) || err) + ' ok=' + pageBeatOk
+    )
+    if (pageBeatFails < 2) return
+    pageBeatFails = 0
+    log('page-reload', '页面无响应，重载以恢复挂件')
+    try {
+      wc.reload()
+    } catch (e) {}
+  }
+}
+
 function createWindow() {
   // 先在主显示器工作区里把窗口建出来（尺寸马上会被 ZCode 窗口矩形覆盖），
   // 但不显示——等拿到 ZCode 窗口位置后再 show，避免鲸鱼先在别处闪一下。
@@ -229,11 +286,27 @@ function createWindow() {
   // 页面加载完成后补发一次视口，避免启动早期的 rect 消息丢失
   win.webContents.on('did-finish-load', () => {
     pageReady = true
+    startPageHeartbeat()
     if (!lastViewport) return
     try {
       win.webContents.send('whale:viewport', lastViewport)
     } catch (err) {}
   })
+
+  // 渲染进程直接崩掉（GPU 被打死、OOM、页面异常）时立刻重载。Electron 不一定会
+  // 把窗口收掉——它会留一个**空白窗口**，见下面心跳那段注释。
+  try {
+    win.webContents.on('render-process-gone', (_e, details) => {
+      log('render-gone', JSON.stringify(details || {}))
+      setTimeout(() => {
+        if (win && !win.isDestroyed()) {
+          try {
+            win.webContents.reload()
+          } catch (err) {}
+        }
+      }, 1000)
+    })
+  } catch (err) {}
 
   // 页面加载失败（多为挂件服务未启动）：稍后重试，避免留下空白窗口
   win.webContents.on('did-fail-load', () => {

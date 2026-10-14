@@ -265,7 +265,10 @@ try {
 
   // ① 每轮消耗气泡（WorkBuddy 主口径 = 订阅积分）：一轮 credit=12 → 标题
   //    「上一轮消耗:」，主数字「12.00 积分」，小字补调用次数 / 等价金额 / 上下文
+  //    【弹泡时机】服务只在「轮次推进」时弹**上一轮**（WB 的积分逐次调用就落账，
+  //    否则气泡会在本轮刚出首字时弹），所以每个被断言的轮次后跟一个 credit=0 触发轮
   insertTurn('turn_1', 'glm-5.3', 100_000, 20_000, 12)
+  insertTurn('turn_1_adv', 'glm-5.3', 1000, 100, 0)
   const cost1 = JSON.parse(
     (await pollEval(
       cdp,
@@ -299,6 +302,7 @@ try {
 
   // ①-2 再插一轮（credit=40）：气泡主数字跟进新轮次，且文字自适应不超出安全行宽
   insertTurn('turn_mix', 'deepseek-v4.1-flash', 90_000, 10_000, 40)
+  insertTurn('turn_mix_adv', 'deepseek-v4.1-flash', 1000, 100, 0)
   const cost2 = JSON.parse(
     (await pollEval(
       cdp,
@@ -325,6 +329,7 @@ try {
 
   // ①-3 credit=0 的轮次（宿主未扣费）：billable=false → 退 tokens 口径，不虚报金额
   insertTurn('turn_unk', 'zz-unknown-model', 3000, 2000, 0)
+  insertTurn('turn_unk_adv', 'zz-unknown-model', 1000, 100, 0)
   const cost3 = JSON.parse(
     (await pollEval(
       cdp,

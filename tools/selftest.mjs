@@ -3,9 +3,14 @@
 // 做法是把 CODEBUDDY_HOME / FOX_WIDGET_DATA_DIR 指向临时目录，在里面伪造一个
 // 最小化的 WorkBuddy 会话库（workbuddy.db 的 sessions / session_usage 两张表 +
 // projects/<slug>/<sid>.jsonl 的 transcript），再拉起一个挂件服务实例，然后往
-// transcript 里追加一条新的已完成轮次，观察 /whale/last-turn.json 的 seq 是否
-// 递增、credit 是否与宿主记的 credit_json 一致。顺带验证 health、主题、钩子、
-// 角色、泡泡等接口。
+// transcript 里追加新的已完成轮次，观察 /whale/last-turn.json 的 seq 是否递增、
+// credit 是否与宿主记的 credit_json 一致。顺带验证 health、主题、钩子、角色、
+// 泡泡等接口。
+//
+// 【弹泡时机】WB 的积分是**逐次模型调用就预先落账**的，所以服务端只在「轮次
+// 推进」时弹**上一轮**（刚开跑的这轮先不弹，否则气泡会在回复刚出首字时就弹、
+// 数字也只是第一笔）。每个被断言的轮次后面都跟一个 credit=0 的触发轮，把它
+// 推成"上一轮"；断言改为认 `turn === 'turn_X'` 而不是具体 seq 值。
 //
 // 口径红线（承 HANDOFF §7.2.2）：WorkBuddy 的 rawUsage.prompt_tokens **包含**
 // 缓存命中、completion_tokens **包含**思考；自算等价市值必须复用 usageFromRawUsage
@@ -47,7 +52,7 @@ const { isBlockedHost } = await import('../lib/blocked-host.mjs')
 const { matchTemplateId, buildProviderEntries, invalidateDiscoverCache } = await import('../lib/discover.mjs')
 const { computeTodayUsage, resolveTodayUsage, pickBalanceInfo, platformUsageUrl } = await import('../lib/balance.mjs')
 const { mapHostTheme, themeOfPreferences, resolveHostTheme } = await import('../lib/host-theme.mjs')
-const { safeMirrorUrl, overlaySpawnEnv } = await import('../lib/overlay.mjs')
+const { safeMirrorUrl, overlaySpawnEnv, overlayStopOutcome, stopOverlay } = await import('../lib/overlay.mjs')
 const { MODEL_ROLE_RULES, roleIdForModel } = await import('../lib/paths.mjs')
 const { findApiKey, readPluginConfig } = await import('../lib/credentials.mjs')
 const { resolveBillingSource, isNightOffpeak, resolveHostBillingSource } = await import('../lib/source.mjs')
@@ -1247,6 +1252,39 @@ function spawnServer() {
   c.stderr.on('data', (chunk) => (childLog += chunk))
   return c
 }
+
+// 【免费模型端到端的夹具】（2026-10-14 审查 P1-1：免费轮的气泡链路此前零覆盖，
+// 且字段在服务端被丢、分支被 billable===false 遮蔽，功能实际不生效）
+// 在服务启动**前**写入宿主商品配置快照：step-5-preview 倍率 x0.00 + 官方促销
+// 「独家限免」。savedAt 故意取很早 —— 后面 hostModelInfo 的用例会写入自己的
+// 快照（savedAt=now），host-models 取**最新**快照，届时以它为准；它删掉快照后
+// 又回落到这份。两边断言互不干扰。
+{
+  const scoped = path.join(tmpHome, 'storage', 'user-e2e-free', 'scoped', 's1')
+  fs.mkdirSync(scoped, { recursive: true })
+  fs.writeFileSync(
+    path.join(scoped, 'wb-product-config.json'),
+    JSON.stringify({
+      'product-config-snapshot': {
+        savedAt: Date.UTC(2026, 0, 1),
+        data: {
+          models: [{ id: 'step-5-preview', credits: 'x0.00' }],
+          modelPromotions: [
+            {
+              id: 'free-e2e',
+              kind: 'discount',
+              enabled: true,
+              priority: 100,
+              modelIds: ['step-5-preview'],
+              badge: { label: '独家限免' },
+              discount: { factor: 0 },
+            },
+          ],
+        },
+      },
+    })
+  )
+}
 let child = spawnServer()
 
 try {
@@ -1438,16 +1476,21 @@ try {
   check('启动时对齐历史轮次（seq=0，不弹旧轮次）', first.seq === 0 && first.turn === null, JSON.stringify(first))
 
   // —— B：单模型 DeepSeek 轮次，积分取宿主 credit_json 的权威值 ——
+  // 【弹泡时机】WB 的积分逐次模型调用就落账，服务只在「轮次推进」时弹**上一轮**
+  // （见 server.mjs 的 pollTurnCost：否则气泡会在本轮刚吐首字时就弹，数字也只是
+  // 第一笔）。所以每个被断言的轮次后面紧跟一个 credit=0 的**触发轮**，把它推成
+  // "上一轮"。触发轮 credit=0，不影响"今日积分 = 各轮之和"的总量断言。
   const atB = Date.now()
   insertTurn('turn_B', USAGE_B, atB, null, 12)
+  insertTurn('turn_B_adv', USAGE_B, atB + 1500, null, 0)
   let second = null
-  const deadline = Date.now() + 6000
+  const deadline = Date.now() + 8000
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 400))
     second = await getJson(port, '/whale/last-turn.json')
-    if (second.seq > 0) break
+    if (second && second.turn === 'turn_B') break
   }
-  check('新轮次被识别（seq 递增到 1）', second && second.seq === 1, JSON.stringify(second))
+  check('新轮次被识别（推进到触发轮时弹出 turn_B，seq 递增）', second && second.turn === 'turn_B' && second.seq > 0, JSON.stringify(second))
   check(
     '本轮 credit 取宿主 credit_json 的权威值（currency=CREDIT，partial=false）',
     second && second.credit === 12 && second.amount === 12 && second.currency === 'CREDIT' && second.partial === false,
@@ -1483,18 +1526,19 @@ try {
     ],
     10
   )
+  insertTurn('turn_C_adv', USAGE_B, atC + 1500, null, 0)
   let third = null
-  const deadlineC = Date.now() + 6000
+  const deadlineC = Date.now() + 8000
   while (Date.now() < deadlineC) {
     await new Promise((r) => setTimeout(r, 400))
     third = await getJson(port, '/whale/last-turn.json')
-    if (third.seq > 1) break
+    if (third && third.turn === 'turn_C') break
   }
   const glmPart = costOfUsage('GLM-5.3-Flash', { input_tokens: 500_000, cache_read_input_tokens: 450_000, output_tokens: 50_000 }, atC).amount
   const dsPart = costOfUsage('deepseek-flash', { input_tokens: 300_000, cache_read_input_tokens: 0, output_tokens: 30_000 }, atC).amount
   check(
     '多模型轮次带逐模型明细且 credit = 宿主整轮积分（10）',
-    third && third.seq === 2 && Array.isArray(third.models) && third.models.length === 2 && third.credit === 10 && third.amount === 10,
+    third && third.turn === 'turn_C' && third.seq > 1 && Array.isArray(third.models) && third.models.length === 2 && third.credit === 10 && third.amount === 10,
     'credit=' + (third && third.credit) + ' models=' + (third && third.models ? third.models.length : '无')
   )
   check(
@@ -1514,16 +1558,17 @@ try {
   insertTurn('turn_G', { input_tokens: 200_000, output_tokens: 20_000 }, atG, [
     { model: 'GLM-5.3-Flash', modelName: 'GLM-5.3-Flash', usage: { input_tokens: 200_000, output_tokens: 20_000 }, credit: 8 },
   ], 8)
+  insertTurn('turn_G_adv', { input_tokens: 50_000, output_tokens: 5_000 }, atG + 1500, null, 0)
   let thirdG = null
-  const deadlineG = Date.now() + 6000
+  const deadlineG = Date.now() + 8000
   while (Date.now() < deadlineG) {
     await new Promise((r) => setTimeout(r, 400))
     thirdG = await getJson(port, '/whale/last-turn.json')
-    if (thirdG.seq > 2) break
+    if (thirdG && thirdG.turn === 'turn_G') break
   }
   check(
-    'GLM 单模型轮次被识别（seq=3，vendor=glm）',
-    thirdG && thirdG.seq === 3 && thirdG.vendor === 'glm',
+    'GLM 单模型轮次被识别（推进后弹出 turn_G，vendor=glm）',
+    thirdG && thirdG.turn === 'turn_G' && thirdG.seq > 2 && thirdG.vendor === 'glm',
     JSON.stringify({ seq: thirdG && thirdG.seq, vendor: thirdG && thirdG.vendor })
   )
 
@@ -1686,16 +1731,19 @@ try {
   const atH = Date.now()
   const H_USAGE = { input_tokens: 120_000, cache_read_input_tokens: 20_000, output_tokens: 8_000 }
   insertTurn('turn_H', H_USAGE, atH, [{ model: 'gpt-5.6-terra', modelName: 'GPT-5.6', usage: H_USAGE, credit: 5 }], 5)
+  // 触发轮也用 OpenAI 模型（credit=0）：后面 CLI / MCP 的断言走 readLatestTurn()
+  // 读**最新**一轮，得让最新轮仍然是 $ 计价的模型
+  insertTurn('turn_H_adv', H_USAGE, atH + 1500, [{ model: 'gpt-5.6-terra', modelName: 'GPT-5.6', usage: H_USAGE, credit: 0 }], 0)
   let lastTurn = null
-  const deadlineH = Date.now() + 6000
+  const deadlineH = Date.now() + 8000
   while (Date.now() < deadlineH) {
     await new Promise((r) => setTimeout(r, 400))
     lastTurn = await getJson(port, '/whale/last-turn.json')
-    if (lastTurn.seq > 3) break
+    if (lastTurn && lastTurn.turn === 'turn_H') break
   }
   check(
     '模型换上 OpenAI 时主口径仍是积分（currency=CREDIT，vendor=openai）',
-    lastTurn && lastTurn.seq === 4 && lastTurn.currency === 'CREDIT' && lastTurn.credit === 5 && lastTurn.vendor === 'openai',
+    lastTurn && lastTurn.turn === 'turn_H' && lastTurn.seq > 3 && lastTurn.currency === 'CREDIT' && lastTurn.credit === 5 && lastTurn.vendor === 'openai',
     lastTurn ? 'seq=' + lastTurn.seq + ' currency=' + lastTurn.currency + ' vendor=' + lastTurn.vendor : '无'
   )
   const cliEnv = { ...serverEnv }
@@ -1730,6 +1778,42 @@ try {
     'MCP 握手版本号与 plugin.json 一致（单一来源）',
     mcpVersion === pluginJson.version,
     'mcp=' + mcpVersion + ' plugin.json=' + pluginJson.version
+  )
+
+  // —— F：免费模型轮（宿主促销 x0.00 + 独家限免）——
+  // 端到端断言（2026-10-14 审查 P1-1：此前气泡链路零覆盖，且字段在服务端被丢、
+  // 分支被 billable===false 遮蔽，功能实际不生效）。夹具见 spawnServer 之前。
+  // 触发轮同模型 credit=0：把 turn_F 推成"上一轮"弹出。
+  const atF = Date.now()
+  const F_USAGE = { input_tokens: 60_000, cache_read_input_tokens: 50_000, output_tokens: 6_000 }
+  insertTurn('turn_F', F_USAGE, atF, [{ model: 'step-5-preview', modelName: 'Step-5', usage: F_USAGE, credit: 0 }], 0)
+  insertTurn('turn_F_adv', F_USAGE, atF + 1500, [{ model: 'step-5-preview', modelName: 'Step-5', usage: F_USAGE, credit: 0 }], 0)
+  let freeTurn = null
+  const deadlineF = Date.now() + 8000
+  while (Date.now() < deadlineF) {
+    await new Promise((r) => setTimeout(r, 400))
+    freeTurn = await getJson(port, '/whale/last-turn.json')
+    if (freeTurn && freeTurn.turn === 'turn_F') break
+  }
+  check(
+    '免费模型轮：载荷带 free/freeLabel（宿主促销文案），credit=0 但不再退 tokens',
+    freeTurn &&
+      freeTurn.turn === 'turn_F' &&
+      freeTurn.free === true &&
+      freeTurn.freeLabel === '独家限免' &&
+      freeTurn.credit === 0 &&
+      freeTurn.billable === false,
+    JSON.stringify(freeTurn ? { turn: freeTurn.turn, free: freeTurn.free, freeLabel: freeTurn.freeLabel, credit: freeTurn.credit } : freeTurn)
+  )
+  check(
+    '免费模型轮：气泡分支顺序（free 分支必须在 billable===false 之前，否则永远轮不到）',
+    (() => {
+      const src = fs.readFileSync(path.join(PLUGIN_ROOT, 'lib', 'widget.js'), 'utf8')
+      const freeAt = src.indexOf('turn.free && !(Number(turn.credit')
+      const billableAt = src.indexOf('turn.billable === false')
+      return freeAt !== -1 && billableAt !== -1 && freeAt < billableAt
+    })(),
+    '顺序=' + 'free 应在前'
   )
 
   // 预警设置归一：额度阈值泛化为单一 quotaPct（旧键 planPct/cmdgoPct 折入），
@@ -2295,6 +2379,102 @@ try {
         fs.rmSync(d, { recursive: true, force: true })
       } catch (err) {}
     }
+  }
+
+  // 宿主模型目录（免费 / 限时促销标注）：**读宿主自己的商品配置**，不靠猜。
+  // 之前在用量面板里，一切不扣积分的轮次都被笼统写成「套餐/网关」——把
+  // 「订阅/网关口径」和「免费模型」混成了一类（真机实例：step-5-preview 倍率 x0.00、
+  // 宿主徽章「独家限免」，却被标成「套餐/网关」）。这里在隔离 HOST_HOME 下伪造一份
+  // 快照，验倍率判定、促销优先级与时段门控。
+  {
+    const { hostModelInfo, invalidateHostModelsCache } = await import('../lib/host-models.mjs')
+    const scoped = path.join(tmpHome, 'storage', 'user-selftest', 'scoped', 's1')
+    fs.mkdirSync(scoped, { recursive: true })
+    const past = new Date(Date.now() - 86400000 * 30).toISOString()
+    fs.writeFileSync(
+      path.join(scoped, 'wb-product-config.json'),
+      JSON.stringify({
+        'product-config-snapshot': {
+          savedAt: Date.now(),
+          data: {
+            models: [
+              { id: 'step-5-preview', credits: 'x0.00' },
+              { id: 'glm-5.3', credits: 'x0.79' },
+              { id: 'hy4-preview', credits: 'x0.29' },
+            ],
+            modelPromotions: [
+              {
+                id: 'free-a',
+                kind: 'discount',
+                enabled: true,
+                priority: 200,
+                modelIds: ['step-5-preview'],
+                badge: { label: '独家限免' },
+                discount: { factor: 0 },
+              },
+              {
+                id: 'lower-prio',
+                kind: 'discount',
+                enabled: true,
+                priority: 10,
+                modelIds: ['step-5-preview'],
+                badge: { label: '限时折扣' },
+              },
+              {
+                id: 'expired-free',
+                kind: 'discount',
+                enabled: true,
+                priority: 999,
+                modelIds: ['glm-5.3'],
+                badge: { label: '不该命中（已过期）' },
+                discount: { factor: 0 },
+                schedule: { validUntil: past },
+              },
+              {
+                id: 'night-free',
+                kind: 'discount',
+                enabled: true,
+                priority: 50,
+                modelIds: ['hy4-preview'],
+                badge: { label: '夜间免费' },
+                discount: { factor: 0 },
+                schedule: { daily: [{ start: '23:00', end: '8:00' }] },
+              },
+            ],
+          },
+        },
+      })
+    )
+    invalidateHostModelsCache()
+    const at = Date.now()
+    let info = hostModelInfo('step-5-preview', at)
+    check(
+      '宿主模型目录：倍率 x0.00 → 判为免费，并用宿主自己的促销徽章当文案',
+      info.known && info.free === true && info.freeLabel === '独家限免',
+      JSON.stringify(info)
+    )
+    check('宿主模型目录：同模型多条促销 → 取优先级最高的那条', info.promoId === 'free-a', String(info.promoId))
+    info = hostModelInfo('glm-5.3', at)
+    check(
+      '宿主模型目录：已过期的促销不命中（写了 factor 0 也不能算免费）',
+      info.known && info.free === false && info.freeLabel === null,
+      JSON.stringify(info)
+    )
+    check('宿主模型目录：在售模型倍率非 0 → 不算免费', info.multiplier === 0.79, String(info.multiplier))
+    const night = new Date(at)
+    night.setHours(23, 30, 0, 0)
+    const day = new Date(at)
+    day.setHours(14, 0, 0, 0)
+    const infoNight = hostModelInfo('hy4-preview', night.getTime())
+    const infoDay = hostModelInfo('hy4-preview', day.getTime())
+    check(
+      '宿主模型目录：每日窗口按轮次时刻判定（夜免只在夜里成立，白天不能标）',
+      infoNight.free === true && infoNight.freeLabel === '夜间免费' && infoDay.free === false,
+      'night=' + infoNight.free + '/' + infoNight.freeLabel + ' day=' + infoDay.free
+    )
+    check('宿主模型目录：快照里没有的模型不猜（known=false，交给调用方定口径）', hostModelInfo('my-custom-model', at).known === false, '')
+    fs.rmSync(path.join(tmpHome, 'storage', 'user-selftest'), { recursive: true, force: true })
+    invalidateHostModelsCache()
   }
 
   // 钩子状态路由 + 新 widget-state 字段
@@ -3062,12 +3242,13 @@ try {
     '重启前 seq=' + seqBeforeRestart + '，重启后 ' + JSON.stringify(afterRestart)
   )
   insertTurn('turn_D', USAGE_B, Date.now(), null, 6)
+  insertTurn('turn_D_adv', USAGE_B, Date.now(), null, 0)
   let fourth = null
-  const deadlineD = Date.now() + 6000
+  const deadlineD = Date.now() + 8000
   while (Date.now() < deadlineD) {
     await new Promise((r) => setTimeout(r, 400))
     fourth = await getJson(port, '/whale/last-turn.json')
-    if (fourth.seq > seqBeforeRestart) break
+    if (fourth && fourth.turn === 'turn_D') break
   }
   check(
     '重启后新一轮 seq 继续单调递增',
@@ -3084,12 +3265,13 @@ try {
     { model: 'GLM-5.3-Flash', modelName: 'GLM-5.3-Flash', usage: { input_tokens: 250_000, cache_read_input_tokens: 200_000, output_tokens: 50_000 }, credit: 3 },
   ]
   insertTurn('turn_E', USAGE_B, atE, multiRows, 9)
+  insertTurn('turn_E_adv', USAGE_B, atE + 1500, null, 0)
   let fifth = null
-  const deadlineE = Date.now() + 6000
+  const deadlineE = Date.now() + 8000
   while (Date.now() < deadlineE) {
     await new Promise((r) => setTimeout(r, 400))
     fifth = await getJson(port, '/whale/last-turn.json')
-    if (fifth.seq > seqBeforeRestart + 1) break
+    if (fifth && fifth.turn === 'turn_E') break
   }
   // 行 tokens 口径 = 命中+未命中+缓存写+输出：三行 450k/350k/300k = 1.1M
   const sumTokens = 1_100_000
@@ -3653,6 +3835,330 @@ try {
       process.env.ELECTRON_RUN_AS_NODE === prevRunAsNode,
       String(process.env.ELECTRON_RUN_AS_NODE)
     )
+  }
+
+  {
+    // 浮层收尾判定（纯函数）。2026-10-14 真机缺陷：浮层以管理员权限运行，
+    // 普通权限 taskkill 收不掉，而旧实现**无条件**返回 ok 并删掉 overlay.json，
+    // 于是上层接着起第二个实例 → 两个 Electron 抢同一个 user-data-dir
+    //（GPUCache 文件锁）→ 把正在用的浮层弄成「主进程活着、页面空白」的僵尸态。
+    // 判定逻辑抽成纯函数就是为了能在不碰真实进程的前提下钉住它。
+    const bad = overlayStopOutcome([4], [4])
+    check(
+      'stopOverlay 判定：收完还活着 → ok=false 且回带 pid',
+      bad.ok === false && Array.isArray(bad.alive) && bad.alive.join(',') === '4',
+      JSON.stringify(bad)
+    )
+    check(
+      'stopOverlay 判定：错误文案说清「权限不足」与替代做法',
+      typeof bad.error === 'string' && /权限/.test(bad.error) && /管理员|退出宿主/.test(bad.error),
+      String(bad.error)
+    )
+    const good = overlayStopOutcome([11, 12], [])
+    check(
+      'stopOverlay 判定：全部收掉 → ok=true 且 killed 计数正确',
+      good.ok === true && good.killed === 2,
+      JSON.stringify(good)
+    )
+
+    // CLI 的浮层重启路径：收不掉时必须**中止**，不能叠加新实例
+    const cliSrc = fs.readFileSync(path.join(PLUGIN_ROOT, 'lib', 'cli.mjs'), 'utf8')
+    check(
+      'CLI 浮层重启：stopOverlay 失败时中止（restart / restart-all 两处都有守卫）',
+      (cliSrc.match(/if \(!s\.ok\)/g) || []).length >= 2 &&
+        cliSrc.indexOf('已中止（不起新实例') !== -1,
+      '守卫数=' + (cliSrc.match(/if \(!s\.ok\)/g) || []).length
+    )
+
+    // 浮层主进程的页面自愈：主进程活着 + 页面死掉的自愈兜底（无法在自检里起
+    // Electron，只能静态钉住这几处关键接线）
+    const mainSrc = fs.readFileSync(path.join(PLUGIN_ROOT, 'desktop', 'main.cjs'), 'utf8')
+    check(
+      '浮层自愈：挂上 render-process-gone → reload',
+      /render-process-gone/.test(mainSrc) && /webContents\.reload\(\)/.test(mainSrc),
+      'render-process-gone=' + /render-process-gone/.test(mainSrc)
+    )
+    check(
+      '浮层自愈：页面心跳（超时/报错 → 重载），且由 did-finish-load 启动',
+      /function startPageHeartbeat/.test(mainSrc) &&
+        /function probePage/.test(mainSrc) &&
+        /page-beat-fail/.test(mainSrc) &&
+        /did-finish-load'[\s\S]{0,200}startPageHeartbeat\(\)/.test(mainSrc),
+      'heartbeat=' + /function startPageHeartbeat/.test(mainSrc)
+    )
+  }
+
+  {
+    // 启动项 VBS 的编码。2026-10-14 真机缺陷：写成 UTF-8 BOM 时 Windows Script
+    // Host 解析第 1 行就报「无效字符 800A0408」并**一句都不执行** → 登录时弹窗、
+    // 自启静默失效（机器上那个看门狗其实是手动起的，还落在管理员终端里）。
+    const { vbsFileEncoding } = await import('../lib/watchdog-cli.mjs')
+    const ascii = vbsFileEncoding("Set fso = CreateObject(\"Scripting.FileSystemObject\")\r\n")
+    check(
+      '启动项 VBS 编码：全 ASCII → 无 BOM 的 ANSI（WSH 不认 UTF-8 BOM）',
+      ascii.encoding === 'latin1' && ascii.bom === '',
+      JSON.stringify(ascii)
+    )
+    const uni = vbsFileEncoding("' 中文路径 C:\\Users\\张三\r\n")
+    check(
+      '启动项 VBS 编码：含非 ASCII → UTF-16LE + BOM（这个 BOM 它是认的）',
+      uni.encoding === 'utf16le' && uni.bom === '\ufeff',
+      JSON.stringify({ encoding: uni.encoding, bom: uni.bom.charCodeAt(0).toString(16) })
+    )
+    const wdSrc = fs.readFileSync(path.join(PLUGIN_ROOT, 'lib', 'watchdog-cli.mjs'), 'utf8')
+    check(
+      '启动项 VBS 编码：落盘再也别用 utf8（否则又是 EF BB BF → 800A0408）',
+      /writeFileSync\(vbsFile\(\), enc\.bom \+ body, enc\.encoding\)/.test(wdSrc) &&
+        !/writeFileSync\(vbsFile\(\)[^\n]*'utf8'/.test(wdSrc),
+      'guard=' + /enc\.encoding/.test(wdSrc)
+    )
+    // 服务常暖（2026-10-14）：服务冷启动的 3–8s 是「启动 WB 后要等十来秒」的大头，
+    // 看门狗改为登录即暖、应用退出也不停；同时要有版本哨兵（升级后换血，不跑旧代码）
+    const wdMain = fs.readFileSync(path.join(PLUGIN_ROOT, 'lib', 'watchdog.mjs'), 'utf8')
+    check(
+      '看门狗：服务常暖（init 必然调度、怠速期不再停服务、宿主不在时不起浮层）',
+      /scheduleEnsure\('init'\)/.test(wdMain) &&
+        wdMain.indexOf('server stopped after grace') === -1 &&
+        /if \(!wbUp\) return/.test(wdMain),
+      'warm-standby guards=' + [/scheduleEnsure\('init'\)/.test(wdMain), wdMain.indexOf('server stopped after grace') === -1, /if \(!wbUp\) return/.test(wdMain)].join('/')
+    )
+    check(
+      '看门狗：常暖服务的版本哨兵（health.version 不一致就换血）',
+      /version mismatch/.test(wdMain) && /tick-server-stale/.test(wdMain) && /pluginVersion\(\)/.test(wdMain),
+      'sentinel=' + /version mismatch/.test(wdMain)
+    )
+  }
+
+  {
+    // 跨产品线浮层互杀回归（2026-10-14 真机事故，BUGREPORT-CROSS-LINE-OVERLAY-KILL.md）：
+    // 旧判据用插件名子串（'fox-widget' ⊂ 'zcode-fox-widget'），WB 版的去重把 ZCode 版
+    // 浮层当重复实例杀掉。新判据 = 命令行是否含**本插件运行时的 electron dist 目录**。
+    const { isOwnOverlayCommandLine } = await import('../lib/overlay.mjs')
+    // 与真机同形的两条字面量命令行（报告 §6.2）
+    const mine =
+      'C:\\Users\\u\\.workbuddy\\plugins\\data\\fox-widget-fox-local\\desktop-runtime\\node_modules\\electron\\dist\\electron.exe ' +
+      'C:\\Users\\u\\.workbuddy\\plugins\\cache\\fox-local\\fox-widget\\2.0.0\\desktop'
+    const other =
+      'C:\\Users\\u\\.zcode\\whale\\desktop-runtime\\node_modules\\electron\\dist\\electron.exe ' +
+      'C:\\Users\\u\\.zcode\\cli\\plugins\\cache\\zcode-fox-local\\zcode-fox-widget\\1.0.0\\desktop'
+    const marker = 'C:\\Users\\u\\.workbuddy\\plugins\\data\\fox-widget-fox-local\\desktop-runtime\\node_modules\\electron\\dist'
+    check(
+      '跨线互杀回归：自己的运行时拉起的浮层被识别',
+      isOwnOverlayCommandLine(mine, marker) === true,
+      String(isOwnOverlayCommandLine(mine, marker))
+    )
+    check(
+      '跨线互杀回归：ZCode 版的浮层不再被当成重复实例（亲缘按运行时目录，不按插件名）',
+      isOwnOverlayCommandLine(other, marker) === false,
+      String(isOwnOverlayCommandLine(other, marker))
+    )
+    check(
+      '跨线互杀回归：worktree 形态的自己（entry 在 Worktrees 下、electron 来自同一运行时）仍被识别',
+      isOwnOverlayCommandLine(
+        marker + '\\electron.exe C:\\Users\\u\\WorkBuddy\\Worktrees\\zcode-fox-widget\\main-56fc9dd2\\desktop',
+        marker
+      ) === true,
+      'worktree 形态应命中'
+    )
+    check(
+      '跨线互杀回归：路径大小写与 / \\ 混用不影响判定（win32）',
+      isOwnOverlayCommandLine(
+        'c:/users/u/.workbuddy/plugins/data/fox-widget-fox-local/desktop-runtime/node_modules/electron/dist/electron.exe',
+        marker
+      ) === true,
+      '斜杠归一化应命中'
+    )
+    check(
+      '跨线互杀回归：别人家的 electron 不被当成自己的浮层',
+      isOwnOverlayCommandLine('C:\\other\\app\\electron.exe C:\\other\\app\\ui', marker) === false &&
+        isOwnOverlayCommandLine('', marker) === false &&
+        isOwnOverlayCommandLine(null, marker) === false,
+      '应全部为 false'
+    )
+    check(
+      '事故最小复现成立：other 含子串 fox-widget —— 旧判据必然误杀，这条钉住动机',
+      other.toLowerCase().indexOf('fox-widget') !== -1,
+      '若这里为 false，说明报告里的子串关系假设变了，回归断言需重审'
+    )
+    // 源级守卫：插件名子串判据不允许复活
+    const hostSrc = fs.readFileSync(path.join(PLUGIN_ROOT, 'lib', 'host.mjs'), 'utf8')
+    const ovSrc = fs.readFileSync(path.join(PLUGIN_ROOT, 'lib', 'overlay.mjs'), 'utf8')
+    check(
+      '跨线互杀回归：OVERLAY_CMDLINE_MARKERS 不再存在（防再被捡起来用）',
+      hostSrc.indexOf('OVERLAY_CMDLINE_MARKERS') === -1 && ovSrc.indexOf('OVERLAY_CMDLINE_MARKERS') === -1,
+      'host=' + hostSrc.indexOf('OVERLAY_CMDLINE_MARKERS') + ' overlay=' + ovSrc.indexOf('OVERLAY_CMDLINE_MARKERS')
+    )
+    // 【2026-10-14 21:36 真机】listOverlayPids 改异步后漏了两处 await：
+    // `listOverlayPids().filter is not a function` → 浮层永远起不来（看门狗日志
+    // 每 15s 报一次 error）。行为级回归：stopOverlay 必须能正常走完（沙箱里没有
+    // 浮层 → ok:false + '浮层未在运行'），而不是抛 TypeError。
+    const stopRes = await stopOverlay()
+    check(
+      '浮层启停回归：listOverlayPids 异步化后 stopOverlay 正常收敛（不抛 TypeError）',
+      stopRes && stopRes.ok === false && /浮层未在运行/.test(String(stopRes.error)),
+      JSON.stringify(stopRes)
+    )
+    check(
+      '浮层启停回归：startOverlay/stopOverlay 都 await listOverlayPids（源级）',
+      /await listOverlayPids\(\)/.test(ovSrc) && (ovSrc.match(/listOverlayPids\(\)/g) || []).length >= 2,
+      'await 处数=' + (ovSrc.match(/await listOverlayPids\(\)/g) || []).length
+    )
+  }
+
+  {
+    // 宿主日志分流（2026-10-14 审查 P0-1）：宿主把 [AppShutdown] 退出行**也写进
+    // AppStartup.log**，只比文件大小会把「宿主退出」当成「宿主启动」——退出语义
+    // 整体反转（宽限期永不启动 + 每 15s 重建注定退出的浮层）。
+    const { classifyHostLogAppend } = await import('../lib/host.mjs')
+    const down = '2026-10-13T19:02:22 [AppShutdown] appName=WorkBuddy reason=before_quit'
+    const up = '2026-10-14T11:18:51 [AppStartup] appName=WorkBuddy platform=win32'
+    check(
+      '宿主日志分流：AppStartup.log 里的 [AppShutdown] 行 → 判「宿主退出」',
+      classifyHostLogAppend(down) === 'down',
+      String(classifyHostLogAppend(down))
+    )
+    check(
+      '宿主日志分流：活动行 → 判「宿主在跑」',
+      classifyHostLogAppend(up) === 'up' && classifyHostLogAppend('[Perf] ...') === 'up',
+      String(classifyHostLogAppend(up))
+    )
+    check(
+      '宿主日志分流：成串追加以最后一行可判别行为准（退出后重启 → up）',
+      classifyHostLogAppend(down + '\n' + up) === 'up' && classifyHostLogAppend(up + '\n' + down) === 'down',
+      'down+up=' + classifyHostLogAppend(down + '\n' + up) + ' up+down=' + classifyHostLogAppend(up + '\n' + down)
+    )
+    check(
+      '宿主日志分流：判别不了按活动处理（宽进，与旧行为一致）',
+      classifyHostLogAppend('') === 'up' && classifyHostLogAppend('随机文本') === 'up',
+      ''
+    )
+    const wdSrc2 = fs.readFileSync(path.join(PLUGIN_ROOT, 'lib', 'watchdog.mjs'), 'utf8')
+    check(
+      '宿主日志分流：watchHostLog 读增量字节并按内容分流（不是只比大小）',
+      /onAppend\(text\)/.test(wdSrc2) && /classifyHostLogAppend\(text\)/.test(wdSrc2) && /openSync\(file, 'r'\)/.test(wdSrc2),
+      'guards=' + [/onAppend\(text\)/.test(wdSrc2), /classifyHostLogAppend\(text\)/.test(wdSrc2)].join('/')
+    )
+  }
+
+  {
+    // 更新链路的 tag 前缀与 jsdelivr 路径（2026-10-14 审查 P1-2 / P1-3）
+    const updSrc = fs.readFileSync(path.join(PLUGIN_ROOT, 'lib', 'update.mjs'), 'utf8')
+    check(
+      '更新链路：verifyReleaseTag 按 TAG_PREFIX 复核（wb-v*），不再打 ZCode 线的 v*',
+      /'\/git\/ref\/tags\/' \+ TAG_PREFIX \+ version/.test(updSrc) &&
+        updSrc.indexOf("REPO + '/v' + version") === -1,
+      'TAG_PREFIX 探测=' + /TAG_PREFIX \+ version/.test(updSrc)
+    )
+    check(
+      '更新链路：jsdelivr 的 ref 带 TAG_PREFIX（否则 404 或拉到另一条产品线的树）',
+      /'@' \+ ref/.test(updSrc) && /const ref = TAG_PREFIX \+ version/.test(updSrc),
+      'ref guard=' + /const ref = TAG_PREFIX \+ version/.test(updSrc)
+    )
+    check(
+      '更新链路：落地前校验包内 plugin.json 的插件名（防跨产品线污染）',
+      /下载内容不是本插件/.test(updSrc) && /manifestName !== selfName/.test(updSrc),
+      'name guard=' + /manifestName !== selfName/.test(updSrc)
+    )
+    const { jsdelivrTreePaths } = await import('../lib/update.mjs')
+    const tree = {
+      files: [
+        { type: 'file', name: 'README.md' },
+        {
+          type: 'directory',
+          name: 'lib',
+          files: [
+            { type: 'file', name: 'cli.mjs' },
+            { type: 'directory', name: 'deep', files: [{ type: 'file', name: 'x.mjs' }] },
+          ],
+        },
+      ],
+    }
+    const paths = jsdelivrTreePaths(tree, 100)
+    check(
+      '更新链路：jsdelivr 嵌套树递归拼出带目录的完整路径（旧实现是扁平 basename）',
+      paths.indexOf('README.md') !== -1 &&
+        paths.indexOf('lib/cli.mjs') !== -1 &&
+        paths.indexOf('lib/deep/x.mjs') !== -1 &&
+        paths.indexOf('cli.mjs') === -1,
+      JSON.stringify(paths)
+    )
+    const upd2 = await import('../lib/overlay.mjs')
+    check(
+      '浮层去重：startOverlay 收完复验（收不掉如实回报 dedupFailed，不假装成功）',
+      /dedupFailed: alive\.length \? alive : null/.test(upd2 && 'src' in {} ? '' : fs.readFileSync(path.join(PLUGIN_ROOT, 'lib', 'overlay.mjs'), 'utf8')),
+      'guard=' + /dedupFailed/.test(fs.readFileSync(path.join(PLUGIN_ROOT, 'lib', 'overlay.mjs'), 'utf8'))
+    )
+    void upd2
+  }
+
+  {
+    // P0-2 截断暴露：单会话超过 TAIL_BYTES 时只统计尾部，并**如实标记**。
+    //（2026-10-14 审查 P0-2：2MB 窗口实测「今日积分」低估 16%、调用次数低估 64%，
+    // 而 scannedTranscripts 只报文件数，掩盖了截断。）TAIL_BYTES 在 import 时求值，
+    // 主套件不能改它 → 用独立子进程、小窗口构造截断场景。
+    const lab = fs.mkdtempSync(path.join(os.tmpdir(), 'fox-tail-'))
+    const proj = path.join(lab, 'projects', 'p1')
+    fs.mkdirSync(proj, { recursive: true })
+    const lines = []
+    let ts = Date.now() - 3600_000
+    for (let i = 0; i < 40; i++) {
+      ts += 60_000
+      lines.push(
+        JSON.stringify({
+          timestamp: ts,
+          type: 'function_call',
+          providerData: {
+            conversationRequestId: 'tail_r' + i,
+            requestModelId: 'deepseek-flash',
+            rawUsage: {
+              prompt_tokens: 500,
+              prompt_cache_hit_tokens: 0,
+              prompt_cache_miss_tokens: 500,
+              completion_tokens: 100,
+              total_tokens: 600,
+              credit: 1,
+            },
+          },
+        })
+      )
+    }
+    fs.writeFileSync(path.join(proj, 's1.jsonl'), lines.join('\n') + '\n')
+    const fullCredit = 40
+    // 子进程跑：TAIL_BYTES 在 import 时求值，环境变量要用 spawn 的 env 传（且
+    // Windows 下 ESM 动态导入必须用 file:// URL，裸盘符路径会 ERR_UNSUPPORTED）
+    const childFile = path.join(lab, 'run-tail.mjs')
+    fs.writeFileSync(
+      childFile,
+      'const { usageRecords } = await import(' +
+        JSON.stringify('file:///' + path.join(PLUGIN_ROOT, 'lib', 'usage-records.mjs').replace(/\\/g, '/')) +
+        ');\n' +
+        'const r = usageRecords();\n' +
+        'console.log(JSON.stringify({ credit: r.today.credit, truncated: r.truncatedTranscripts, scan: r.scanBytes, turns: (r.turns || []).length }))\n'
+    )
+    const out = spawnSync(process.execPath, [childFile], {
+      encoding: 'utf8',
+      timeout: 60000,
+      env: { ...process.env, CODEBUDDY_HOME: lab, FOX_WIDGET_DATA_DIR: lab, FOX_WIDGET_TAIL_BYTES: '2000' },
+    })
+    let got = null
+    try {
+      got = JSON.parse(String(out.stdout || '').trim().split(/\r?\n/).pop())
+    } catch (err) {
+      got = null
+    }
+    check(
+      '截断暴露：超窗会话被如实标记（truncatedTranscripts ≥ 1）',
+      !!got && got.truncated >= 1,
+      JSON.stringify(got) + (out.stderr ? ' stderr=' + String(out.stderr).slice(0, 160) : '')
+    )
+    check(
+      '截断暴露：截断后今日积分偏低（< 全量 40）且扫描字节 ≤ 窗口',
+      !!got && got.credit > 0 && got.credit < fullCredit && Number(got.scan && got.scan.scanned) <= 2000 && Number(got.scan && got.scan.total) > 5000,
+      JSON.stringify(got)
+    )
+    try {
+      fs.rmSync(lab, { recursive: true, force: true })
+    } catch (err) {}
   }
 
   {
