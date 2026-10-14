@@ -2045,6 +2045,109 @@ try {
     )
   }
 
+  // UI 审查 U31：浅色档正文色的对比度下限。正文色由角色墨色按 4.5:1 派生
+  //（装饰件仍用原色），这里把 widget.js 里的纯函数抠出来逐个内置角色断言——
+  // kimi娘 #ad81ff 对白底只有 2.85:1，是这一条要挡住的原状。
+  {
+    const widgetSrc = fs.readFileSync(path.join(PLUGIN_ROOT, 'lib', 'widget.js'), 'utf8')
+    const helperSrc = /function srgbToLinear[\s\S]*?\n  function readableOn\(bg\) \{[\s\S]*?\n  \}/.exec(widgetSrc)
+    let H = null
+    if (helperSrc) {
+      try {
+        H = new Function(helperSrc[0] + '; return { ensureContrast: ensureContrast, contrastRatio: contrastRatio, readableOn: readableOn }')()
+      } catch (err) {
+        H = null
+      }
+    }
+    const lights = {}
+    const pairBlock = /var ROLE_INK_PAIR = \{([\s\S]*?)\n  \}/.exec(widgetSrc)
+    if (pairBlock) {
+      const re = /([a-z]+): \{ light: '(#[0-9a-f]{6})'/g
+      let hit
+      while ((hit = re.exec(pairBlock[1])) !== null) lights[hit[1]] = hit[2]
+    }
+    const ids = Object.keys(lights)
+    check(
+      'U31：能从 widget.js 抠出对比度纯函数与五个内置角色墨色',
+      !!H && ids.length === 5,
+      JSON.stringify({ helper: !!H, ids })
+    )
+    if (H && ids.length === 5) {
+      const bad = ids.filter((id) => H.contrastRatio(H.ensureContrast(lights[id], '#ffffff', 4.5), '#ffffff') < 4.5)
+      check(
+        'U31：五个内置角色的浅色墨色经处理后正文对比度 ≥4.5:1（AA，白底）',
+        bad.length === 0,
+        bad.length ? '不达标：' + bad.map((id) => id + ' ' + lights[id] + ' ' + H.contrastRatio(H.ensureContrast(lights[id], '#ffffff', 4.5), '#ffffff').toFixed(2)).join(', ') : ids.map((id) => id + ' ' + H.contrastRatio(H.ensureContrast(lights[id], '#ffffff', 4.5), '#ffffff').toFixed(2)).join(', ')
+      )
+      check(
+        'U31：已是深色的角色不被改动（大肥鱼/嘎啦嘛原值直接达标，观感不变）',
+        H.ensureContrast('#203170', '#ffffff', 4.5) === '#203170' && H.ensureContrast('#3d4460', '#ffffff', 4.5) === '#3d4460'
+      )
+      check(
+        'U31：勾选对勾按填充色明暗二选（浅填充上给黑勾，深填充上给白勾）',
+        H.readableOn('#ad81ff') === '#000000' && H.readableOn('#203170') === '#ffffff' && H.readableOn('#d97757') === '#000000'
+      )
+      check(
+        'U31：派生幂等（对已达标的值再算一次结果不变）',
+        H.ensureContrast(H.ensureContrast('#ad81ff', '#ffffff', 4.5), '#ffffff', 4.5) === H.ensureContrast('#ad81ff', '#ffffff', 4.5)
+      )
+    }
+    // 接线钉：正文取派生值、装饰仍取原色、对勾取二选色
+    check(
+      'U31：CSS 接线（正文取 --zcw-role-ink-text、装饰仍取 --zcw-role-ink、对勾取 --zcw-check-mark）',
+      widgetSrc.indexOf('--zcw-ink:var(--zcw-role-ink-text') !== -1 &&
+        widgetSrc.indexOf('--zcw-accent:var(--zcw-role-ink)') !== -1 &&
+        widgetSrc.indexOf('border:solid var(--zcw-check-mark') !== -1,
+      ''
+    )
+  }
+
+  // UI 审查 U32/U33/U35/U36：四条纯 CSS/创建点的改动，按源码钉住
+  {
+    const widgetSrc = fs.readFileSync(path.join(PLUGIN_ROOT, 'lib', 'widget.js'), 'utf8')
+    check(
+      'U32：按钮有禁用态（禁用与可用不再外观一致），且 hover 排除禁用',
+      /\.zcwv-sound:disabled,\.zcwv-role-mini:disabled/.test(widgetSrc) &&
+        /\.zcwv-sound:hover:not\(:disabled\)/.test(widgetSrc) &&
+        /\.zcwv-role-mini:hover:not\(:disabled\)/.test(widgetSrc),
+      ''
+    )
+    check(
+      'U33：流光动画纳入 prefers-reduced-motion（名单里显式点名，不靠全局 !important）',
+      /@media \(prefers-reduced-motion:reduce\)\{[\s\S]*?\.zcwv-flow\{animation:none !important\}\}/.test(widgetSrc),
+      ''
+    )
+    check(
+      'U35：菜单里的更新状态小字限宽省略（不再把菜单撑宽），并有 tooltip 兜底',
+      /\.zcwv-update-state\{[^}]*max-width:76px[^}]*text-overflow:ellipsis/.test(widgetSrc) &&
+        /updateStatusEl\.title = lbl/.test(widgetSrc),
+      ''
+    )
+    check(
+      'U36：文本输入抽了公共 .zcwv-input 类，三处创建点都已挂上',
+      /\.zcwv-input\{/.test(widgetSrc) &&
+        /el\('textarea', 'zcwv-input zcwv-textarea'\)/.test(widgetSrc) &&
+        /el\('input', 'zcwv-input zcwv-bq-cin'\)/.test(widgetSrc) &&
+        /el\('input', 'zcwv-input zcwv-inkhex'\)/.test(widgetSrc),
+      ''
+    )
+    check(
+      'P3-1：调色板拖动只改内存预览（松手/色相落定才落盘），不再逐帧 PUT',
+      /function setInkOverride\(id, part, hex, opts\)/.test(widgetSrc) &&
+        /setInkOverride\(role\.id, st\.part, hex, \{ persist: !!persist \}\)/.test(widgetSrc) &&
+        /saveConfig\(\) \/\/ 拖动期间只改内存预览，松手才落盘（P3-1）/.test(widgetSrc),
+      ''
+    )
+    check(
+      'P3-4：按模型换角色有迟滞（连续两拍同一目标才切），但手动重开开关立即生效',
+      /var AUTO_ROLE_STREAK = 2/.test(widgetSrc) &&
+        /function maybeAutoRole\(immediate\)/.test(widgetSrc) &&
+        /maybeAutoRole\(true\)/.test(widgetSrc) &&
+        /if \(!immediate && autoRoleStreak < AUTO_ROLE_STREAK\) return/.test(widgetSrc),
+      ''
+    )
+  }
+
   // 钩子接线契约：只挂 SessionStart + 两个低频事件。PreToolUse/PostToolUse 每次
   // 工具调用都要起一个 node（钩子内联执行），会给用户每次调用都加延迟——这条断言
   // 就是把这个取舍钉住，避免以后「顺手」把工具事件加回来。

@@ -1417,6 +1417,52 @@ try {
     "(function(){var ns=document.querySelectorAll('.zcwv-text .zcwv-flow');for(var i=0;i<ns.length;i++){if(/\\d{2}:\\d{2}:\\d{2}/.test(ns[i].textContent))return ns[i].textContent}return null})()"
   )
   check('峰谷倒计时逐秒走字（1.3s 后读数变化，原地改写）', !!cd1 && !!cd2 && cd1 !== cd2, JSON.stringify({ t1: cd1, t2: cd2 }))
+  // ⑪b2 U33：流光必须在「减少动态效果」下停住（原实现只靠全局 !important 名单，
+  // 而那条名单没点名 .zcwv-flow，等于开着系统设置也照跑 2.6s 循环横扫）。
+  // 用 CDP 真开一次媒体模拟，按计算样式断言，而不是只看选择器写没写。
+  {
+    const flowAnimBefore = await cdp.eval(
+      "(function(){var n=document.querySelector('.zcwv-text .zcwv-flow');if(!n)return null;" +
+        "var cs=getComputedStyle(n);return JSON.stringify({name:cs.animationName,dur:cs.animationDuration})})()"
+    )
+    await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
+    await new Promise((r) => setTimeout(r, 300))
+    const flowAnimAfter = await cdp.eval(
+      "(function(){var n=document.querySelector('.zcwv-text .zcwv-flow');if(!n)return null;" +
+        "var cs=getComputedStyle(n);return JSON.stringify({name:cs.animationName,dur:cs.animationDuration," +
+        "bg:cs.backgroundImage})})()"
+    )
+    await cdp.send('Emulation.setEmulatedMedia', { features: [] })
+    await new Promise((r) => setTimeout(r, 200))
+    const flowAnimBack = await cdp.eval(
+      "(function(){var n=document.querySelector('.zcwv-text .zcwv-flow');if(!n)return null;" +
+        "return getComputedStyle(n).animationName})()"
+    )
+    const parsedBefore = (() => {
+      try {
+        return JSON.parse(flowAnimBefore)
+      } catch (err) {
+        return null
+      }
+    })()
+    const parsedAfter = (() => {
+      try {
+        return JSON.parse(flowAnimAfter)
+      } catch (err) {
+        return null
+      }
+    })()
+    check(
+      'U33：开启「减少动态效果」后流光停止（animation:none），语义渐变仍在，关掉后恢复',
+      !!parsedBefore &&
+        parsedBefore.name === 'zcwvFlow' &&
+        !!parsedAfter &&
+        parsedAfter.name === 'none' &&
+        /gradient/.test(String(parsedAfter.bg)) &&
+        flowAnimBack === 'zcwvFlow',
+      JSON.stringify({ before: parsedBefore, reduced: parsedAfter, back: flowAnimBack })
+    )
+  }
   // ⑪c 图挂降级：gif error 置 gifFailed 后，纯图步（r=0.99 确定性命中权重 5 的
   // 图片变体）降级成一句备胎文案，不再渲染破图
   await cdp.eval(
@@ -1929,8 +1975,19 @@ try {
   const sndState = await (await fetch('http://127.0.0.1:' + PORT + '/whale/size.json')).json()
   check('音效选择写入 widget-state（选中导入集）', sndState.soundSet === sndUp.id, JSON.stringify({ soundSet: sndState.soundSet }))
   await cdp.send('Page.reload')
-  await new Promise((r) => setTimeout(r, 3000))
-  const sndImported = JSON.parse((await pollEval(cdp, SND_PROBE, 8000)) || 'null')
+  // 等到触发器真的跟上选中项（不能只等固定时长：重载后页面可能已经画出下拉但还没
+  // 应用状态，此时读到的是默认项 'duck'——实测偶发过一次假失败）
+  const sndImported = JSON.parse(
+    (await pollEval(
+      cdp,
+      "(function(){var ss=document.querySelectorAll('select'),hit=null;for(var i=0;i<ss.length;i++){" +
+        "var vals=[];for(var j=0;j<ss[i].options.length;j++){vals.push(ss[i].options[j].value)}" +
+        "if(vals.indexOf('duck')!==-1){hit=ss[i];break}}" +
+        "if(!hit||hit.value!==" + JSON.stringify(sndUp.id) + ")return null;" +
+        "return JSON.stringify({value:hit.value})})()",
+      15000
+    )) || 'null'
+  )
   check(
     '音效库：选中导入集生效（触发器跟随选中项）',
     !!sndImported && sndImported.value === sndUp.id,
@@ -1965,6 +2022,9 @@ try {
           "rangeAppearance:rs.length?getComputedStyle(rs[0]).appearance:null," +
           "rangeAccent:rs.length?getComputedStyle(rs[0]).accentColor:null," +
           "stroke:q('.zcwv-bubble .zcwv-bshape','stroke')," +
+          // U31：正文色走派生变体（--zcw-role-ink-text），装饰件走角色原色
+          "inkText:(getComputedStyle(document.documentElement).getPropertyValue('--zcw-role-ink-text')||'').trim()," +
+          "checkMark:(getComputedStyle(document.documentElement).getPropertyValue('--zcw-check-mark')||'').trim()," +
           "dark:document.documentElement.classList.contains('zcwv-theme-dark')})})()"
       )
     )
@@ -1988,14 +2048,39 @@ try {
       body: JSON.stringify({ scale: 1.5, theme: theme }),
     })
     await cdp.send('Page.reload')
-    await new Promise((r) => setTimeout(r, 3000))
+    // 固定等 3 秒偶发不够（重载 + 状态拉取 + 应用主题排队时读到上一档，实测飘过一次），
+    // 改成轮询 DOM 直到主题真的切过来
+    const wantDark = theme === 'dark'
+    const deadline = Date.now() + 12000
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 300))
+      let got = null
+      try {
+        got = JSON.parse(
+          await cdp.eval(
+            "(function(){try{return JSON.stringify({dark:document.documentElement.classList.contains('zcwv-theme-dark')})}catch(e){return '{}'}})()"
+          )
+        )
+      } catch (err) {
+        got = null
+      }
+      if (got && got.dark === wantDark) break
+      if (Date.now() > deadline) break
+    }
   }
   await setThemeAndReload('light')
   const inkDefault = await readRoleInk()
   const pickedXiaoke = await pickRoleByName('小克')
   const inkXiaoke = await readRoleInk()
+  const rgbOf = (hex) => {
+    const h = String(hex || '').replace('#', '')
+    return h.length === 6 ? 'rgb(' + [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16)).join(', ') + ')' : null
+  }
+  // U31：正文用派生色、装饰用原色。两者必须不同（小克 #d97757 只有 3.12:1，
+  // 派生后 ≥4.5:1），但都随角色走、都与默认角色不同
+  const derivedXiaoke = rgbOf(inkXiaoke.inkText)
   check(
-    '角色配色跟到整套浅色界面（菜单 / 二级页面 / 文本框 / 下拉 / 拖动条；与气泡描边同源）',
+    '角色配色跟到整套浅色界面（正文走派生达标色、装饰件走角色原色）',
     pickedXiaoke === 'ok' &&
       !!inkXiaoke &&
       inkXiaoke.dark === false &&
@@ -2004,23 +2089,29 @@ try {
       inkXiaoke.rolesBorder !== inkDefault.rolesBorder &&
       inkXiaoke.rowColor !== inkDefault.rowColor &&
       inkXiaoke.bookRow !== inkDefault.bookRow &&
-      // 与气泡描边同源（同一份角色浅色档色值）
-      inkXiaoke.rowColor === inkXiaoke.stroke &&
+      // 装饰件与气泡描边同源（角色浅色原值）
       inkXiaoke.barBg === inkXiaoke.stroke &&
-      inkXiaoke.bookRow === inkXiaoke.stroke &&
-      inkXiaoke.numColor === inkXiaoke.stroke &&
       inkXiaoke.checkAccent === inkXiaoke.stroke &&
       inkXiaoke.rangeAccent === inkXiaoke.stroke &&
+      // U31：正文（菜单行 / 记账行 / 文本框 / 次级文字）改用派生达标色，
+      // 不再等于原色，但仍带角色色相
+      !!derivedXiaoke &&
+      inkXiaoke.rowColor === derivedXiaoke &&
+      inkXiaoke.bookRow === derivedXiaoke &&
+      inkXiaoke.numColor === derivedXiaoke &&
+      derivedXiaoke !== inkXiaoke.stroke &&
       // 次级文字（用量记录的对账/日志行、下拉表头…）也跟色
       !!inkXiaoke.dimColor &&
       inkXiaoke.dimColor !== inkDefault.dimColor &&
+      // 勾选对勾按填充明暗二选：小克是浅填充 → 给黑勾（U31）
+      inkXiaoke.checkMark === '#000000' &&
       // 复选框浅色档自绘：勾选态与未勾选态同为 1px 描边（原生勾选态偏重）
       inkXiaoke.checkAppearance === 'none' &&
       inkXiaoke.checkBorderW === '1px' &&
       inkXiaoke.checkCheckedBorderW === '1px' &&
       // 拖动条浅色档必须自绘：原生空槽会按 accent 明度翻色（小克/kimi 变深灰"黑底"）
       inkXiaoke.rangeAppearance === 'none',
-    JSON.stringify({ picked: pickedXiaoke, def: inkDefault, xiaoke: inkXiaoke })
+    JSON.stringify({ picked: pickedXiaoke, derived: derivedXiaoke, def: inkDefault, xiaoke: inkXiaoke })
   )
   await setThemeAndReload('dark')
   const darkXiaoke = await readRoleInk()
@@ -2204,7 +2295,7 @@ try {
       "(function(){var rows=document.querySelectorAll('.zcwv-menu-row');var out={auto:null,hook:null};" +
         "for(var i=0;i<rows.length;i++){var t=rows[i].textContent;" +
         "if(t.indexOf('\\u6309\\u6a21\\u578b\\u6362\\u89d2\\u8272')!==-1){var cb=rows[i].querySelector('.zcwv-check');out.auto=cb?cb.checked:null}" +
-        "if(t.indexOf('\\u94a9\\u5b50')!==-1){var st=rows[i].querySelector('.zcwv-update-state'),cb2=rows[i].querySelector('.zcwv-check');" +
+        "if(t.indexOf('\\u94a9\\u5b50')!==-1){var st=rows[i].querySelector('.zcwv-hook-state,.zcwv-update-state'),cb2=rows[i].querySelector('.zcwv-check');" +
         "out.hook={state:st?st.textContent:null,ask:cb2?cb2.checked:null,hasLabel:t.indexOf('\\u7b49\\u786e\\u8ba4\\u63d0\\u9192')!==-1}}}" +
         'return JSON.stringify(out)})()'
     )
@@ -2264,12 +2355,16 @@ try {
           "return JSON.stringify({model:String(window.__model),stub:!!window.__stubInstalled,auto:q('.zcwv-role-name'),switchOn:sw})}catch(e){return JSON.stringify({err:String(e)})}})()"
       )
     )
+  // 迟滞（P3-4）：同一目标要连续两拍才切，而模型轮询间隔是 3 秒 → 一次模型族变化
+  // 最迟约 6 秒后才生效。留 7 秒，并把「不该换人」的负向用例也拉到同一时长，
+  // 免得断言因为窗口太短而恒真。
+  const AUTO_ROLE_SETTLE_MS = 7000
   await cdp.eval("window.__model='zai-org/GLM-5.3'")
-  await new Promise((r) => setTimeout(r, 3600))
+  await new Promise((r) => setTimeout(r, AUTO_ROLE_SETTLE_MS))
   const afterGlm = await roleNow()
   const snapGlm = await snap()
   await cdp.eval("window.__model='cmdgo-bridge/moonshotai/Kimi-K3'")
-  await new Promise((r) => setTimeout(r, 3600))
+  await new Promise((r) => setTimeout(r, AUTO_ROLE_SETTLE_MS))
   const afterKimi = await roleNow()
   check(
     '按模型换角色：模型族切换 → 形象跟着换（GLM / Kimi；缺失的角色不换）',
@@ -2297,7 +2392,7 @@ try {
     )
   )
   await cdp.eval("window.__model='deepseek/deepseek-flash'")
-  await new Promise((r) => setTimeout(r, 3600))
+  await new Promise((r) => setTimeout(r, AUTO_ROLE_SETTLE_MS))
   const afterManual = await roleNow()
   check(
     '手动选角色后「按模型换角色」自动关闭，且模型再变也不跟随（尊重手动选择）',
@@ -2322,7 +2417,7 @@ try {
   const hookLine = await pollEval(
     cdp,
     "(function(){var es=document.querySelectorAll('.zcwv-menu-row');for(var i=0;i<es.length;i++){" +
-      "if(es[i].textContent.indexOf('\\u94a9\\u5b50')!==-1){var st=es[i].querySelector('.zcwv-update-state');" +
+      "if(es[i].textContent.indexOf('\\u94a9\\u5b50')!==-1){var st=es[i].querySelector('.zcwv-hook-state,.zcwv-update-state');" +
       "return st&&st.textContent.indexOf('UserPromptSubmit')===0?st.textContent:null}}return null})()",
     8000
   )
