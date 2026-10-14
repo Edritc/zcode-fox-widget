@@ -1,11 +1,10 @@
 // 前端冒烟：headless Edge/Chrome + CDP，加载真实挂件页面跑两条前端链路。
 // widget.js 是 IIFE、内部函数拿不到，所以全部走真实交互：
-//   1. 套餐轮次气泡（Start plan 等订阅配额）显示「本轮消耗余额: x%」——金额是
-//      虚构的；混合轮次 hint 补「另耗 ¥」；超宽文字自适应缩字/换行不顶出色泡
-//      ——回归按量价目套在订阅配额上算钱、长文案顶破气泡两个缺陷
+//   1. 每轮消耗气泡（WorkBuddy 主口径 = 订阅积分）显示「上一轮消耗: N 积分」——
+//      主显示是今日积分；超宽文案自适应缩字/换行不顶出色泡
 //   2. 菜单「显示」选择（displayMode）改动要持久化，刷新后保持
 //      ——回归 writeWidgetState 白名单丢字段的缺陷
-// 服务端与假库同 selftest（临时 ZCODE_HOME），浏览器进程用完即杀。
+// 服务端与假库同 selftest（临时 CODEBUDDY_HOME），浏览器进程用完即杀。
 //
 //   node tools/smoke-ui.mjs
 //
@@ -37,82 +36,83 @@ if (!browser) {
   process.exit(0)
 }
 
-// ---------- 临时环境 + 假库（形状同 selftest） ----------
+// ---------- 临时环境 + 假库（形状同 selftest：WorkBuddy workbuddy.db + transcript） ----------
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-smoke-'))
-const dbDir = path.join(tmpHome, 'cli', 'db')
-const dataDir = path.join(tmpHome, 'whale')
-fs.mkdirSync(dbDir, { recursive: true })
+const dataDir = path.join(tmpHome, 'plugin-data')
 fs.mkdirSync(dataDir, { recursive: true })
+process.env.CODEBUDDY_HOME = tmpHome
+process.env.FOX_WIDGET_DATA_DIR = dataDir
 const PORT = 39600 + Math.floor(Math.random() * 300)
 fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({ port: PORT }), 'utf8')
 
-// ZCode 自己的用户配置：ui.theme = zai-light。挂件主题里的「跟随 ZCode」读它，
-// 测试里把系统偏好模拟成深色来验证挂件跟的是 ZCode 而不是操作系统。
-fs.mkdirSync(path.join(tmpHome, 'cli'), { recursive: true })
+// 宿主 preferences：theme = light。挂件主题里的「跟随 WorkBuddy」读它，
+// 测试里把系统偏好模拟成深色来验证挂件跟的是 WorkBuddy 而不是操作系统。
+fs.mkdirSync(path.join(tmpHome, 'storage', 'user-1-personal', 'global'), { recursive: true })
 fs.writeFileSync(
-  path.join(tmpHome, 'cli', 'config.json'),
-  JSON.stringify({ ui: { locale: 'zh-CN', theme: 'zai-light' } }, null, 2),
+  path.join(tmpHome, 'storage', 'user-1-personal', 'global', 'preferences.json'),
+  JSON.stringify({ theme: 'light' }),
   'utf8'
 )
 
-// Plan 配额 fixture：给 glm-4.7-flash 一个 100 万的桶，120k tokens 轮次 → 12%
-const planLogDir = path.join(tmpHome, '.zcode', 'v2', 'logs')
-fs.mkdirSync(planLogDir, { recursive: true })
-function todayKey(d = new Date()) {
-  const p = (n) => String(n).padStart(2, '0')
-  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
-}
-const planFixture = {
-  balances: [
-    {
-      entitlement_id: 'ent-free',
-      show_name: 'GLM-4.7-Flash',
-      total_units: 1_000_000,
-      used_units: 0,
-      remaining_units: 1_000_000,
-      available_units: 1_000_000,
-      reserved_units: null,
-    },
-  ],
-  payload: { code: 0, data: { server_time: Math.floor(Date.now() / 1000), plans: [], balances: [] } },
-}
-fs.writeFileSync(
-  path.join(planLogDir, todayKey() + '.log'),
-  '[usage-stats] billing/balance 请求完成 ' + JSON.stringify(planFixture) + '\n',
-  'utf8'
-)
-
-const db = new DatabaseSync(path.join(dbDir, 'db.sqlite'))
+// WorkBuddy 会话库：sessions（当前会话/模型）+ session_usage（上下文 + 每请求积分）
+const db = new DatabaseSync(path.join(tmpHome, 'workbuddy.db'))
 db.exec(`
-  CREATE TABLE turn_usage (
-    session_id text not null, turn_id text not null, status text not null,
-    started_at integer not null, completed_at integer,
-    input_tokens integer not null default 0, output_tokens integer not null default 0,
-    reasoning_tokens integer not null default 0, cache_creation_input_tokens integer not null default 0,
-    cache_read_input_tokens integer not null default 0, computed_total_tokens integer not null default 0,
-    primary key(session_id, turn_id)
+  CREATE TABLE sessions (
+    id text primary key, cwd text, model text, title text, custom_title text,
+    updated_at integer, last_activity_at integer, is_background_automation integer default 0, deleted_at integer
   );
-  CREATE TABLE model_usage (
-    id text primary key, session_id text not null, turn_id text, model_id text not null,
-    provider_id text not null default '', status text not null default 'completed',
-    attempt_index integer not null default 0, started_at integer not null,
-    input_tokens integer not null default 0, output_tokens integer not null default 0,
-    reasoning_tokens integer not null default 0, cache_creation_input_tokens integer not null default 0,
-    cache_read_input_tokens integer not null default 0, computed_total_tokens integer not null default 0
+  CREATE TABLE session_usage (
+    session_id text primary key, used integer, size integer, updated_at integer, credit_json text
   );
 `)
-function insertTurn(turnId, model, providerId, input, output) {
-  const now = Date.now()
+const SESSION = 'sess_smoke'
+const transcriptFile = path.join(tmpHome, 'projects', 'smoke', SESSION + '.jsonl')
+fs.mkdirSync(path.dirname(transcriptFile), { recursive: true })
+function writeSession(model) {
+  const t = Date.now()
   db.prepare(
-    `INSERT INTO turn_usage (session_id, turn_id, status, started_at, completed_at, input_tokens, output_tokens, computed_total_tokens)
-     VALUES ('sess_smoke', ?, 'completed', ?, ?, ?, ?, ?)`
-  ).run(turnId, now - 1000, now, input, output, input + output)
-  db.prepare(
-    `INSERT INTO model_usage (id, session_id, turn_id, model_id, provider_id, started_at, input_tokens, output_tokens, computed_total_tokens)
-     VALUES (?, 'sess_smoke', ?, ?, ?, ?, ?, ?, ?)`
-  ).run('mu-' + turnId, turnId, model, providerId, now - 1000, input, output, input + output)
+    'INSERT OR REPLACE INTO sessions (id, cwd, model, title, custom_title, updated_at, last_activity_at, is_background_automation, deleted_at) VALUES (?,?,?,?,?,?,?,0,NULL)'
+  ).run(SESSION, 'C:/work', model, '冒烟会话', null, t, t)
 }
-insertTurn('turn_0', 'GLM-4.7-Flash', 'account:zai-start-plan', 10, 10) // 历史轮次：服务启动只对齐
+const hostCredits = {}
+function writeUsage(used, size) {
+  const t = Date.now()
+  db.prepare('INSERT OR REPLACE INTO session_usage (session_id, used, size, updated_at, credit_json) VALUES (?,?,?,?,?)').run(
+    SESSION,
+    used,
+    size,
+    t,
+    JSON.stringify(hostCredits)
+  )
+}
+// 一轮 = 一条模型调用（同一 conversationRequestId）。credit 写进宿主 credit_json，
+// rawUsage 用 WorkBuddy 口径（prompt_tokens 含缓存命中、completion 含思考）。
+function appendTurn(turnId, model, input, output, credit) {
+  const rawUsage = {
+    prompt_tokens: input,
+    completion_tokens: output,
+    total_tokens: input + output,
+    prompt_cache_hit_tokens: 0,
+    prompt_cache_miss_tokens: input,
+    prompt_cache_write_tokens: 0,
+    completion_thinking_tokens: 0,
+    credit,
+  }
+  const line = JSON.stringify({
+    timestamp: Date.now(),
+    type: 'function_call',
+    providerData: { conversationRequestId: turnId, model, requestModelId: model, requestModelName: model, rawUsage },
+  })
+  fs.appendFileSync(transcriptFile, line + '\n')
+}
+function insertTurn(turnId, model, input, output, credit) {
+  appendTurn(turnId, model, input, output, credit)
+  hostCredits[turnId] = credit
+  writeUsage(50_000, 200_000)
+}
+writeSession('glm-5.3')
+writeUsage(50_000, 200_000)
+insertTurn('turn_0', 'glm-5.3', 10, 10, 0) // 历史轮次：服务启动只对齐
 
 // ---------- CDP 小客户端（Node 内置 WebSocket，无第三方依赖） ----------
 class Cdp {
@@ -170,7 +170,7 @@ async function waitReady(port, deadlineMs) {
   while (Date.now() < deadline) {
     try {
       const h = await (await fetch('http://127.0.0.1:' + port + '/whale/health', { signal: AbortSignal.timeout(1500) })).json()
-      if (h && h.app === 'zcode-fox-widget') return h
+      if (h && h.app === 'fox-widget') return h
     } catch (err) {}
     await new Promise((r) => setTimeout(r, 200))
   }
@@ -190,8 +190,8 @@ const server = spawn(process.execPath, [path.join(PLUGIN_ROOT, 'lib', 'server.mj
   cwd: PLUGIN_ROOT,
   env: {
     ...process.env,
-    ZCODE_HOME: tmpHome,
-    ZCODE_DATA_BASE_DIR: tmpHome,
+    CODEBUDDY_HOME: tmpHome,
+    FOX_WIDGET_DATA_DIR: dataDir,
     // CommandCode 额度读取隔离：指向空目录，绝不读真实反代凭据、绝不真出网
     CMDGO_DIR: path.join(tmpHome, 'cmdgo-empty'),
     // 版本自检会向镜像发真实请求：冒烟环境关掉，更新面板改用 fetch 桩驱动
@@ -263,93 +263,78 @@ try {
   )
   check('挂件前端完成初始化', !!booted)
 
-  // ① 套餐轮次气泡（v1.4.0 余额口径）：GLM-4.7-Flash 免费（billable=false）+
-  //    account:zai-start-plan（套餐行），120k/1M 配额 = 12%——主数字显示「消耗
-  //    余额百分比」而不是虚构金额，也不再是旧的 tokens+占配额组合
-  insertTurn('turn_free', 'GLM-4.7-Flash', 'account:zai-start-plan', 100_000, 20_000)
+  // ① 每轮消耗气泡（WorkBuddy 主口径 = 订阅积分）：一轮 credit=12 → 标题
+  //    「上一轮消耗:」，主数字「12.00 积分」，小字补调用次数 / 等价金额 / 上下文
+  insertTurn('turn_1', 'glm-5.3', 100_000, 20_000, 12)
   const cost1 = JSON.parse(
     (await pollEval(
       cdp,
       "(function(){var l=document.querySelector('.zcwv-label'),a=document.querySelector('.zcwv-amount'),h=document.querySelector('.zcwv-hint');" +
-        "if(!l||!a||l.textContent!=='本轮消耗余额:')return null;" +
+        "if(!l||!a||l.textContent!=='上一轮消耗:')return null;" +
         "return JSON.stringify({amount:a.textContent,hint:h&&h.style.display!=='none'?h.textContent:''})})()",
-      15000
+      20000
     )) || 'null'
   )
   check(
-    '套餐轮次气泡显示「本轮消耗余额: 12%」（不是虚构金额）',
-    !!cost1 && cost1.amount === '12%' && String(cost1.hint).indexOf('消耗 12.0 万 tokens') !== -1,
+    '每轮消耗气泡显示「上一轮消耗: 12.00 积分」+ 小字（调用次数/上下文）',
+    !!cost1 && cost1.amount === '12.00 积分' && String(cost1.hint).indexOf('次调用') !== -1 && String(cost1.hint).indexOf('上下文 25%') !== -1,
     JSON.stringify(cost1)
   )
 
-  // ①b 智能跟随主显示：selection 缺失时回落 model_usage（account:zai-start-plan
-  // → Plan 配额口径），主数字是剩余百分比而不是 DeepSeek 余额
-  // （必须赶在混合轮次插入前跑：turn_mix 的最后一行是 DeepSeek，会把回落源带偏）
-  const planView = await pollEval(
+  // ①b 智能跟随主显示：auto 模式下 WorkBuddy 恒定走 credits 源，
+  //     主数字 = 今日积分（宿主 credit 合计），不再是 Plan 配额百分比
+  const creditView = await pollEval(
     cdp,
     "(function(){var l=document.querySelector('.zcwv-label'),a=document.querySelector('.zcwv-amount');" +
-      "return l&&a&&l.textContent==='GLM Plan 配额'?(l.textContent+' | '+a.textContent):null})()",
-    15000
+      "if(!l||!a||l.textContent!=='今日积分')return null;" +
+      "var t=a.textContent;if(!t||t==='…'||t==='--')return null;" +
+      "return l.textContent+' | '+t})()",
+    20000
   )
   check(
-    'auto 跟随回落 model_usage：主显示切到 GLM Plan 配额（百分比主数字）',
-    typeof planView === 'string' && planView.indexOf('%') !== -1,
-    'view=' + JSON.stringify(planView)
+    'auto 跟随：主显示为「今日积分」（订阅积分口径，主数字是积分）',
+    typeof creditView === 'string' && /^\d/.test(String(creditView).split(' | ')[1] || ''),
+    'view=' + JSON.stringify(creditView)
   )
 
-  // ①-2 混合轮次：套餐行 + 付费行。主数字仍是配额口径，hint 用「另耗 ¥」补上
-  //    非套餐行的真实开销；hint 文字长，顺带验证气泡文字自适应（缩字/换行后
-  //    不超出安全行宽）
-  db.prepare(
-    `INSERT INTO turn_usage (session_id, turn_id, status, started_at, completed_at, input_tokens, output_tokens, computed_total_tokens)
-     VALUES ('sess_smoke', 'turn_mix', 'completed', ?, ?, 490000, 10000, 500000)`
-  ).run(Date.now() - 1000, Date.now())
-  const mixRows = [
-    ['mu-mix-glm', 'GLM-4.7-Flash', 'account:zai-start-plan', 400_000, 0, 400_000],
-    ['mu-mix-ds', 'deepseek-flash', 'deepseek-test', 90_000, 10_000, 100_000],
-  ]
-  for (const [id, model, providerId, input, output, total] of mixRows) {
-    db.prepare(
-      `INSERT INTO model_usage (id, session_id, turn_id, model_id, provider_id, started_at, input_tokens, output_tokens, computed_total_tokens)
-       VALUES (?, 'sess_smoke', 'turn_mix', ?, ?, ?, ?, ?, ?)`
-    ).run(id, model, providerId, Date.now() - 1000, input, output, total)
-  }
+  // ①-2 再插一轮（credit=40）：气泡主数字跟进新轮次，且文字自适应不超出安全行宽
+  insertTurn('turn_mix', 'deepseek-v4.1-flash', 90_000, 10_000, 40)
   const cost2 = JSON.parse(
     (await pollEval(
       cdp,
       "(function(){var l=document.querySelector('.zcwv-label'),a=document.querySelector('.zcwv-amount'),h=document.querySelector('.zcwv-hint');" +
-        "if(!l||!a||l.textContent!=='本轮消耗余额:'||a.textContent!=='40%')return null;" +
+        "if(!l||!a||l.textContent!=='上一轮消耗:'||a.textContent!=='40.00 积分')return null;" +
         'var b=document.querySelector(\'.zcwv-bubble\').getBoundingClientRect();' +
         'var avail=560*(b.width/1026),r=document.createRange();r.selectNodeContents(h);' +
         'return JSON.stringify({amount:a.textContent,hint:h.style.display!==\'none\'?h.textContent:\'\',' +
         'w:Math.round(r.getBoundingClientRect().width),avail:Math.round(avail),' +
         'fs:h.style.fontSize,ws:h.style.whiteSpace})})()',
-      15000
+      20000
     )) || 'null'
   )
   check(
-    '混合轮次：配额口径主数字 + hint 补「另耗 ¥」真实开销',
-    !!cost2 && cost2.amount === '40%' && String(cost2.hint).indexOf('消耗 40.0 万 tokens') !== -1 && String(cost2.hint).indexOf('另耗 ¥') !== -1,
+    '新一轮：气泡主数字跟进（40.00 积分）+ 小字含调用次数',
+    !!cost2 && cost2.amount === '40.00 积分' && String(cost2.hint).indexOf('次调用') !== -1,
     JSON.stringify(cost2)
   )
   check(
-    '气泡文字自适应：超宽 hint 缩字/换行后不超出安全行宽',
+    '气泡文字自适应：小字缩字/换行后不超出安全行宽',
     !!cost2 && Number(cost2.w) <= Number(cost2.avail) + 1 && (cost2.fs !== '' || cost2.ws === 'normal'),
     JSON.stringify(cost2)
   )
 
-  // ①-3 无价目且非套餐的轮次（未知网关）：tokens 口径，绝不显示虚构金额
-  insertTurn('turn_unk', 'zz-unknown-model', 'mystery-gateway', 3000, 2000)
+  // ①-3 credit=0 的轮次（宿主未扣费）：billable=false → 退 tokens 口径，不虚报金额
+  insertTurn('turn_unk', 'zz-unknown-model', 3000, 2000, 0)
   const cost3 = JSON.parse(
     (await pollEval(
       cdp,
       "(function(){var l=document.querySelector('.zcwv-label'),a=document.querySelector('.zcwv-amount');" +
         "if(!l||!a||l.textContent!=='本轮 tokens:')return null;" +
         "return JSON.stringify({amount:a.textContent})})()",
-      15000
+      20000
     )) || 'null'
   )
-  check('无价目非套餐轮次显示 tokens 口径', !!cost3 && cost3.amount === '5,000', JSON.stringify(cost3))
+  check('credit=0 的轮次退 tokens 口径（不虚报 0 积分）', !!cost3 && cost3.amount === '5,000', JSON.stringify(cost3))
 
   // ② displayMode：模拟菜单选择 → size.json 落盘 → 刷新后保持
   const picked = await cdp.eval(
@@ -388,7 +373,7 @@ try {
   )
   check('点击菜单按钮打开设置菜单', !!menuOpen)
 
-  // ④ 按钮配色跟随 ZCode 深色主题（中性表面，不是旧版亮蓝）。
+  // ④ 按钮配色跟随 WorkBuddy 深色主题（中性表面，不是旧版亮蓝）。
   // applyConfig 只在页面加载时跑，所以先落盘再统一刷新。
   await fetch('http://127.0.0.1:' + PORT + '/whale/size.json', {
     method: 'PUT',
@@ -561,7 +546,7 @@ try {
     JSON.stringify({ builtins: rolesAfterBuiltinDel.roles.filter((r) => r.builtin).map((r) => r.id), selected: rolesAfterBuiltinDel.selected, nw: imgAfterBuiltinDel })
   )
   // 复原：把 hiddenBuiltins 清掉（= README 写的找回方式），内置形象回来
-  const rolesIdxFile = path.join(tmpHome, 'whale', 'roles.json')
+  const rolesIdxFile = path.join(dataDir, 'roles.json')
   const rolesIdx = JSON.parse(fs.readFileSync(rolesIdxFile, 'utf8'))
   rolesIdx.hiddenBuiltins = []
   fs.writeFileSync(rolesIdxFile, JSON.stringify(rolesIdx, null, 2), 'utf8')
@@ -572,8 +557,8 @@ try {
     JSON.stringify(rolesRestored.roles.filter((r) => r.builtin).map((r) => r.id))
   )
 
-  // ⑧ 主题：三个选项（浅色模式/深色模式/跟随 ZCode）；「跟随 ZCode」跟的是
-  // ZCode 的主题（ui.theme），不是操作系统
+  // ⑧ 主题：三个选项（浅色模式/深色模式/跟随 WorkBuddy）；「跟随 WorkBuddy」
+  // 跟的是宿主的主题（preferences.theme），不是操作系统
   const themeOpts = JSON.parse(
     await cdp.eval(
       "(function(){var ss=document.querySelectorAll('select'),out=null;for(var i=0;i<ss.length;i++){var vals=[],texts=[];" +
@@ -582,14 +567,14 @@ try {
     )
   )
   check(
-    '主题下拉：浅色模式 / 深色模式 / 跟随 ZCode',
+    '主题下拉：浅色模式 / 深色模式 / 跟随 WorkBuddy',
     themeOpts &&
       themeOpts.vals.indexOf('light') !== -1 &&
       themeOpts.vals.indexOf('dark') !== -1 &&
       themeOpts.vals.indexOf('system') !== -1 &&
       themeOpts.texts.indexOf('浅色模式') !== -1 &&
       themeOpts.texts.indexOf('深色模式') !== -1 &&
-      themeOpts.texts.indexOf('跟随 ZCode') !== -1,
+      themeOpts.texts.indexOf('跟随 WorkBuddy') !== -1,
     JSON.stringify(themeOpts)
   )
   // 气泡配色随角色（浅色 + 深色两套）：未登记角色（用户导入的）回落到大肥鱼
@@ -637,8 +622,8 @@ try {
     !!inkDark && inkDark.dark === true && inkDark.stroke === wantInk.dark,
     JSON.stringify({ role: curRole, ink: inkDark })
   )
-  // 把系统偏好模拟成深色，而 fixture 里 ZCode 是 zai-light（浅色）：
-  // 页面必须仍是浅色 = 跟的是 ZCode 而不是系统
+  // 把系统偏好模拟成深色，而 fixture 里 WorkBuddy 主题是 light（浅色）：
+  // 页面必须仍是浅色 = 跟的是 WorkBuddy 而不是系统
   await cdp.send('Emulation.setEmulatedMedia', {
     features: [{ name: 'prefers-color-scheme', value: 'dark' }],
   })
@@ -656,7 +641,7 @@ try {
     )
   )
   check(
-    '主题「跟随 ZCode」跟 ZCode 主题（系统模拟深色、ZCode 浅色 → 页面仍浅色）',
+    '主题「跟随 WorkBuddy」跟宿主主题（系统模拟深色、WorkBuddy 浅色 → 页面仍浅色）',
     sysTheme.prefers === true && sysTheme.dark === false,
     JSON.stringify(sysTheme)
   )
@@ -1593,11 +1578,11 @@ try {
   )
   if (staleStub && staleStub.identifier) await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: staleStub.identifier })
 
-  // ⑮ 用量记录：今日模型排名可在「按金额 / 按 Token」之间切换（v1.6.0）。
-  // 先补一轮「小而贵」的模型，让两个榜的头部必然不同：GLM-4.7-Flash 是套餐
-  // （金额 0、token 很大）→ token 榜第一；deepseek-flash 按量计价（金额 > 0）
-  // → 金额榜第一。
-  insertTurn('turn_rank', 'deepseek-flash', 'deepseek-test', 2000, 1000)
+  // ⑮ 用量记录：今日模型排名可在「按金额（积分口径）/ 按 Token」之间切换。
+  // 先补两轮让两个榜的头部必然不同：qwen3-max 积分高、token 少 →
+  // 积分榜第一；kimi-k3 积分低、token 巨大 → token 榜第一。
+  insertTurn('turn_rank_amt', 'qwen3-max', 900, 100, 200)
+  insertTurn('turn_rank_tok', 'kimi-k3', 800_000, 100_000, 1)
   await cdp.send('Page.reload')
   await new Promise((r) => setTimeout(r, 3000))
   await cdp.eval(
@@ -1621,8 +1606,8 @@ try {
     'return JSON.stringify({label:label,first:first})})()'
   const rankAmount = JSON.parse((await pollEval(cdp, RANK_PROBE, 8000)) || 'null')
   check(
-    '用量记录：默认按金额排名（第一位是按量的 deepseek-flash）',
-    !!rankAmount && rankAmount.label === '按金额' && rankAmount.first.indexOf('deepseek-flash') !== -1,
+    '用量记录：默认按金额（积分）排名（第一位是积分最高的 qwen3-max）',
+    !!rankAmount && rankAmount.label === '按金额' && rankAmount.first.indexOf('qwen3-max') !== -1,
     JSON.stringify(rankAmount)
   )
   await cdp.eval(
@@ -1631,8 +1616,8 @@ try {
   )
   const rankTokens = JSON.parse((await pollEval(cdp, RANK_PROBE_TOKENS, 8000)) || 'null')
   check(
-    '用量记录：切到按 Token 排名（第一位变成 token 最大的套餐模型）',
-    !!rankTokens && rankTokens.label === '按 Token' && rankTokens.first.indexOf('GLM-4.7-Flash') !== -1,
+    '用量记录：切到按 Token 排名（第一位变成 token 最大的 kimi-k3）',
+    !!rankTokens && rankTokens.label === '按 Token' && rankTokens.first.indexOf('kimi-k3') !== -1,
     JSON.stringify(rankTokens)
   )
   check(
@@ -1640,23 +1625,19 @@ try {
     !!rankAmount && !!rankTokens && rankAmount.first !== rankTokens.first,
     JSON.stringify({ amount: rankAmount && rankAmount.first, tokens: rankTokens && rankTokens.first })
   )
-  // ⑮b 对账行（v1.7.0）：今日块里并排放「本机口径 ↔ 账号口径」，充值等调整
-  // 用菜单里的余额校正记一笔后两套账就对得上。fixture 里有 deepseek-flash 行，
-  // 本机口径必须是数字；账号口径在无 key 的冒烟环境里显示 --。
-  const reconView = await pollEval(
+  // ⑮b 用量记录主口径（WorkBuddy）：面板今日块标题为「今日积分」（订阅积分口径）。
+  // ZCode 的「本机 ¥ ↔ 账号」对账行在 WorkBuddy 已不适用（余额卡对账只在配了厂商
+  // key、且用可选余额卡时出现）。
+  const panelHead = await pollEval(
     cdp,
-    "(function(){var ds=document.querySelectorAll('.zcwv-panel .zcwv-dim');for(var i=0;i<ds.length;i++){" +
-      "if(ds[i].textContent.indexOf('对账')===0)return ds[i].textContent}return null})()",
+    "(function(){var ps=document.querySelectorAll('.zcwv-panel');for(var i=0;i<ps.length;i++){" +
+      "if(ps[i].textContent.indexOf('今日积分')!==-1)return ps[i].textContent.slice(0,120)}return null})()",
     8000
   )
   check(
-    '用量记录：对账行并排显示本机口径与账号口径',
-    !!reconView &&
-      reconView.indexOf('对账（DeepSeek）') === 0 &&
-      reconView.indexOf('本机 ¥') !== -1 &&
-      reconView.indexOf('账号') !== -1 &&
-      reconView.indexOf('本机 --') === -1,
-    reconView
+    '用量记录：面板今日块标题为「今日积分」（订阅积分口径，不再是「本机 ¥」对账）',
+    typeof panelHead === 'string' && panelHead.indexOf('今日积分') !== -1,
+    'head=' + JSON.stringify(panelHead)
   )
 
   await cdp.eval(
@@ -2364,6 +2345,11 @@ try {
   // 最迟约 6 秒后才生效。留 7 秒，并把「不该换人」的负向用例也拉到同一时长，
   // 免得断言因为窗口太短而恒真。
   const AUTO_ROLE_SETTLE_MS = 7000
+  // 先切回 deepseek-flash 并等迟滞，确认切到 whale（大肥鱼）——前面的用例手动选过角色，
+  // 这里从「当前模型」重新收敛，避免把断言写成对前面用例残留状态的隐式依赖
+  await cdp.eval("window.__model='deepseek/deepseek-flash'")
+  await new Promise((r) => setTimeout(r, AUTO_ROLE_SETTLE_MS))
+  const afterDs = await roleNow()
   await cdp.eval("window.__model='zai-org/GLM-5.3'")
   await new Promise((r) => setTimeout(r, AUTO_ROLE_SETTLE_MS))
   const afterGlm = await roleNow()
@@ -2372,10 +2358,10 @@ try {
   await new Promise((r) => setTimeout(r, AUTO_ROLE_SETTLE_MS))
   const afterKimi = await roleNow()
   check(
-    '按模型换角色：模型族切换 → 形象跟着换（GLM / Kimi；缺失的角色不换）',
-    beforeAuto === expectAfter('whale') && afterGlm === expectAfter('fox') && afterKimi === expectAfter('kimi') &&
+    '按模型换角色：模型族切换 → 形象跟着换（DeepSeek / GLM / Kimi；缺失的角色不换）',
+    afterDs === expectAfter('whale') && afterGlm === expectAfter('fox') && afterKimi === expectAfter('kimi') &&
       afterKimi === nameOf('kimi'),
-    JSON.stringify({ before: beforeAuto, glm: afterGlm, kimi: afterKimi, has: { whale: hasRole('whale'), fox: hasRole('fox'), kimi: hasRole('kimi') }, snap: snapGlm, pageErr: cdp.exceptions.slice(-2) })
+    JSON.stringify({ ds: afterDs, glm: afterGlm, kimi: afterKimi, has: { whale: hasRole('whale'), fox: hasRole('fox'), kimi: hasRole('kimi') }, snap: snapGlm, pageErr: cdp.exceptions.slice(-2) })
   )
   // 手动选角色 = 明确表态：开关自动关掉，之后模型再变也不跟随
   const manual = parseJsonSafe(
@@ -2447,7 +2433,7 @@ try {
       "return (b&&b.classList.contains('zcwv-bubble-open')&&l&&l.textContent.indexOf('\\u5728\\u7b49\\u4f60\\u786e\\u8ba4')!==-1)?l.textContent:null})()",
     9000
   )
-  check('等确认提醒：开启后 ZCode 弹权限确认 → 挂件弹一次提醒气泡', !!alertShown, JSON.stringify(alertShown))
+  check('等确认提醒：开启后宿主发通知 → 挂件弹一次提醒气泡', !!alertShown, JSON.stringify(alertShown))
   // 关掉气泡 → 同一事件时间戳再轮询一次 → 不应再弹（去重按 ts）
   await cdp.eval(
     "(function(){var b=document.querySelector('.zcwv-bubble');b.dispatchEvent(new MouseEvent('click',{bubbles:true}));return true})()"
