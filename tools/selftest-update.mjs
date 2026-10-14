@@ -28,15 +28,40 @@ function check(name, ok, detail) {
 const U = await import('../lib/update.mjs')
 const B = await import('../lib/balance.mjs')
 
-function fakeRes(body, status = 200) {
+function fakeRes(body, status = 200, headers = {}) {
   return {
     ok: status >= 200 && status < 300,
     status,
+    headers: { get: (k) => (headers[String(k).toLowerCase()] === undefined ? null : String(headers[String(k).toLowerCase()])) },
     text: async () => (typeof body === 'string' ? body : JSON.stringify(body)),
     json: async () => (typeof body === 'string' ? JSON.parse(body) : body),
     arrayBuffer: async () => {
       const b = Buffer.isBuffer(body) ? body : Buffer.from(String(body))
       return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)
+    },
+  }
+}
+
+// 流式响应桩：readBodyLimited 在有 res.body.getReader 时走流式分支
+function streamRes(chunks, status = 200, headers = {}) {
+  let i = 0
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: { get: (k) => (headers[String(k).toLowerCase()] === undefined ? null : String(headers[String(k).toLowerCase()])) },
+    body: {
+      getReader() {
+        return {
+          async read() {
+            if (i >= chunks.length) return { done: true, value: undefined }
+            return { done: false, value: new Uint8Array(chunks[i++]) }
+          },
+          async cancel() {
+            i = chunks.length
+          },
+          releaseLock() {},
+        }
+      },
     },
   }
 }
@@ -196,9 +221,18 @@ function mkRoot(name, entries) {
   const plain = mkRoot('plan-plain', { 'lib/old.js': 'old', 'lib/keep.js': 'same' })
   const plainPlan = U.planApply(plain, files, U.readOldFileList(plain, { manifest: null }))
   check('readOldFileList：非 git 目录整目录扫描，旧文件进入删除集', plainPlan.remove.includes('lib/old.js') && plainPlan.skip.includes('lib/keep.js'), JSON.stringify(plainPlan))
+
+  // 兜底清单（非 manifest）不得越出「新包顶层目录集合」删文件：git ls-files 给的是
+  // 当前 HEAD 的全部被跟踪文件，本地领先目标 tag 的提交若不设限会被连带删除
+  const localOnly = U.planApply(plain, files, { files: ['lib/old.js', 'scratch/local-only.js'], source: 'git' })
+  check(
+    'planApply：兜底清单只清理新包顶层目录内的文件（本地独有目录不误删）',
+    localOnly.remove.includes('lib/old.js') && !localOnly.remove.includes('scratch/local-only.js'),
+    JSON.stringify(localOnly.remove)
+  )
 }
 
-// ---------- 5. 应用到目录 + manifest ----------
+// ---------- 5. 应用到目录 + manifest（多 root 各记各的） ----------
 {
   const root = mkRoot('apply-root', { 'lib/old.js': 'old', 'lib/keep.js': 'same' })
   const files = new Map([
@@ -206,8 +240,7 @@ function mkRoot(name, entries) {
     ['lib/keep.js', Buffer.from('same')],
     ['lib/new.js', Buffer.from('brand new')],
   ])
-  const oldList = ['lib/old.js', 'lib/keep.js', '.zcode-plugin/plugin.json']
-  const results = U.applyUpdateFiles(files, '1.12.0', [root], { stamp: 'test-1' })
+  const results = await U.applyUpdateFiles(files, '1.12.0', [root], { stamp: 'test-1' })
   const after = (rel) => {
     try {
       return fs.readFileSync(path.join(root, rel), 'utf8')
@@ -221,13 +254,37 @@ function mkRoot(name, entries) {
     JSON.stringify(results[0])
   )
   check('applyUpdateFiles：包内版本号写进 manifest（供下次清理）', (() => {
-    const m = JSON.parse(fs.readFileSync(path.join(TMP, 'whale', 'update-files.json'), 'utf8'))
-    return m.version === '1.12.0' && m.files.includes('lib/new.js') && !m.files.includes('lib/old.js')
+    const m = U.readManifestFor(root)
+    return !!m && m.version === '1.12.0' && m.files.includes('lib/new.js') && !m.files.includes('lib/old.js')
   })())
   check('applyUpdateFiles：旧文件备份到 update/backup/', fs.existsSync(path.join(TMP, 'whale', 'update', 'backup', 'test-1', 'lib', 'old.js')))
   // 再跑一次：所有文件相同 → 不写不删
-  const second = U.applyUpdateFiles(files, '1.12.0', [root], { stamp: 'test-2' })
+  const second = await U.applyUpdateFiles(files, '1.12.0', [root], { stamp: 'test-2' })
   check('applyUpdateFiles：重复应用幂等（写入 0 / 删除 0）', second[0].written === 0 && second[0].removed === 0, JSON.stringify(second[0]))
+
+  // 多 root：两个安装目录各自留一份旧文件清单，互不覆盖
+  const rootA = mkRoot('multi-a', { 'lib/stale-a.js': 'a' })
+  const rootB = mkRoot('multi-b', { 'lib/stale-b.js': 'b' })
+  const pkgAB = new Map([
+    ['.zcode-plugin/plugin.json', Buffer.from('{"version":"1.12.1"}')],
+    ['lib/shared.js', Buffer.from('shared')],
+    ['scratch/local-only.js', Buffer.from('keep me')],
+  ])
+  fs.mkdirSync(path.join(rootA, 'scratch'), { recursive: true })
+  fs.writeFileSync(path.join(rootA, 'scratch', 'local-only.js'), 'keep me', 'utf8')
+  await U.applyUpdateFiles(pkgAB, '1.12.1', [rootA, rootB], { stamp: 'test-3' })
+  const mA = U.readManifestFor(rootA)
+  const mB = U.readManifestFor(rootB)
+  check(
+    'applyUpdateFiles：多 root 各自持有清单（后写不覆盖先写）',
+    !!mA && !!mB && mA.version === '1.12.1' && mB.version === '1.12.1' && mA.files.includes('lib/shared.js') && mB.files.includes('lib/shared.js'),
+    JSON.stringify([mA && mA.version, mB && mB.version])
+  )
+  check(
+    'applyUpdateFiles：前一个 root 的旧文件也被清理（清单未被后一个 root 顶掉）',
+    !fs.existsSync(path.join(rootA, 'lib', 'stale-a.js')) && !fs.existsSync(path.join(rootB, 'lib', 'stale-b.js'))
+  )
+  check('applyUpdateFiles：新包顶层目录之外的本地文件保留', fs.existsSync(path.join(rootA, 'scratch', 'local-only.js')))
 }
 
 // ---------- 6. 跳过标记（widget-state） ----------
@@ -252,7 +309,7 @@ function mkRoot(name, entries) {
     if (String(url).includes('ghproxy.net')) throw new Error('connect timeout')
     return fakeRes('{"version":"1.11.0"}')
   }
-  const st = await U.checkForUpdate({ current: '1.10.0', endpoints: eps, fetchImpl })
+  const st = await U.checkForUpdate({ current: '1.10.0', endpoints: eps, fetchImpl, verifyTag: false })
   check(
     'checkForUpdate：首个源失败自动回退，命中后写状态（available + source）',
     calls === 2 && st.available === true && st.latest === '1.11.0' && st.source === 'good' && !st.error,
@@ -314,6 +371,69 @@ function mkRoot(name, entries) {
     U.buildVersionEndpoints().every((e) => e.url.includes('?t=')),
     U.buildVersionEndpoints().map((e) => e.name).join(',')
   )
+
+  // tag 核对：探测读 main、下载读 tag，发版窗口里 main 会先报出还没打 tag 的版本号
+  const rawOnly = [{ name: 'raw-mirror', url: 'https://ghproxy.net/x', pick: U.parsePluginJsonVersion }]
+  const notYet = await U.checkForUpdate({
+    current: '1.10.0',
+    endpoints: rawOnly,
+    fetchImpl: async (url) => (String(url).endsWith('/x') ? fakeRes('{"version":"1.11.0"}') : fakeRes('not found', 404)),
+  })
+  check(
+    'checkForUpdate：版本号已提交但 tag 未推 → 不报「有更新」（避免点了必然 404）',
+    notYet.available === false && notYet.latest === '1.11.0' && /尚未发布/.test(String(notYet.message)),
+    JSON.stringify({ latest: notYet.latest, available: notYet.available, message: notYet.message })
+  )
+  const released = await U.checkForUpdate({
+    current: '1.10.0',
+    endpoints: rawOnly,
+    fetchImpl: async () => fakeRes('{"version":"1.11.0"}'),
+  })
+  check('checkForUpdate：tag 存在时照常报「有更新」', released.available === true && released.latest === '1.11.0')
+  const netErr = await U.checkForUpdate({
+    current: '1.10.0',
+    endpoints: rawOnly,
+    fetchImpl: async (url) => {
+      if (String(url).endsWith('/x')) return fakeRes('{"version":"1.11.0"}')
+      throw new Error('connect timeout')
+    },
+  })
+  check('checkForUpdate：tag 核对遇网络错误时不误判未发布（宁可让下载去试）', netErr.available === true, JSON.stringify(netErr.available))
+}
+
+// ---------- 7b. 响应体上限 ----------
+{
+  let threw = false
+  try {
+    await U.readBodyLimited(fakeRes('x', 200, { 'content-length': String(200 * 1024 * 1024) }), 1024, '测试体')
+  } catch (err) {
+    threw = /上限/.test(String(err.message))
+  }
+  check('readBodyLimited：Content-Length 超限直接拒绝（不下载）', threw)
+
+  threw = false
+  try {
+    const chunks = [Buffer.alloc(700, 65), Buffer.alloc(700, 66)]
+    await U.readBodyLimited(streamRes(chunks), 1000, '测试体')
+  } catch (err) {
+    threw = /上限/.test(String(err.message))
+  }
+  check('readBodyLimited：流式累计超限即中止（无 Content-Length 也拦得住）', threw)
+
+  const ok = await U.readBodyLimited(streamRes([Buffer.from('abc'), Buffer.from('de')]), 1024, '测试体')
+  check('readBodyLimited：未超限时完整读出', ok.toString('utf8') === 'abcde', ok.toString('utf8'))
+
+  // 整包下载：镜像返回一个声称超大的响应时，在解析前就被拒（不换源不算失败品）
+  let dlErr = null
+  try {
+    await U.downloadTarball('1.11.0', {
+      candidates: [{ name: 'big', url: 'https://ghproxy.net/big' }],
+      fetchImpl: async () => fakeRes('x', 200, { 'content-length': String(200 * 1024 * 1024) }),
+    })
+  } catch (err) {
+    dlErr = String((err && err.message) || err)
+  }
+  check('downloadTarball：超大整包被拒并计入失败原因', /上限/.test(String(dlErr)), String(dlErr).slice(0, 80))
 }
 
 // ---------- 8. 整包更新编排（注入 files，不出网） ----------
@@ -360,6 +480,83 @@ function mkRoot(name, entries) {
   const hasRepo = roots.some((r) => path.resolve(r) === path.resolve(U.REPO_ROOT_FOR_TEST || ''))
   void hasRepo
   check('discoverInstallRoots：按注册表 + 缓存扫描找到安装副本', hasCache, JSON.stringify(roots))
+}
+
+// ---------- 10. 重启链路（真实子进程 + 隔离 HOME + 高位端口） ----------
+// 这一块是本文件里唯一的端到端用例：cli.mjs 的 restart-all 必须「停干净 → 起得来」。
+// 之所以专门测：stop 收到 shutdown 的 200 只代表「已受理」，旧进程还要过上百毫秒才
+// 退出；此前 stop 立即返回，紧跟的 start 探到尚未退出的旧进程 → 误判「复用已在运行
+// 的服务」→ 旧进程随后退出，结果一个服务都不剩（确定性复现）。
+{
+  const { spawnSync } = await import('node:child_process')
+  const CLI = path.join(process.cwd(), 'lib', 'cli.mjs')
+  // 高位端口，避开本机正在运行的真实挂件服务。两个口径都要设：config.json 决定
+  // 服务实际绑哪个口，ZCODE_WHALE_PORT 决定 findRunningServer 的默认候选——不设后者
+  // 它会回落到 39321 并「复用」用户正在跑的那个服务，测试就成了空跑。
+  const PORT = 39000 + (process.pid % 900)
+  const run = (args) =>
+    spawnSync(process.execPath, [CLI, ...args], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      timeout: 60000,
+      windowsHide: true,
+      env: { ...process.env, WHALE_DISABLE_UPDATE_CHECK: '1', ZCODE_WHALE_PORT: String(PORT) },
+    })
+  const serverInfo = () => {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(TMP, 'whale', 'server.json'), 'utf8'))
+    } catch (err) {
+      return null
+    }
+  }
+  const healthOk = async () => {
+    const info = serverInfo()
+    if (!info || !info.port) return false
+    const { probeHealth } = await import('../lib/service.mjs')
+    return !!(await probeHealth(info.port, 1500))
+  }
+  // 端口冲突时 server.mjs 会自行顺延，所以下面一律从 server.json 读实际端口再探活
+  fs.mkdirSync(path.join(TMP, 'whale'), { recursive: true })
+  fs.writeFileSync(path.join(TMP, 'whale', 'config.json'), JSON.stringify({ port: PORT }), 'utf8')
+
+  const started = run(['start'])
+  check('重启链路：start 后服务在线', started.status === 0 && (await healthOk()), String(started.stdout || '').trim().split('\n').pop())
+
+  const restarted = run(['restart-all'])
+  const aliveAfter = await healthOk()
+  check(
+    '重启链路：restart-all 之后服务仍在线（stop 必须等到端口停止应答）',
+    restarted.status === 0 && aliveAfter,
+    JSON.stringify({ code: restarted.status, output: String(restarted.stdout || '').trim(), alive: aliveAfter })
+  )
+  const stopped = run(['stop'])
+  check('重启链路：stop 之后端口不再应答', stopped.status === 0 && !(await healthOk()), String(stopped.stdout || '').trim())
+}
+
+// ---------- 11. 源码钉（有几条只能在真机上构造，见各条注释） ----------
+{
+  const src = fs.readFileSync(path.join(process.cwd(), 'lib', 'update.mjs'), 'utf8')
+  check(
+    '解压设了输出上限（gunzip maxOutputLength）',
+    /gunzipSync\(buf, \{ maxOutputLength: MAX_TOTAL_BYTES \}\)/.test(src),
+    '构造 GB 级解压放大会把测试机拖垮，只能按源码钉'
+  )
+  // 「先整包进内存」只允许出现在 readBodyLimited 内部的降级分支里
+  const dlSrc = src.slice(src.indexOf('export async function downloadTarball'), src.indexOf('export async function fetchViaJsdelivr'))
+  const jsdSrc = src.slice(src.indexOf('export async function fetchViaJsdelivr'), src.indexOf('// ---------- 安装目录与落盘计划'))
+  check(
+    '两条下载路径都走带上限的读取（不再先整包进内存）',
+    /readBodyLimited\(res, MAX_TARBALL_BYTES/.test(dlSrc) && /readBodyLimited\(res, MAX_FILE_BYTES/.test(jsdSrc) &&
+      dlSrc.indexOf('arrayBuffer') === -1 && jsdSrc.indexOf('arrayBuffer') === -1
+  )
+  check('ustar prefix 按 155 字节读（长前缀不再被截断）', /readStr\(header, 345, 155\)/.test(src))
+  const serverSrc = fs.readFileSync(path.join(process.cwd(), 'lib', 'server.mjs'), 'utf8')
+  check(
+    '停止服务先断连接再等 close 回调（不再裸 setTimeout 强退，避免 Windows libuv 断言）',
+    /closeAllConnections/.test(serverSrc) && /server\.close\(finish\)/.test(serverSrc)
+  )
+  const svcSrc = fs.readFileSync(path.join(process.cwd(), 'lib', 'service.mjs'), 'utf8')
+  check('stopServer 等端口真的停止应答（waitServerStopped）', /waitServerStopped/.test(svcSrc))
 }
 
 fs.rmSync(TMP, { recursive: true, force: true })
