@@ -21,7 +21,7 @@ import { isBlockedHost } from '../lib/blocked-host.mjs'
 import { matchTemplateId, buildProviderEntries, invalidateDiscoverCache } from '../lib/discover.mjs'
 import { computeTodayUsage, resolveTodayUsage, pickBalanceInfo, platformUsageUrl } from '../lib/balance.mjs'
 import { mapZcodeTheme, themeOfConfig, resolveZcodeTheme } from '../lib/zcode-theme.mjs'
-import { safeMirrorUrl } from '../lib/overlay.mjs'
+import { safeMirrorUrl, isOwnOverlayCommandLine, runtimePaths } from '../lib/overlay.mjs'
 import { MODEL_ROLE_RULES, roleIdForModel } from '../lib/paths.mjs'
 import { findApiKey, readPluginConfig } from '../lib/credentials.mjs'
 import { resolveBillingSource, isNightOffpeak } from '../lib/source.mjs'
@@ -3618,6 +3618,51 @@ try {
         safeMirrorUrl('http://192.168.1.5/npm', FB) === FB &&
         safeMirrorUrl('http://localhost:4873', FB) === FB,
       'FALLBACK'
+    )
+  }
+
+  {
+    // ---------- 跨产品线浮层互杀回归（2026-10-14 真机事故） ----------
+    // 事故：单例判定用插件名子串 `*zcode-fox-widget*`，而 WorkBuddy 版的浮层若从
+    // worktree 启动，路径里正好含这个子串（...\Worktrees\zcode-fox-widget\main-<sha>\desktop）
+    // → 我们把对方的浮层当重复实例杀掉（对方用 `fox-widget` 标记时是同一个坑的镜像）。
+    // 现在的判据是「命令行是否含本插件运行时的 electron dist 目录」。
+    // 完整证据链见仓库根 BUGREPORT-CROSS-LINE-OVERLAY-KILL.md。
+    const markerDir = path.join(runtimePaths().runtimeDir, 'node_modules', 'electron', 'dist')
+    const exe = path.join(markerDir, process.platform === 'win32' ? 'electron.exe' : 'electron')
+    const ownRuntime = exe
+    const ownCache = exe + ' C:\\Users\\u\\.zcode\\cli\\plugins\\cache\\zcode-fox-local\\zcode-fox-widget\\1.0.0\\desktop'
+    const ownRepo = exe + ' C:\\Users\\u\\.zcode\\cli\\plugins\\marketplaces\\zcode-fox-widget\\desktop'
+    // WorkBuddy 版的运行时在它自己的插件数据目录下，与我们的绝不相交
+    const wbExe =
+      'C:\\Users\\u\\.workbuddy\\plugins\\data\\fox-widget-fox-local\\desktop-runtime\\node_modules\\electron\\dist\\electron.exe'
+    const wbCache = wbExe + ' C:\\Users\\u\\.workbuddy\\plugins\\cache\\fox-local\\fox-widget\\2.0.0\\desktop'
+    const wbWorktree = wbExe + ' C:\\Users\\u\\WorkBuddy\\Worktrees\\zcode-fox-widget\\main-56fc9dd2\\desktop'
+    check(
+      '浮层亲缘判定：认自己的运行时（仓库副本 / cache 快照都算同一个）',
+      isOwnOverlayCommandLine(ownRuntime) &&
+        isOwnOverlayCommandLine(ownCache) &&
+        isOwnOverlayCommandLine(ownRepo),
+      markerDir
+    )
+    check(
+      '浮层亲缘判定：不认 WorkBuddy 的浮层（cache 形态）',
+      !isOwnOverlayCommandLine(wbCache),
+      wbCache.slice(0, 60)
+    )
+    check(
+      '浮层亲缘判定：不认 WorkBuddy 的浮层（worktree 形态——旧子串判据正是在这里误杀）',
+      !isOwnOverlayCommandLine(wbWorktree) && wbWorktree.indexOf('zcode-fox-widget') !== -1,
+      '旧判据会误杀：命令行含 zcode-fox-widget 子串=' + (wbWorktree.indexOf('zcode-fox-widget') !== -1)
+    )
+    check(
+      '浮层亲缘判定：空/无命令行不误判（PowerShell 失败时宁可不识别也不盲杀）',
+      !isOwnOverlayCommandLine('') && !isOwnOverlayCommandLine(null) && !isOwnOverlayCommandLine('electron.exe --type=gpu-process')
+    )
+    check(
+      '浮层亲缘判定：Windows 路径大小写与斜杠等价（C:/x 与 c:\\x 视为同一目录）',
+      isOwnOverlayCommandLine(exe.replace(/\\/g, '/').toUpperCase()),
+      process.platform
     )
   }
 
