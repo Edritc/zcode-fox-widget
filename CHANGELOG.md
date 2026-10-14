@@ -1,16 +1,13 @@
 # 更新日志（Changelog）
 
-本文件分**两条产品线**两节记录变更（同仓双分支：`main` = ZCode 线，`workbuddy` = WorkBuddy 线）。
-共享内核的修复会在两边都记一条。
+本文件记录两条产品线的变更（同仓双分支：`main` = ZCode 线，`workbuddy` = WorkBuddy 线）；共享内核的修复两边都记一条。
 
-- [`## WorkBuddy`](#workbuddy) —— `workbuddy` 分支，产品名 **WorkBuddy狐娘小挂件**（`fox-widget`），tag 前缀 `wb-v`
-- [`## ZCode`](#zcode) —— `main` 分支，产品名 **ZCode狐娘小挂件**（`zcode-fox-widget`），tag 前缀 `v`
+> 版本小节用 **tag 前缀**区分产品线：`## wb-vX.Y.Z …` = **WorkBuddy狐娘小挂件**（`fox-widget`，本分支），
+> `## vX.Y.Z …` = **ZCode狐娘小挂件**（`zcode-fox-widget`，`main` 分支；本节是移植时的基线快照）。
 
 ---
 
-## WorkBuddy
-
-### wb-v1.0.0 新增：移植到 WorkBuddy（积分口径 + 上下文余量）
+## wb-v1.0.0 新增：移植到 WorkBuddy（积分口径 + 上下文余量）
 
 > 移植规划见 `MIGRATION-PLAN-WORKBUDDY.md`，分阶段实测与决策记录见 `docs/porting/`，
 > 宿主契约的实测结论见 `docs/porting/phase-0.md`，交接说明见 `HANDOFF-WORKBUDDY-PORT.md`。
@@ -31,9 +28,7 @@
 
 ---
 
-## ZCode
-
-> 以下条目是 `main` 分支的历史记录。产品名 **ZCode狐娘小挂件**（`zcode-fox-widget`）。
+> 以下条目是 `main` 分支的历史记录（移植基线快照）。产品名 **ZCode狐娘小挂件**（`zcode-fox-widget`）。
 > 本文件自 fork 以来（v1.1.0 起）每个版本的变更都记在这里；各版本在仓库中均有对应的 tag 与 GitHub Release。相邻的小修复版本按合并策略并入组内最后一个版本号（v1.8.7–v1.8.10 并入 v1.8.9；v1.3.1–v1.3.2 并入 v1.3.3、v1.4.1–v1.4.2 并入 v1.4.3、v1.5.1–v1.5.3 并入 v1.5.4、v1.7.1–v1.7.2 并入 v1.7.3、v1.7.5–v1.7.6 并入 v1.7.7、v1.7.8–v1.7.10 并入 v1.7.11、v1.8.3 并入 v1.8.4、v1.9.0-preview 并入 v1.9.0），中间版本号不再单独发版。
 
 > 命名说明：v1.8.4 及更早的版本发布时，产品曾使用「ZCode 版 DeepSeek 余额小鲸鱼挂件」「Widget of ZCode」等名称；v1.8.5 起统一为 **ZCode狐娘小挂件**（zcode-fox-widget）。下文条目中的产品名一律按新名称书写，功能与修复的描述保持发布当时的原文。
