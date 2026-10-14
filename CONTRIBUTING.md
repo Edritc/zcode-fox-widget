@@ -14,7 +14,7 @@
 
 只用这 11 个：`feat` `fix` `docs` `style` `refactor` `perf` `test` `build` `ci` `chore` `revert`。
 
-- 不使用自定义类型（此前的 `debug` 属临时诊断入库，后续不再出现）。
+- 不使用自定义类型（此前的 `debug` 属临时诊断入库，后续不再出现）。**这条覆盖技能文档里的提交模板**：`skills/*/SKILL.md` 若给了提交范例，也必须落在本集合内（先例：`skills/fox-pricing-review/SKILL.md` 曾给 `pricing(vX.Y.Z): …`，既非标准类型、又用版本号当 scope）。
 - 临时诊断代码不入库：调试探针放 `%TEMP%`，需要长期保留的诊断设施走 `feat`/`chore` 并在 body 说明用途与开关。
 
 ### scope
@@ -28,9 +28,9 @@
 - 祈使句、结尾不加句号。
 - **显示宽度 ≤72 列**（CJK 全角字符按 2 列计）。超长的根因解释、证据链移入 body——subject 塞不下解释，正说明该有 body。提交前自检：
   ```bash
-  git log --format='%s' 435efb5.. | awk '{ w=0; for(i=1;i<=length($0);i++){ c=substr($0,i,1); w += (c ~ /[\x80-\xFF]/) ? 2 : 1 } if (w > 72) print w, $0 }'
+  git log --format='%s' 435efb5.. | node -e "let n=0,o=require('readline').createInterface({input:process.stdin});o.on('line',s=>{const w=[...s].reduce((a,c)=>a+(c.codePointAt(0)>0x7f?2:1),0);if(w>72){n++;console.log(w+' '+s)}});o.on('close',()=>{console.log('结果：'+(n?n+' 条超宽（>72 列）':'全部 ≤72 列'));process.exit(n?1:0)})"
   ```
-  （按 UTF-8 字节近似 CJK×2；输出非空即超宽。）
+  （按 Unicode 码点近似 CJK×2。**判定只看最后一行「结果：…」与退出码**——0 = 全部合规、1 = 有超宽；**不要**按「输出非空即超宽」判读：脚本自身报错时输出同样为空，那样会把工具故障读成「全部合格」。）
 - 结论进 subject，**为什么进 body**：动机、根因、实测证据、验证方式。
 
 ### body
@@ -41,6 +41,7 @@
 ### 版本号（release 纪律）
 
 - 版本变更必须独立成 `chore(release): vX.Y.Z`，body 列变更清单。**禁止把版本号变更悄悄夹带进 feat/fix**（v1.6.0–v1.7.2 曾四次这样夹带，本条即为教训成文）。
+- `chore(release)` 的 body 省略**仅当**该版本的 CHANGELOG 小节已列全变更（先例：v1.10.0 / v1.11.0 的 CHANGELOG 小节已列全，其 release 提交 body 为空；v1.12.0 另有清单，两可）。
 - 版本号单一来源：`.zcode-plugin/plugin.json`（`lib/paths.mjs` 的 `pluginVersion()` 供 server 的 health 与 MCP 动态读取——审查 P2-2 之前 server.mjs 硬编码第三份，已移除）。release commit 仍需同步改 `marketplace.json` 的版本；selftest 有「health = 清单 = marketplace」一致性断言兜底。`desktop/package.json` 是浮层入口包，版本独立，不在此列。
 
 ### 两条产品线的发布纪律（同仓双分支）
@@ -71,6 +72,7 @@ README / SKILL / commands 的标点与空格漂移是反复出现的问题，这
 - **中英/数字间距**：中文与拉丁字母、数字之间加半角空格（「5 小时」「GLM Plan 配额」「204/204」）；中文标点前后不加。
 - **计量词**：一律「5 小时」「7 天」「60 秒」，不写「5小时」（界面上的紧凑标签如额度卡的「5小时」行名除外，那是版式需要）。
 - **版本小节标题**：`## vX.Y.Z <动词>：<一句话>`，动词只用三种——新能力用「新增」、缺陷用「修复」、行为或口径调整用「变更」；标题动词要与该版本的主提交类型一致（`feat` → 新增）。小节内用平铺列表，不写 `###` 子节。
+- **「维护者视角」措辞**：README / SKILL / commands / **源码注释** / **提交正文**只写事实与取舍，不写决策来源的归属（「按用户要求…」「用户裁决…」「用户实测…」这类）。要交代来历就落到证据上：写成「该方向实测无效，已在 `<sha>` 回滚」而不是「按用户要求回滚」。**例外**：`*-REPORT.md` / `*-FINDINGS.md` / `HANDOFF-*.md` 这类过程与调查报告引述的是当时会话语境，不做改写；但它们里的**事实性错误**仍要修（例如某份报告写着「本报告不入库」，在它随版本入库之后就该更正）。
 - **代码块语言标注**：命令与输出用 ```bash / ```text；ASCII 架构图可不标。
 - **术语表**（同一概念只用一种说法）：
 
