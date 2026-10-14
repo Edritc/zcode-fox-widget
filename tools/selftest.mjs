@@ -2043,6 +2043,48 @@ try {
       !!frontendRules && flat(frontendRules) === flat(MODEL_ROLE_RULES),
       frontendRules ? flat(frontendRules) === flat(MODEL_ROLE_RULES) ? '一致' : '不一致：' + flat(frontendRules) : '未从 widget.js 解析到规则表'
     )
+    // 结构一致还不够——把前端那份函数体抠出来实际跑一遍五族代表写法（审查建议：
+    // 「前端副本对五族代表写法的行为断言」），防止只改一侧关键词却「结构仍等价」的漂移
+    const fnSrc = /function roleForModel\(model\) \{[\s\S]*?\n  \}/.exec(widgetSrc)
+    let frontendRole = null
+    if (fnSrc) {
+      try {
+        frontendRole = new Function(fnSrc[0] + '; return roleForModel')()
+      } catch (err) {
+        frontendRole = null
+      }
+    }
+    const samples = [
+      'deepseek/deepseek-flash',
+      'account:zai-start-plan/GLM-5.3-Flash',
+      'zai-org/GLM-5.3',
+      'openai/gpt-5.6-terra',
+      'cmdgo-bridge/moonshotai/Kimi-K3',
+      'cmdgo-bridge/claude-sonnet-5-5',
+      'anthropic/claude-opus-5',
+      'qwen3.8-max',
+      'MiniMax-M3',
+      '',
+    ]
+    check(
+      '按模型换角色：前端副本的行为与 paths.mjs 逐项一致（' + samples.length + ' 个样本）',
+      !!frontendRole && samples.every((m) => frontendRole(m) === roleIdForModel(m)),
+      !!frontendRole ? samples.map((m) => m + '→' + String(frontendRole(m))).join(', ') : '未从 widget.js 解析到 roleForModel'
+    )
+  }
+
+  // 浮层主进程：外链与新窗口防护（上轮 P2-1 的修复，Electron 里没法在自检中真跑，
+  // 按源码钉住——气泡里的链接必须交给系统浏览器，浮层窗口自身不许被导航走）
+  {
+    const mainSrc = fs.readFileSync(path.join(PLUGIN_ROOT, 'desktop', 'main.cjs'), 'utf8')
+    check(
+      '浮层：外链走系统浏览器 + 拒绝窗口内导航与新开窗口（setWindowOpenHandler / will-navigate）',
+      /setWindowOpenHandler/.test(mainSrc) &&
+        /shell\.openExternal/.test(mainSrc) &&
+        /will-navigate/.test(mainSrc) &&
+        /action: 'deny'/.test(mainSrc),
+      ''
+    )
   }
 
   // UI 审查 U31：浅色档正文色的对比度下限。正文色由角色墨色按 4.5:1 派生
