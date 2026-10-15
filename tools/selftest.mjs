@@ -12,10 +12,11 @@ import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { costOfUsage, priceFor, isPeakTime, nextPeakChange, resolveVendor, resolvePricing, normalizeModelId } from '../lib/pricing.mjs'
-import { shapePlanPayload, turnPlanUsage, extraAmountsOfTurn, quotaBucketForModel, readPlanBalance, readLogFile } from '../lib/plan-balance.mjs'
+import { shapePlanPayload, turnPlanUsage, extraAmountsOfTurn, quotaBucketForModel, readPlanBalance, readPlanQuota, invalidatePlanCache, readLogFile } from '../lib/plan-balance.mjs'
+import { shapeQuotaPayload, windowLabel, fetchGlmPlanQuota, GLM_PLAN_QUOTA_URL, GLM_PLAN_QUOTA_HOSTS } from '../lib/glm-plan-api.mjs'
 import { getPath, TEMPLATES, fetchFromTemplate, pickVendorBalance, listVendorStatus } from '../lib/vendors.mjs'
 import { isBlockedHost } from '../lib/blocked-host.mjs'
 import { matchTemplateId, buildProviderEntries, invalidateDiscoverCache } from '../lib/discover.mjs'
@@ -23,7 +24,7 @@ import { computeTodayUsage, resolveTodayUsage, pickBalanceInfo, platformUsageUrl
 import { mapZcodeTheme, themeOfConfig, resolveZcodeTheme } from '../lib/zcode-theme.mjs'
 import { safeMirrorUrl, isOwnOverlayCommandLine, runtimePaths } from '../lib/overlay.mjs'
 import { MODEL_ROLE_RULES, roleIdForModel, BUILTIN_ROLES } from '../lib/paths.mjs'
-import { findApiKey, readPluginConfig } from '../lib/credentials.mjs'
+import { assertSafeUpstream, findApiKey, readPluginConfig } from '../lib/credentials.mjs'
 import { resolveBillingSource, isNightOffpeak } from '../lib/source.mjs'
 
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -630,6 +631,147 @@ function check(name, ok, detail) {
   check('Plan 日志解析：当天数据不标 stale', shaped && shaped.stale === false)
   const staleShaped = shapePlanPayload(PLAN_FIXTURE, '2026-01-01', Date.now())
   check('Plan 日志解析：非当天的观测标记 stale', staleShaped && staleShaped.stale === true)
+  // 单位声明：日志源是 token、直连套餐接口源是额度点数——两边的百分比只在同单位
+  // 下可比（turnPlanUsage 用 unit 守卫，防「tokens ÷ 点数」的假百分比）
+  check('Plan 日志解析：单位声明为 tokens（与接口源的 credits 区分）', shaped && shaped.unit === 'tokens', String(shaped && shaped.unit))
+
+  // —— GLM Plan 直连套餐接口（issue #3）：形状 / 取源链 / 出站白名单 ——
+  // 形状 A（现役 individual-coding-plan，实测 2026-10-16 lite 档）：limits[] 平铺
+  const apiFlat = shapeQuotaPayload({
+    code: 200,
+    success: true,
+    data: {
+      level: 'lite',
+      limits: [
+        { type: 'CREDIT_LIMIT', unit: 3, number: 5, usage: 2000, currentValue: 0, remaining: 2000, percentage: 0 },
+        { type: 'CREDIT_LIMIT', unit: 6, number: 1, usage: 2000, currentValue: 1841, remaining: 158, percentage: 92, nextResetTime: 1792656212983 },
+      ],
+    },
+  })
+  check(
+    'GLM 套餐接口：平铺形状（CREDIT_LIMIT）→ 两窗口 + 主窗口取「剩余最低」那条',
+    !!apiFlat &&
+      apiFlat.ok &&
+      apiFlat.source === 'glm-plan-api' &&
+      apiFlat.unit === 'credits' &&
+      apiFlat.level === 'lite' &&
+      apiFlat.windows.length === 2 &&
+      apiFlat.windows[0].label === '5 小时' &&
+      apiFlat.windows[1].label === '本周' &&
+      apiFlat.primaryWindow === '本周' &&
+      apiFlat.remaining === 158 &&
+      apiFlat.total === 2000 &&
+      // 剩余 = 158 / 2000 = 7.9%（与接口的「已用 92%」互为印证）
+      Math.abs(apiFlat.percentRemaining - 0.079) < 1e-9 &&
+      Math.abs(apiFlat.percentUsed - 0.92) < 1e-9 &&
+      apiFlat.nextResetAt === 1792656212983,
+    JSON.stringify(apiFlat && { w: apiFlat.windows, primary: apiFlat.primaryWindow, pct: apiFlat.percentRemaining })
+  )
+  const apiFull = shapeQuotaPayload({
+    data: { level: 'pro', limits: [{ type: 'CREDIT_LIMIT', unit: 6, number: 1, usage: 1000, currentValue: 1000, remaining: 0, percentage: 100 }] },
+  })
+  check(
+    'GLM 套餐接口：百分比与 remaining/total 互为印证（用完的窗口剩余 0%）',
+    !!apiFull && apiFull.percentRemaining === 0 && apiFull.percentUsed === 1 && apiFull.primaryWindow === '本周',
+    JSON.stringify(apiFull && { pct: apiFull.percentRemaining, used: apiFull.percentUsed })
+  )
+  // 形状 B（老套餐账号 / zhipu-quota 模板沿用）：limits[].TOKENS_LIMIT.*
+  const apiNested = shapeQuotaPayload({
+    data: { limits: [{ name: 'GLM-5.3', TOKENS_LIMIT: { percentage: 37.5, remaining: 62500000, total: 100000000 } }] },
+  })
+  check(
+    'GLM 套餐接口：嵌套形状（TOKENS_LIMIT）照样收（老套餐账号兼容）',
+    !!apiNested &&
+      apiNested.windows.length === 1 &&
+      apiNested.windows[0].label === 'GLM-5.3' &&
+      apiNested.windows[0].percentUsed === 37.5 &&
+      apiNested.remaining === 62500000 &&
+      Math.abs(apiNested.percentRemaining - 0.625) < 1e-9,
+    JSON.stringify(apiNested && apiNested.windows)
+  )
+  check(
+    'GLM 套餐接口：认不出的响应不硬猜（返回 null，调用方回落到日志源）',
+    shapeQuotaPayload({ code: 200, data: { limits: [] } }) === null &&
+      shapeQuotaPayload({ code: 200, data: { facts: 'nope' } }) === null &&
+      shapeQuotaPayload(null) === null &&
+      shapeQuotaPayload({ data: { limits: [{ percent: 5 }] } }) === null,
+    '空 / 无 limits / 无关字段'
+  )
+  check(
+    'GLM 套餐接口：窗口名按 unit×number 归纳，认不出的组合原样标注',
+    windowLabel(3, 5) === '5 小时' &&
+      windowLabel(6, 1) === '本周' &&
+      windowLabel(6, 2) === '2 周' &&
+      windowLabel(9, 3) === 'unit9×3' &&
+      windowLabel(null, null) === '套餐',
+    [windowLabel(3, 5), windowLabel(6, 1), windowLabel(6, 2), windowLabel(9, 3), windowLabel(null, null)].join(' / ')
+  )
+  // 出站硬约束：套餐接口地址必须过白名单校验（仅 https + 显式主机），明文/外域一律拒
+  const safeOk = (() => {
+    try {
+      assertSafeUpstream(GLM_PLAN_QUOTA_URL, GLM_PLAN_QUOTA_HOSTS)
+      return true
+    } catch (err) {
+      return false
+    }
+  })()
+  const safeReject = (u) => {
+    try {
+      assertSafeUpstream(u, GLM_PLAN_QUOTA_HOSTS)
+      return false
+    } catch (err) {
+      return true
+    }
+  }
+  check(
+    'GLM 套餐接口：出站地址过白名单（https + 显式 host），明文或外域被拒',
+    safeOk &&
+      safeReject('http://open.bigmodel.cn/api/monitor/usage/quota/limit') &&
+      safeReject('https://evil.example.com/api/monitor/usage/quota/limit') &&
+      safeReject('https://127.0.0.1/api/monitor/usage/quota/limit'),
+    GLM_PLAN_QUOTA_URL
+  )
+  // 取源链（进程内只能这样验）：测试进程读的是**真机**数据目录（paths.mjs 的
+  // ZCODE_HOME 是模块常量，import 时求值，改 process.env 不管用），所以这里不去
+  // 碰 readPlanQuota——端到端断言放在下面的自检服务上（它跑在 fixture 环境里）。
+  // 没有凭据/没有日志的回落路径用**干净环境的子进程**验（见下）。
+  {
+    // 子进程 + 空数据目录：模块常量在子进程里重新求值 → 发现链找不到任何凭据，
+    // 且日志目录为空 → 两个源都没有数据。全程不出网（没 key 就早返回）。
+    const emptyHome = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-plan-nokey-'))
+    const childEnv = { ...process.env, ZCODE_HOME: emptyHome, ZCODE_DATA_BASE_DIR: emptyHome, FOX_WIDGET_DATA_DIR: emptyHome }
+    delete childEnv.ZHIPU_API_KEY
+    delete childEnv.BIGMODEL_API_KEY
+    delete childEnv.GLM_API_KEY
+    const probe = spawnSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        "import { fetchGlmPlanQuota } from " +
+          JSON.stringify(pathToFileURL(path.join(PLUGIN_ROOT, 'lib', 'glm-plan-api.mjs')).href) +
+          ";\nimport { readPlanQuota } from " +
+          JSON.stringify(pathToFileURL(path.join(PLUGIN_ROOT, 'lib', 'plan-balance.mjs')).href) +
+          ";\nconst api = await fetchGlmPlanQuota({ force: true });\nconst chain = await readPlanQuota();\nconsole.log(JSON.stringify({ api: { ok: api.ok, reason: api.reason, keySource: api.keySource }, chain: { ok: chain.ok, reason: chain.reason, apiReason: chain.apiReason } }));",
+      ],
+      { encoding: 'utf8', timeout: 20000, env: childEnv }
+    )
+    let out = null
+    try {
+      out = JSON.parse(String(probe.stdout || '').trim().split('\n').pop())
+    } catch (err) {}
+    check(
+      'GLM 套餐接口：干净环境里没凭据时如实回 no-key（不抛错、不出网）',
+      !!out && out.api.ok === false && out.api.reason === 'no-key' && out.api.keySource === 'none',
+      JSON.stringify(out && out.api) + ' stderr=' + String(probe.stderr || '').slice(0, 120)
+    )
+    check(
+      'GLM Plan 取源链：两个源都没数据时保留 no-plan-log 文案并把接口原因附上',
+      !!out && out.chain.ok === false && out.chain.reason === 'no-plan-log' && out.chain.apiReason === 'no-key',
+      JSON.stringify(out && out.chain)
+    )
+    fs.rmSync(emptyHome, { recursive: true, force: true })
+  }
 
   // ZCode 启动就绪判定（浮层门控用）：日志里有 boot 标记但没有 ready 标记 =
   // 加载动画期间，浮层先不显示；缺 boot 标记（老版本/日志缺失）一律放行。
@@ -1691,12 +1833,13 @@ try {
   )
   check('混合轮次的金额构成两种厂商', glmPart > 0 && dsPart > 0, 'GLM ¥' + glmPart.toFixed(4) + ' + DeepSeek ¥' + dsPart.toFixed(4))
 
-  // Plan 配额端到端：/whale/plan.json 读 fixture 日志；GLM 轮次的 quotaPct 用主模型桶算
+  // Plan 配额端到端：/whale/plan.json 读 fixture 日志；GLM 轮次的 quotaPct 用主模型桶算。
+  // fixture 日志是**当天**的 → 取源链必须停在日志源上（新鲜日志优先，一次出站都不发）
   const plan = await getJson(port, '/whale/plan.json')
   check(
-    'Plan 配额接口返回 fixture 观测',
-    plan && plan.ok && plan.remaining === 93_000_000 && plan.total === 104_000_000,
-    JSON.stringify(plan).slice(0, 160)
+    'Plan 配额接口返回 fixture 观测，且取源链停在新鲜日志上',
+    plan && plan.ok && plan.remaining === 93_000_000 && plan.total === 104_000_000 && plan.source === 'plan-log' && plan.unit === 'tokens',
+    JSON.stringify(plan).slice(0, 200)
   )
   const expectPct = Math.round((550_000 / 100_000_000) * 10000) / 100
   check(

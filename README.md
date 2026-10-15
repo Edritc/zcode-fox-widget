@@ -51,7 +51,7 @@
 - **余额**：来自 `https://api.deepseek.com/user/balance`。
 - **今日已用**：主口径固定**本机库**——读 ZCode 落库的每轮模型用量、按各厂商价目折算，按模型看得见、不受充值干扰；**大肥鱼记账 / 实时·令牌**退居「对账 + 兜底」（详见「数据与计价口径」）。
 - **每轮对话消耗**：读取 ZCode 记录的每轮真实 token 用量，换算金额后弹出红色金额气泡（自动关闭秒数可设，填 0 表示手动关闭），可逐档核对明细；订阅套餐轮显示「本轮消耗余额: x%」而非虚构金额。
-- **余额与额度**：DeepSeek 走内置余额接口；**GLM Plan 剩余配额**（零密钥，尾随客户端日志）；**CommandCode 三重额度**（月度 credit 池 + 5 小时/周滚动窗口，多账号池）；另有 **35 个厂商模板**（含 Kimi Coding / MiniMax Coding / OpenCode Go 等订阅窗口与 **Gemini 订阅（AI Pro/Ultra）**——官方无公开订阅余额接口，卡片如实说明；以及 OpenAI / Anthropic / Gemini / 硅基流动 / 火山方舟 等 20 家「官方没有 API key 查余额」的厂商——这类只报凭据状态，金额走本机 token 用量）。有官方余额接口的厂商（Kimi/Moonshot 等）的余额会随气泡小字显示（v1.8.8）。
+- **余额与额度**：DeepSeek 走内置余额接口；**GLM Plan 剩余配额**（取源链：新鲜日志 > 直连 bigmodel 套餐用量接口 > 过期日志；接口那条要一把 GLM key，零配置时仍走日志）；**CommandCode 三重额度**（月度 credit 池 + 5 小时/周滚动窗口，多账号池）；另有 **35 个厂商模板**（含 Kimi Coding / MiniMax Coding / OpenCode Go 等订阅窗口与 **Gemini 订阅（AI Pro/Ultra）**——官方无公开订阅余额接口，卡片如实说明；以及 OpenAI / Anthropic / Gemini / 硅基流动 / 火山方舟 等 20 家「官方没有 API key 查余额」的厂商——这类只报凭据状态，金额走本机 token 用量）。有官方余额接口的厂商（Kimi/Moonshot 等）的余额会随气泡小字显示（v1.8.8）。
 - **记账二级页**：一级菜单有「**用量记录…**」（v1.8.7 移回一级）与「**=角色名记账=**」入口；额度预警、余额预警、余额校正收进记账页。
 - **预警**：一条「额度%」阈值对 GLM Plan 与 CommandCode 同时生效，加一条「余额¥」管 DeepSeek 余额见底；每源每天最多提醒一次，恢复后自动重新武装。
 - **桌宠模式**（浮层专属）：开启后挂件以**整个屏幕（工作区，自动排除任务栏）**为界面，可拖出 ZCode 窗口放到屏幕任何角落，且锁在所有窗口最上层——切到别的应用、ZCode 被盖住或最小化也不隐身；关闭后回到「跟随 ZCode 窗口」的原有行为。
@@ -72,7 +72,7 @@
 ### 计费与额度体系
 
 - **多厂商计价内核**（v1.1.0/v1.2.0）：从上游仅 DeepSeek 峰谷扩展为八家价目（DeepSeek/GLM/OpenAI/Claude/Qwen/MiniMax/MiMo/Kimi，含 272K 整单取档等各家官方口径；Gemini 全家桶价目于后续版本补齐，现为九家），并立下「未知模型只计 tokens、不套别家价」的红线；后续持续补齐 GPT-6 系列、GPT-5.6-cyber 与 Kimi 全系条目（v1.7.6/v1.7.7）。
-- **GLM Plan 套餐配额**（v1.1.0 引入，零密钥）：尾随客户端日志读套餐剩余，配套一整套鲁棒性修复——空桶快照跳过（v1.7.8）、日志尾窗逐级扩读与死套餐残值过滤（v1.4.2）、stale 观测标注（v1.4.1）。
+- **GLM Plan 套餐配额**（v1.1.0 引入，零密钥；后续加直连套餐接口）：尾随客户端日志读套餐剩余，配套一整套鲁棒性修复——空桶快照跳过（v1.7.8）、日志尾窗逐级扩读与死套餐残值过滤（v1.4.2）、stale 观测标注（v1.4.1）。**切换订阅套餐后日志永久 stale 的那类账号**（客户端只在 start-plan 计费体系里轮询余额，individual-coding-plan 不在其中，日志只剩过期套餐的残留快照）改由 `lib/glm-plan-api.mjs` 直连 `open.bigmodel.cn` 的套餐用量接口取实时值：读 5 小时窗口与本周窗口的已用百分比与**剩余额度**（如「本周剩余 158 / 2000」），主显示取剩余最低的那个窗口——与「额度%」预警盯的是同一个窗口。接口没凭据或不可达时静默回落到日志（沿用 stale 标注）。**注意订阅与按量是两件事**：这条只读**订阅套餐**的窗口配额；按量账户余额没有公开接口（`bigmodel-glm` 模板仍只报凭据状态），两者 url 与语义都不同，不互相冒充。
 - **CommandCode 三重额度 + 多账号池**（v1.7.8–v1.7.10，v1.8.3/v1.8.4 打磨）：月度 credit 池 + 5 小时/周滚动窗口，直读网关 API；反代凭据现读不落盘、兼容两种凭据形状；多账号「最近使用优先、全撞墙时最早解锁兜底」；额度气泡卡（三窗口条 + 绑定约束窗口倒计时 + 账号池健康度）；对网关 `limited` 粘滞标志的正确解读（需佐证才采信，升级套餐后健康账号不再被误判限流）。
 - **今日已用口径重排**（v1.7.0）：主口径改本机库，充值当天不再归零；记账/实时·令牌退居「对账 + 兜底」；用量记录的模型排名给订阅套餐行按等价市值参与排序（v1.7.5，`≈¥` 标注、不虚报真金白银）。
 - **预警体系演进**（v1.3.0 → v1.7.7 → v1.8.0）：余额预警合并 → 取消消费型预警（语义回归「见底」）→ 泛化为「额度% + 余额¥」每源一条，旧配置键自动迁移。
@@ -404,7 +404,7 @@ DeepSeek 调价时改 `lib/pricing.mjs` 顶部的 `PEAK_HOURS` / `BASE_PRICE` / 
 | 浮层启动失败 | `cli.mjs window status` 看运行时是否已装 |
 | 峰谷判定不对 | 看 `lib/pricing.mjs` 的 `PEAK_HOURS` 等常量；工作日高峰为北京时间 9–12、14–18，2026-08-23 起周末全天谷价 |
 | 换了图片/音效不生效 | 资产路由每次读盘且 `no-store`，强刷即可；确认替换的是 `assets/` 下的同名文件 |
-| Plan 剩余配额不显示 / 提示「Plan 日志未找到」 | 多半是数据目录迁移后的机器在**普通终端**里手动跑服务：没有 `ZCODE_DATA_BASE_DIR`，只会在 `~/.zcode/v2/logs` 下找日志（旧目录可能只剩迁移前的残留）。由 ZCode 进程拉起的服务不受影响；终端调试请先设置该变量。`/whale/plan.json` 的 `no-plan-log` 响应带 `probedDirs`（实际探测了哪些目录、各目录最新日志是哪天），照着看即可 |
+| Plan 剩余配额不显示 / 提示「Plan 日志未找到」 | 配额有两个源（见「相对原项目的新增与优化」的 GLM Plan 条目）：直连套餐用量接口（要一把 GLM key，取不到就静默跳过）与客户端日志。`no-plan-log` = 日志与接口都没数据、且机器上没配 GLM 凭据（多半是数据目录迁移后在**普通终端**里手动跑服务：没有 `ZCODE_DATA_BASE_DIR`，只会在 `~/.zcode/v2/logs` 下找日志；终端调试请先设置该变量）——响应里带 `probedDirs`（探测了哪些目录、各自最新日志是哪天）与 `apiReason`（接口侧为什么没成，如 `no-key`）。`no-plan-source` = 日志与接口都没有数据、但凭据是配了的（看 `apiReason`：`http-401` 凭据失效、`shape-mismatch` 接口改了形状）。配了 GLM key 却一直 `no-plan-log`/`no-plan-source`，先查 `/whale/plan.json` 的 `keySource` 与 `apiReason` |
 | CommandCode 额度读不到 / 卡片说「未找到反代凭据」 | 凭据是**现读**反代本地配置 `~/.cmdgo-bridge/credentials.json`（只支持本机反代），不在环境变量里；反代没跑或该文件不存在时就是这个提示。v1.7.9 起兼容两种凭据形状（纯字符串与 `{value,source}` 对象）。`cmdgo-bridge` 换过数据目录时用 `CMDGO_DIR` 指过去 |
 | CommandCode 额度卡显示「已限流」 | 网关的 `exceeded` 或已用 ≥100%：某一窗口到顶，补满前不可用。卡片最下面那行是**绑定约束**窗口的重置时间（多窗口同时撞墙时报最晚的那个，早重置的不解锁）；「账号池已全部限流」= 所有账号都没额度了 |
 | CommandCode 额度卡/气泡里出现 $ 之外的换算疑虑 | credit 池以美元计价，而价目表是各厂商本币价，所以 credit 的折算只是**等价市值**：它只进用量记录面板的「模型排名」（行上以 ≈ 标注），不计入「今日已用」（见「数据与计价口径」） |
@@ -449,8 +449,9 @@ zcode-fox-widget/
 │  ├─ usage-records.mjs        用量记录聚合：model_usage 折价、今日/近 7 天、双口径排名、厂商汇总
 │  ├─ turn-cost.mjs            每轮消耗（读 turn_usage，回退模型 I/O 日志）
 │  ├─ pricing.mjs              九家价目 + 峰谷时段判定 + token→金额（含输入口径拆分）
+│  ├─ glm-plan-api.mjs         GLM 订阅套餐用量（直连 bigmodel 监控端点，仅订阅配额）
 │  ├─ source.mjs               计费源判定（provider/model/baseURL → Plan / DeepSeek / 按量厂商）
-│  ├─ plan-balance.mjs         GLM Plan 配额（尾随客户端日志）与轮级套餐百分比
+│  ├─ plan-balance.mjs         GLM Plan 配额（取源链：日志 / 直连套餐接口）与轮级套餐百分比
 │  ├─ cmdgo.mjs                CommandCode 三重额度（月度池 + 5 小时/周窗口，网关 API 直读）
 │  ├─ vendors.mjs              厂商余额/配额模板框架（host 白名单、缓存、归一化）
 │  ├─ discover.mjs             厂商凭据自动发现（多路径扫描 + 短 TTL 缓存）
@@ -495,13 +496,13 @@ zcode-fox-widget/
 | `autostart.log` | 每次会话启动的自启结果 |
 | `desktop-runtime/` | Electron 运行时（下载包约 150MB，解压装机后占用约 370MB；删掉即回收，浮层随之失效） |
 
-服务接口（排查时可直接 curl）：页面与资产 `/`（`/index.html`）、`/whale/widget.js`、`/whale/image.png`、`/whale/rua.gif`、`/whale/bubble-img.png`（`?id=<图片 id>`，内置 `rua` 与导入件都走它）、`/whale/sound/press.mp3` 与 `/whale/sound/release.mp3`（`?set=<音效集 id>`）；状态查询 `/whale/health`、`/whale/balance.json`、`/whale/plan.json`、`/whale/cmdgo.json`（CommandCode 三重额度，`?refresh=1` 强制绕缓存）、`/whale/vendors.json`、`/whale/usage-records.json`、`/whale/session.json`、`/whale/last-turn.json`、`/whale/hook.json`（钩子接入状态与「等确认」标记）、`/whale/update.json`（更新状态与动作：GET 看状态，POST `action=check\|update\|skip\|unskip\|restart\|close`）、`/whale/sounds.json`、`/whale/roles.json`、`/whale/bubble-content.json`（GET/POST）、`/whale/bubble-templates.json`（预警与消耗提示模板，GET/POST）、`/whale/bubble-imgs.json`（图库索引）、`/whale/balance-adjustments.json`（GET/POST）、`/whale/size.json`（GET/PUT）、`/whale/zcode-theme.json`；写操作 `/whale/role-upload.json`、`/whale/role-rename.json`、`/whale/role-delete.json`、`/whale/bubble-img.json`、`/whale/bubble-img-delete.json`、`/whale/sound-upload.json`、`/whale/sound-delete.json`（写操作校验 Origin）；关停 `/whale/shutdown`（需 `server.json` 随机令牌）。
+服务接口（排查时可直接 curl）：页面与资产 `/`（`/index.html`）、`/whale/widget.js`、`/whale/image.png`、`/whale/rua.gif`、`/whale/bubble-img.png`（`?id=<图片 id>`，内置 `rua` 与导入件都走它）、`/whale/sound/press.mp3` 与 `/whale/sound/release.mp3`（`?set=<音效集 id>`）；状态查询 `/whale/health`、`/whale/balance.json`、`/whale/plan.json`（GLM Plan 配额：`source`/`unit` 标明取源与单位，接口源带 `windows[]` 与 `remaining`/`total`）、`/whale/cmdgo.json`（CommandCode 三重额度，`?refresh=1` 强制绕缓存）、`/whale/vendors.json`、`/whale/usage-records.json`、`/whale/session.json`、`/whale/last-turn.json`、`/whale/hook.json`（钩子接入状态与「等确认」标记）、`/whale/update.json`（更新状态与动作：GET 看状态，POST `action=check\|update\|skip\|unskip\|restart\|close`）、`/whale/sounds.json`、`/whale/roles.json`、`/whale/bubble-content.json`（GET/POST）、`/whale/bubble-templates.json`（预警与消耗提示模板，GET/POST）、`/whale/bubble-imgs.json`（图库索引）、`/whale/balance-adjustments.json`（GET/POST）、`/whale/size.json`（GET/PUT）、`/whale/zcode-theme.json`；写操作 `/whale/role-upload.json`、`/whale/role-rename.json`、`/whale/role-delete.json`、`/whale/bubble-img.json`、`/whale/bubble-img-delete.json`、`/whale/sound-upload.json`、`/whale/sound-delete.json`（写操作校验 Origin）；关停 `/whale/shutdown`（需 `server.json` 随机令牌）。
 
 ---
 
 ## 安全说明
 
-- **出站白名单**：只向 `api.deepseek.com`、`platform.deepseek.com` 发请求；发请求前校验协议、主机名，拒绝环回/私有/保留地址的字面量 IP。要扩展目标需改 `lib/credentials.mjs` 的 `ALLOWED_HOSTS`。更新链路是**另一份**白名单（`lib/update.mjs` 的 `UPDATE_HOSTS`：GitHub 与几个转发镜像），同样规则。
+- **出站白名单**：DeepSeek 的余额/用量只向 `api.deepseek.com`、`platform.deepseek.com` 发请求（要扩展目标需改 `lib/credentials.mjs` 的 `ALLOWED_HOSTS`）；厂商余额模板与 GLM 套餐接口各自在模板/模块里**显式声明 host**，请求前逐条过同一套校验（仅 https、拒环回/私有/保留地址、host 不匹配即拒），GLM 套餐接口的 host 是 `open.bigmodel.cn`。发请求前一律校验协议与主机名。更新链路是**另一份**白名单（`lib/update.mjs` 的 `UPDATE_HOSTS`：GitHub 与几个转发镜像），同样规则。
 - **本地服务**：只监听 `127.0.0.1`；校验 `Host` 头防 DNS rebinding；写操作校验 `Origin` 防跨站伪造；停止服务需要 `server.json` 里的随机令牌；不返回通配 CORS 头。
 - **更新接口的信任边界**：`/whale/update.json` 无令牌、同源即可触发，而它的作用是「按镜像内容替换自身代码」——爆炸半径大于其他写接口。可换来的保障只有 HTTPS、出站白名单与「包内版本号 == 目标版本」的一致性检查，**没有签名 / 哈希校验**（见上文「更新」小节的说明）。不愿意接受这一点的用户请用方式二自行 `git pull`。
 - **浮层**：只加载本机 `127.0.0.1` 的页面，运行在 `contextIsolation` 下，仅通过 preload 暴露 `setInteractive` / `setViewport` / `quit` / 跟随间隔几个能力，页面没有 Node 权限。气泡里的外链统一交给系统浏览器打开，浮层窗口自身拒绝导航与新开窗口。
