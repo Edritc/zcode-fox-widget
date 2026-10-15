@@ -2513,6 +2513,55 @@ try {
     afterReopen === expectAfter('whale'),
     JSON.stringify({ after: afterReopen, expect: expectAfter('whale'), switch: await autoSwitch() })
   )
+  // 角色彩色渐变（哈基米）：切到它 → 装饰件渐变变量与气泡 SVG 描边渐变都生效；
+  // 切回非渐变角色（大肥鱼）→ 变量清空、描边回到实色。两面对照才说明「只有渐变角色吃」
+  const gradSnapOf = async () =>
+    parseJsonSafe(
+      await cdp.eval(
+        "(function(){var cs=getComputedStyle(document.documentElement);" +
+          "var stops=document.querySelectorAll('#zcwInkGrad .zcwv-inkstop');var cols=[];" +
+          "for(var i=0;i<stops.length;i++)cols.push(stops[i].getAttribute('stop-color'));" +
+          "return JSON.stringify({grad:(cs.getPropertyValue('--zcw-role-ink-grad')||'').trim()," +
+          "bubbleInk:(cs.getPropertyValue('--zcw-bubble-ink')||'').trim(),stops:cols})})()"
+      )
+    )
+  // 名字与后面那条用例里的同名助手区分开（同名 const 会直接语法错）
+  const clickRoleRowForGrad = (name) =>
+    cdp.eval(
+      "(function(){var ts=document.querySelectorAll('.zcwv-role-trigger');" +
+        "for(var i=0;i<ts.length;i++){if((ts[i].title||'').indexOf('\\u9009\\u62e9\\u5f62\\u8c61')===0){ts[i].click();break}}" +
+        "var rows=document.querySelectorAll('.zcwv-role-row');" +
+        "for(var j=0;j<rows.length;j++){var p=rows[j].querySelector('.zcwv-role-pick');" +
+        "if(p&&p.textContent==='" +
+        name +
+        "'){p.click();return true}}return false})()"
+    )
+  const gradPickedGem = await clickRoleRowForGrad('\u54c8\u57fa\u7c73')
+  await new Promise((r) => setTimeout(r, 1200))
+  const gradSnapGem = await gradSnapOf()
+  const gradPickedWhale = await clickRoleRowForGrad('\u5927\u80a5\u9c7c')
+  await new Promise((r) => setTimeout(r, 1200))
+  const gradSnapWhale = await gradSnapOf()
+  check(
+    '角色渐变：哈基米的气泡描边走 SVG 渐变、装饰件拿到 linear-gradient 变量',
+    gradPickedGem === true &&
+      !!gradSnapGem &&
+      gradSnapGem.bubbleInk === 'url(#zcwInkGrad)' &&
+      gradSnapGem.grad.indexOf('linear-gradient') === 0 &&
+      gradSnapGem.grad.indexOf('#7cbfef') !== -1 &&
+      gradSnapGem.grad.indexOf('#f2d39b') !== -1 &&
+      gradSnapGem.stops[0] === '#7cbfef' &&
+      gradSnapGem.stops[1] === '#76a1eb',
+    JSON.stringify({ picked: gradPickedGem, grad: gradSnapGem })
+  )
+  check(
+    '角色渐变：非渐变角色（大肥鱼）没有渐变（描边回到实色、装饰件变量清空）',
+    gradPickedWhale === true &&
+      !!gradSnapWhale &&
+      gradSnapWhale.grad === '' &&
+      /^#[0-9a-f]{6}$/i.test(gradSnapWhale.bubbleInk),
+    JSON.stringify({ picked: gradPickedWhale, grad: gradSnapWhale })
+  )
   // 等确认提醒：先开启开关（它在「气泡」行、与按压泡泡设置同一行；「钩子 <最近事件>」
   // 那一行已移除），再喂 waiting=true → 弹一次；同 ts 再轮询不重复弹
   const hookTs = Math.floor(Date.now() / 1000)
