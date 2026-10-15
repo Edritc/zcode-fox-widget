@@ -83,6 +83,7 @@ node "${CODEBUDDY_PLUGIN_ROOT}/lib/cli.mjs" status          # 今日积分 + 上
 node "${CODEBUDDY_PLUGIN_ROOT}/lib/cli.mjs" turn            # 上一轮消耗积分 + 等价金额 + 逐模型明细
 node "${CODEBUDDY_PLUGIN_ROOT}/lib/cli.mjs" start           # 启动挂件服务（返回地址）
 node "${CODEBUDDY_PLUGIN_ROOT}/lib/cli.mjs" stop            # 停止挂件服务
+node "${CODEBUDDY_PLUGIN_ROOT}/lib/cli.mjs" close           # 关闭插件（停浮层 + 停服务；看门狗本次停手，下次启动照常拉起）
 node "${CODEBUDDY_PLUGIN_ROOT}/lib/cli.mjs" json            # 结构化输出，便于程序消费
 node "${CODEBUDDY_PLUGIN_ROOT}/lib/cli.mjs" key sk-xxxx     # 写入厂商 API Key（可选功能）
 node "${CODEBUDDY_PLUGIN_ROOT}/lib/cli.mjs" mode token      # 切换对账/兜底口径（主显示固定积分，此项只决定账号口径）
@@ -98,6 +99,8 @@ node "${CODEBUDDY_PLUGIN_ROOT}/lib/cli.mjs" desktop install # 安装 Electron �
 **本分支默认关闭自更新**（`lib/update.mjs` 的 `startAutoCheck()` 需显式 `FOX_WIDGET_ENABLE_UPDATE_CHECK=1` 才启用）。理由：ZCode 版的自更新会把文件**原地覆盖**到客户端 cache 快照，而 WorkBuddy 的版本账本由 `installed_plugins.json` 记录、目录名带版本号，原地覆盖会让二者对不上，和宿主的插件管理打架。
 
 推荐更新方式：`git pull` → 在 WorkBuddy 的**技能市场页**选中 `fox-local` 市场点「刷新」。发版口径见 `CONTRIBUTING.md`（tag 前缀 `wb-v`）。
+
+挂件菜单最下面那行末尾的「检查更新…」打开更新面板（显示当前 / 最新版本；自更新关闭时以「已是最新 / 未启用」的状态呈现），面板右侧是「重启挂件」与「关闭插件」——后者把当前这一份停掉（服务 + 浮层），并让看门狗本次停手，见「配置字段」下的说明。
 
 > 装插件时注意：宿主的「添加市场」是**填「市场源」的文本框**（不是文件夹选择框），
 > 必须填**真实存在的路径**（仓库根绝对路径）；填市场名/目录名会被判成 `Unsupported source format`。
@@ -125,6 +128,8 @@ node "${CODEBUDDY_PLUGIN_ROOT}/lib/cli.mjs" desktop install # 安装 Electron �
 | `followIntervalMs` | 跟随探测间隔（毫秒），默认 40 |
 | `vendorKeys` | `{ <模板 id>: <key> }`，手工给厂商卡填凭据 |
 
+另外有一个**不是配置**的状态文件：`<插件数据目录>/close-pause.json`——菜单里点过「关闭插件」时写下，看门狗见到它就停手（本线看门狗每 15 秒补活，不拦就会把刚关掉的挂件拉回来）。它只活到「下次宿主启动」或「挂件被钩子 / 显式启动拉回来」，然后自动删掉；想立刻恢复就 `node lib/cli.mjs start`。
+
 挂件自身的外观与开关（大小、音效、音量、角色、主题、气泡、每轮消耗提示与自动关闭秒数、避让滚动条、桌宠模式、跟随延迟、预警阈值、显示跟随）在 `<插件数据目录>/widget-state.json`：
 - `theme`：`light` / `dark` / `system`——`system` 即「跟随 WorkBuddy」（三层判定：浮层观测宿主窗口 DWM 暗色标志 > `preferences.json` 的 `theme` > 操作系统，见 `lib/host-theme.mjs`）。
 - `petMode`：桌宠模式（浮层专属，默认 false）。开着时**视口 = 整个浮层窗口（主显示器工作区）**，鲸鱼可拖出 WorkBuddy 窗口，失焦/被盖住/最小化都不隐身。
@@ -139,6 +144,7 @@ node "${CODEBUDDY_PLUGIN_ROOT}/lib/cli.mjs" desktop install # 安装 Electron �
 |---|---|
 | **界面上看不到挂件** | 插件无法注入 WorkBuddy 客户端界面，必须走桌面浮层：先 `desktop install` 装运行时，再 `window start`。**先分两层定位**：`curl 127.0.0.1:39321/whale/health` 有响应（服务是好的）但桌面没窗口 → 问题在浮层，看 `autostart.log` 最后一行与下面的「浮层秒退」两条 |
 | **启动 WorkBuddy 后桌面上没有挂件，随便动一下会话（比如点「对话回退」）才冒出来** | **这是宿主语义，不是故障**：WorkBuddy **启动客户端本身不触发 `SessionStart`**。实测（宿主日志 `executeSessionStartHooks` 对齐 `AppStartup.log`）：存活 14s / 21s 的两个应用实例里 SessionStart **一次都没跑**；其余实例内它出现的延迟从 **+19s 到 +736s 毫无规律** → 由**用户动作**驱动（`source=resume`＝真正进入/恢复一个会话），不是启动定时器。所以自启只挂 SessionStart 的话，冷启动后「一动不动」就没有挂件。**v2.0.1 起已在 `hook-event.mjs` 里加了廉价兜底**：`UserPromptSubmit` / `Notification` 时瞄一眼 `server.json` / `overlay.json` 的 pid，不活着就后台 detached 拉起 `autostart.mjs`（不阻塞这一轮，20s 节流）。排查时看 `<插件数据目录>/hook-state.json` 的 `lastEnsureSpawnAt` 与 `autostart.log`；要关掉这个行为设 `FOX_WIDGET_NO_ENSURE=1` |
+| **点过「关闭插件」，现在想让它回来** | 启动一次即可：`node lib/cli.mjs start`（要浮层就 `window start`），或让助手调用 `whale_widget` 的 `start`。它只是本次关闭——`<插件数据目录>/close-pause.json` 这个标记只活到下次宿主启动、或挂件被别的路径拉回来，看门狗日志会记 `skip: close-pause (idle until next host start)`；不需要手动恢复任何配置 |
 | **浮层进程在跑、但你就是看不见它** | 十有八九**不是故障，是设计行为**：浮层默认**只跟随 WorkBuddy 前台**，你切到别的窗口（浏览器 / 游戏 / 另一个 IDE / 图片查看器）它就会隐身。要它常驻就开挂件菜单里的**桌宠模式**。确认它此刻到底显没显示：看 `<插件数据目录>/overlay-debug.log` 最后几行 —— `hidden host-not-foreground` = **正常隐身**，`shown-at {…}` / `reshown-at {…}` = 已经显示。**问用户之前先问一句「你是不是在别的窗口上」**（本机实测：用户连续三次报「消失了」，每次查下来最顶层窗口都不是 WorkBuddy —— 分别是 War Thunder / 图片查看器 / WorkBuddy 被最小化）。重启后的头几十秒也常是这种情况（那时 WorkBuddy 还没拿到前台）。判定规则就一句：`show = 未最小化 && (前台是 WorkBuddy 或前台是浮层本身)`，且**只在状态变化时上报**，所以「一直没消息」= 状态没变过 = 一直该隐身。**但有一个例外**：主进程活着、页面已死的**僵尸态**——见下面「凡是都活着、桌面却什么都没有」一行 |
 | **凡是都活着、桌面却什么都没有**（僵尸浮层） | **2026-10-14 真机实测的最难缠形态**：Electron 主进程活着、窗口可见（`IsWindowVisible=1`、标题对、rect 对），但**渲染进程已死** → 窗口是一块空白透明层。此时 `overlay.json` 的 pid 活着、`kill(pid,0)` 成功、看门狗与钩子的补活逻辑**全都认为它健康**，于是僵尸态可以无限期留着，用户反复重启宿主也修不好（浮层不在宿主进程树里，不随宿主退出）。**怎么确认**：① `netstat -ano \| grep :39321` 采样 15 秒 —— 页面每 1 秒轮询 `last-turn.json`，**连接数零变化 = 页面死了**（这是最可靠的一条）；② `overlay-debug.log` 里最后一条 `page-linfo` 是很久以前；③ 事件日志有 `page-beat-fail (2/2)` + `page-reload`（v2.0.1 起的自愈）。**怎么触发**：同一条产品线的两个副本同时用 `%APPDATA%\fox-widget-overlay`（重复拉起一个实例，例如在 agent shell 里跑 `window restart`）→ 抢 GPUCache 文件锁 → 连环 GPU 崩溃（`exit_code=-1073741819`）→ 正在用的那个浮层的渲染进程被打死。**怎么修**：结束那个浮层进程（若它以管理员权限运行，普通权限收不掉，必须管理员终端 `taskkill /F /T /PID <pid>`），或完全退出宿主等它按 `gone` 自行退出后重开。**代码侧已加的兜底**：`desktop/main.cjs` 的页面心跳（30s 一次，连续 2 次失败即 reload）+ `render-process-gone → reload`；`lib/overlay.mjs` 的 `stopOverlay` 收完**复验**（杀不掉就如实报错、保留记录）；`lib/cli.mjs` 的 `window restart` / `restart-all` 在收不掉时**中止**，不再叠加新实例 |
 | **`window stop` / `window restart` 说「已关闭」但其实没关掉** | 浮层以**更高权限**（管理员）运行，普通权限的 `taskkill` 收不掉。判据：`tasklist` 里还能看到 electron 进程；或直接查完整性级别（管理员/System 进程的 token 连打开都拒绝）。当前实现会如实报错（`浮层进程未能结束（pid …）`）并中止启动，不再假装成功。根因通常在**看门狗被从管理员终端安装过**——看门狗是常驻进程，它和它的后代（服务、浮层）都继承管理员权限。修法：在**普通**终端重跑 `node lib/cli.mjs watchdog install`（或在管理员终端先 `taskkill /F /T /PID <看门狗 pid>`），让看门狗回到普通权限 |

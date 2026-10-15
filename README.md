@@ -1,6 +1,6 @@
 # WorkBuddy狐娘小挂件（fox-widget）
 
-<div align="center"><img src="assets/fox.png" width="420" alt="WorkBuddy狐娘小挂件"></div>
+<div align="center"><img src="assets/wb.png" width="420" alt="WorkBuddy狐娘小挂件"></div>
 
 > 产品名 **WorkBuddy狐娘小挂件**（英文名 Fox Widget）。在 WorkBuddy 里常驻一位嘎啦嘛（可一键切回原版大肥鱼，或上传任意形象）：
 >
@@ -28,7 +28,7 @@
 
 **沿用自上游**：`assets/` 下上游素材（鲸鱼形象、`rua.gif`、两套音效）、气泡 SVG 几何、字号档、动画参数、拖拽/四分吸附/左吸附镜像/alpha 命中检测、随机台词六组的文案与权重、峰谷定价表与时段规则、记账模式语义、余额接口取项规则。
 
-**新增素材（非上游）**：`GLM.png`（嘎啦嘛）、`gpt.png`（GPT娘）、`kimi.png`（kimi娘）、README 头图 `fox.png` —— 均为项目自有素材；`xiaoke.png`（小克）取自 [aklnaaw/dsh-xiaoke-widget](https://github.com/aklnaaw/dsh-xiaoke-widget)（MIT），**已获原作者授权**，并按本仓库角色的画布规格等比归一化（内容高度约 98%、底/右对齐），与其余内置形象观感一致。
+**新增素材（非上游）**：`GLM.png`（嘎啦嘛）、`gpt.png`（GPT娘）、`kimi.png`（kimi娘）、README 头图 `wb.png`（WorkBuddy 版形象） —— 均为项目自有素材；`xiaoke.png`（小克）取自 [aklnaaw/dsh-xiaoke-widget](https://github.com/aklnaaw/dsh-xiaoke-widget)（MIT），**已获原作者授权**，并按本仓库角色的画布规格等比归一化（内容高度约 98%、底/右对齐），与其余内置形象观感一致。
 
 **ZCode 版移植期重写**：本地服务 + 独立页面 + 桌面浮层的呈现层；三级凭据发现链；每轮消耗改读 ZCode 落库的 `turn_usage`；MCP 服务、SessionStart 自启 hook、skill、`/fox` 命令与 CLI；出站白名单与本地服务加固。
 
@@ -267,7 +267,7 @@ node lib/cli.mjs key sk-xxxxxxxxxxxxxxxx     # 写进插件配置
 
 | 字段 | 默认 | 作用 |
 |---|---|---|
-| `autoStartWidget` | `true` | 会话启动时自动拉起挂件服务 |
+| `autoStartWidget` | `true` | 会话启动时自动拉起挂件服务（看门狗也照它怠速） |
 | `autoStartOverlay` | `true` | 会话启动时顺便拉起桌面浮层 |
 | `followIntervalMs` | `40` | 跟随探测间隔（毫秒），菜单里的选择会覆盖它 |
 | `port` | 自动（39321） | 固定端口，被占用时自动顺延 |
@@ -303,7 +303,7 @@ node lib/cli.mjs watchdog status     # 查看自启项与进程状态
 node lib/cli.mjs watchdog uninstall  # 移除
 ```
 
-启动项写在启动文件夹（`fox-widget-watchdog.vbs`，用户级、免管理员、删文件即卸载），登录时它会自动挑最新的插件副本与可用的 node，所以**插件升级后不需要重装**。日志在 `${CODEBUDDY_PLUGIN_DATA}/watchdog.log`。`autoStartWidget=false` 时看门狗怠速（不拉起任何东西）；排障可临时 `FOX_WIDGET_NO_WATCHDOG=1`。
+启动项写在启动文件夹（`fox-widget-watchdog.vbs`，用户级、免管理员、删文件即卸载），登录时它会自动挑最新的插件副本与可用的 node，所以**插件升级后不需要重装**。日志在 `${CODEBUDDY_PLUGIN_DATA}/watchdog.log`。`autoStartWidget=false` 时看门狗怠速（不拉起任何东西）；排障可临时 `FOX_WIDGET_NO_WATCHDOG=1`。菜单里的「关闭插件」会让看门狗**在本次**停手（它每 15 秒补活，不拦就白关了；见「使用指南」的「挂件菜单」末行）。
 
 ### 命令行
 
@@ -311,6 +311,7 @@ node lib/cli.mjs watchdog uninstall  # 移除
 node lib/cli.mjs status          # 今日积分 + 上下文余量 + 近 7 天 + 挂件服务与桌面浮层状态
 node lib/cli.mjs turn            # 上一轮对话消耗（积分 + 等价金额 + 逐档明细）
 node lib/cli.mjs start / stop    # 启停挂件服务（浮层与本地页面共用同一个）
+node lib/cli.mjs close           # 关闭插件：停浮层与服务（本次关闭，看门狗本次也停手；下次启动照常拉起）
 node lib/cli.mjs window start    # 启动桌面浮层（浮在 WorkBuddy 界面上）
 node lib/cli.mjs window stop     # 关闭浮层
 node lib/cli.mjs window status   # 浮层与运行时状态
@@ -330,7 +331,7 @@ node lib/cli.mjs json            # 结构化输出，便于脚本消费
 |---|---|
 | `whale_balance` | 余额、今日已用、当前峰谷时段 |
 | `whale_last_turn` | 上一轮消耗金额与逐档明细 |
-| `whale_widget` | `start` / `stop` / `status` / `url`，以及浮层的 `overlay_start` / `overlay_stop` / `overlay_status` |
+| `whale_widget` | `start` / `stop` / `status` / `url` / `close`（关闭插件），以及浮层的 `overlay_start` / `overlay_stop` / `overlay_status` |
 | `whale_config` | 查看或修改配置（API Key、对账口径、端口、自启、跟随间隔） |
 
 ### 挂件菜单
@@ -357,6 +358,7 @@ node lib/cli.mjs json            # 结构化输出，便于脚本消费
 | 跟随延迟 | **仅浮层**：探测 WorkBuddy 窗口位置的间隔，16 / 40 / 100 / 250ms（16ms 为系统定时器粒度下的实际下限） |
 | 用量记录 | 今日金额与模型占比、近 7 天逐日、最近 50 条明细（一级菜单；v1.8.0–v1.8.6 曾收进记账页） |
 | =角色名记账= | 记账二级页：额度预警 / 余额预警 / 预警内容模板 / 余额校正（原「预警」「余额校正」两行已收编于此） |
+| 关闭插件 | 在记账二级页的「检查更新…」面板最右侧、「重启挂件」旁边：把**当前这一份**停掉——桌面浮层与挂件服务都退出，看门狗本次也停手（否则它 15 秒内就会把挂件拉回来）。它只是本次关闭：下次启动 WorkBuddy 照常拉起，跟手动关掉一个窗口一个意思。要连点两次才知道你是认真的（第二次按钮变成「确认关闭？」，面板里有提示），关掉之后界面上没有可点回来的入口；想立刻回来就在终端跑 `node lib/cli.mjs start`（要浮层再 `window start`），或在会话里让助手调 `whale_widget` 的 `start`。更新正在写文件时这个按钮不可用 |
 
 ### 浮层里的交互要点
 
@@ -462,7 +464,8 @@ node lib/cli.mjs json            # 结构化输出，便于脚本消费
 | 现象 | 原因与处理 |
 |---|---|
 | 界面上看不到挂件 | WorkBuddy 客户端不提供界面注入点，必须走桌面浮层：`desktop install` 装运行时，再 `window start` |
-| 打开 WorkBuddy 没有自动出现 | 看 `${CODEBUDDY_PLUGIN_DATA}/autostart.log` 最后一行。**没有新行说明钩子没被触发**（插件未启用，或改完 `hooks/hooks.json` 后没重启客户端，或钩子里的 `node` 不在 PATH）；`overlay=skipped:no-runtime` 说明运行时没装；`overlay=failed:...` 看括号里的原因。想看钩子到底有没有跑：设 `FOX_WIDGET_HOOK_DEBUG=1`，每次事件会写进 `${CODEBUDDY_PLUGIN_DATA}/hook.log` |
+| 打开 WorkBuddy 没有自动出现 | 看 `${CODEBUDDY_PLUGIN_DATA}/autostart.log` 最后一行。**没有新行说明钩子没被触发**（插件未启用，或改完 `hooks/hooks.json` 后没重启客户端，或钩子里的 `node` 不在 PATH）；`skip: autoStartWidget=false` 说明配置里关掉了自启（菜单里的「关闭插件」不写配置，它只停当前这一份）；`overlay=skipped:no-runtime` 说明运行时没装；`overlay=failed:...` 看括号里的原因。想看钩子到底有没有跑：设 `FOX_WIDGET_HOOK_DEBUG=1`，每次事件会写进 `${CODEBUDDY_PLUGIN_DATA}/hook.log` |
+| 点过菜单里的「关闭插件」，想立刻让它回来 | 启动一次即可：`node lib/cli.mjs start`（要浮层再加 `window start`），或在会话里让助手调 `whale_widget` 的 `start`。它只是本次关闭，什么都不用恢复——下次启动 WorkBuddy 本来就会照常拉起 |
 | 积分 / 上下文一直读不到 | 先看 `/whale/hook.json` 有没有 `sessionId`（没有 = `UserPromptSubmit` 钩子没跑到，`hook-state.json` 没写）；再看 `/whale/context.json` 的 `reason`：`db-unavailable` = 宿主 `workbuddy.db` 读不到或自带 node 不支持 `node:sqlite`（需 ≥ 22.5，实测 22.22.2 可用） |
 | 余额显示「未找到 DeepSeek API Key」 | **这是预期**：WorkBuddy 是订阅积分制，默认没有用户自带的厂商 key（模型由宿主托管），所以厂商卡默认全都不可用。想用就自己配：环境变量 `DEEPSEEK_API_KEY`，或 `${CODEBUDDY_PLUGIN_DATA}/config.json` 的 `apiKey`，或 `node lib/cli.mjs key sk-...`。逐条明细看 `/whale/health` 的 `keyProbe` |
 | 今日积分比客户端显示的小 | 面板扫的是 `~/.workbuddy/projects/*/*.jsonl`，只取最近 60 个会话、每个只读尾部 2MB（性能取舍）。老会话或超长会话的早期轮次可能没算进去——`/whale/usage-records.json` 的 `scannedTranscripts` / `totalTranscripts` 能看出来 |
@@ -632,6 +635,6 @@ fox-widget（仓库根 = 插件根 = 市场根）
 
 - 原版挂件的视觉与交互设计、鲸鱼形象、rua 动图与音效来自 **[MeteorNOX/DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)**（Copyright (c) 2026 MeteorNOX，MIT）。
 - ZCode 移植版（宿主适配层重写、凭据发现、每轮消耗数据源）由 **[nb10yyds/zcode-whale-widget](https://github.com/nb10yyds/zcode-whale-widget)** 完成，本仓库 fork 自其基线。
-- v1.1.0 起的功能与优化（详见 [CHANGELOG](./CHANGELOG.md)）为 fork 后的延续开发；`GLM.png`（嘎啦嘛）、`gpt.png`、`kimi.png` 与 README 头图 `fox.png` 为项目自有素材。
+- v1.1.0 起的功能与优化（详见 [CHANGELOG](./CHANGELOG.md)）为 fork 后的延续开发；`GLM.png`（嘎啦嘛）、`gpt.png`、`kimi.png` 与 README 头图 `wb.png` 为项目自有素材。
 - 内置形象 **小克**（`assets/xiaoke.png`）取自 **[aklnaaw/dsh-xiaoke-widget](https://github.com/aklnaaw/dsh-xiaoke-widget)**（MIT，Copyright (c) 2026 MeteorNOX；该仓库二创自本仓库的上游），**已获原作者授权**在本项目中使用，图片按本仓库角色画布规格做了等比归一化。
 - 沿用与新增的逐条清单见 [`NOTICE`](./NOTICE)。如果喜欢这只鲸鱼（或狐娘），请去给上游点个 star。
