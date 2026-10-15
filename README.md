@@ -60,7 +60,7 @@
 - **按模型自动换角色**（v1.12.0 起）：默认开启，按当前模型所属厂商族自动切换内置形象与该角色的配色、台词池（GLM 系→嘎啦嘛、DeepSeek→大肥鱼、GPT 系→GPT娘、Kimi→kimi娘、Claude→小克）；认不出的模型保持不动，在角色菜单里手动选过形象后自动关闭这一项。
 - **挂件内自动更新**（v1.11.0 起）：服务定时探测远端版本，菜单的记账行里有「检查更新…」与状态小字；更新面板支持镜像链下载、备份、跳过此版本与一键重启（详见下文「更新」小节）。
 - **汉堡菜单**：大小 0.6–2.5×、音效、音量、角色、对账口径、峰谷播报、主题（跟随 ZCode / 浅色 / 深色）、显示、气泡开关、按压泡泡、每轮消耗提示与自动关闭秒数、避让滚动条，浮层下还有「桌宠模式」与「跟随延迟」。
-- **会话自启**：打开 ZCode（新会话）时自动拉起，不用手动开。
+- **会话自启**：打开 ZCode（新会话）时自动拉起，不用手动开；想随手停掉当前这一份，菜单更新面板里有「关闭插件」（见「更新」小节）。
 - **随窗口联动**：ZCode 移动/缩放时跟着走，最小化或被别的应用盖住时隐藏（除非开了桌宠模式），ZCode 退出时**浮层与本机服务一起退出**（下次会话启动时 SessionStart 钩子再拉起）。宿主更新（ZCode 自己被更新程序替换）时同理：窗口消失即隐身交还鼠标，探测到更新程序在跑、或宿主进程已退出就整体让路——**不留任何我们的进程**参与更新流程（issue #2 后半段「更新程序无法关闭 ZCode」）。
 
 ---
@@ -200,6 +200,8 @@
 3. 落盘只替换代码文件：先备份被覆盖/删除的文件到 `~/.zcode/whale/update/backup/`（保留最近两份），再写入新文件、删掉「上一个版本有、新版本没有」的旧文件（依据更新时写下的文件清单 `~/.zcode/whale/update-files.json`）。清单**按安装目录分别记录**——本仓常见两个安装副本（仓库本体 + `cache/zcode-fox-local/zcode-fox-widget/<版本>/`），两边各留一份，互不覆盖。没有清单时 git 工作区用 `git ls-files`、缓存副本整目录扫描兜底，且兜底时**只清理新包里也存在的顶层目录下**的文件（git 兜底给的是当前 HEAD 的全部被跟踪文件，不设限会把本地独有的文件一并删掉）；两者都拿不到就只覆盖不删除。
 4. 更新完成后点「重启挂件」（或 `node lib/cli.mjs restart-all`）让新版本生效。
 
+面板最右侧的「**关闭插件**」则相反：把当前这一份停掉——桌面浮层与挂件服务都退出。它**只是本次关闭**，不写任何「别再自启」的开关：下次会话启动（SessionStart 钩子）或收到提问时照常拉起，跟手动关掉一个窗口一个意思。它要连点两次（第二次按钮变成「确认关闭？」，面板里会提示）才算数，关掉之后界面上没有可点回来的入口；想立刻回来，在终端跑 `node lib/cli.mjs start`（要浮层就再 `window start`），或在会话里让助手调用 `whale_widget` 的 `start`。更新正在写文件时这个按钮不可用。
+
 不想被提醒可以点「跳过此版本」（记在 `widget-state.json` 的 `updateSkip`，出现更新的版本时自动失效）；完全不想有任何出站检查，把环境变量 `WHALE_DISABLE_UPDATE_CHECK=1` 传给服务进程即可。
 
 **方式二：手动拉取**
@@ -273,6 +275,7 @@ cat ~/.zcode/whale/autostart.log      # 每次启动追加一行，如 server=st
 node lib/cli.mjs status          # 余额 + 今日已用 + 挂件服务与桌面浮层状态
 node lib/cli.mjs turn            # 上一轮对话消耗（含逐档明细）
 node lib/cli.mjs start / stop    # 启停挂件服务（浮层与本地页面共用同一个）
+node lib/cli.mjs close           # 关闭插件：停浮层与服务（本次关闭，下次会话启动照常拉起）
 node lib/cli.mjs window start    # 启动桌面浮层（浮在 ZCode 界面上）
 node lib/cli.mjs window stop     # 关闭浮层
 node lib/cli.mjs window status   # 浮层与运行时状态
@@ -291,7 +294,7 @@ node lib/cli.mjs json            # 结构化输出，便于脚本消费
 |---|---|
 | `whale_balance` | 余额、今日已用、当前峰谷时段 |
 | `whale_last_turn` | 上一轮消耗金额与逐档明细 |
-| `whale_widget` | `start` / `stop` / `status` / `url`，以及浮层的 `overlay_start` / `overlay_stop` / `overlay_status` |
+| `whale_widget` | `start` / `stop` / `status` / `url` / `close`（关闭插件），以及浮层的 `overlay_start` / `overlay_stop` / `overlay_status` |
 | `whale_config` | 查看或修改配置（API Key、对账口径、端口、自启、跟随间隔） |
 
 ### 挂件菜单
@@ -315,7 +318,7 @@ node lib/cli.mjs json            # 结构化输出，便于脚本消费
 | 桌宠模式 | **仅浮层**：锁在最上层、切应用不隐身 |
 | 跟随延迟 | **仅浮层**：探测 ZCode 窗口位置的间隔，16 / 40 / 100 / 250ms（16ms 为系统定时器粒度下的实际下限） |
 | 用量记录 | 今日金额与模型占比、近 7 天逐日、最近 50 条明细（一级菜单；v1.8.0–v1.8.6 曾收进记账页） |
-| =角色名记账= | 记账二级页入口（额度预警 / 余额预警 / 预警内容模板 / 余额校正——原「预警」「余额校正」两行已收编于此）；同一行末尾还有 **「检查更新…」与更新状态小字**（v1.11.0 起，原先独占一行） |
+| =角色名记账= | 记账二级页入口（额度预警 / 余额预警 / 预警内容模板 / 余额校正——原「预警」「余额校正」两行已收编于此）；同一行末尾还有 **「检查更新…」与更新状态小字**（v1.11.0 起，原先独占一行）；点开更新面板后，里面另有「重启挂件」与最右侧的「关闭插件」 |
 
 ### 浮层里的交互要点
 
@@ -383,7 +386,8 @@ DeepSeek 调价时改 `lib/pricing.mjs` 顶部的 `PEAK_HOURS` / `BASE_PRICE` / 
 | 现象 | 原因与处理 |
 |---|---|
 | 界面上看不到挂件 | ZCode 客户端不提供界面注入点，必须走桌面浮层：`desktop install` 装运行时，再 `window start` |
-| 打开 ZCode 没有自动出现 | 看 `~/.zcode/whale/autostart.log` 最后一行。没有新行说明 hook 没加载（插件未启用，或改完配置后没重启会话）；`overlay=skipped:no-runtime` 说明运行时没装；`overlay=failed:...` 看括号里的原因 |
+| 打开 ZCode 没有自动出现 | 看 `~/.zcode/whale/autostart.log` 最后一行。没有新行说明 hook 没加载（插件未启用，或改完配置后没重启会话）；`skip: autoStartWidget=false` 说明配置里关掉了自启；`overlay=skipped:no-runtime` 说明运行时没装；`overlay=failed:...` 看括号里的原因 |
+| 点过菜单里的「关闭插件」，想立刻让它回来 | 启动一次即可：`node lib/cli.mjs start`（要浮层再加 `window start`），或在会话里让助手调 `whale_widget` 的 `start`。它只是本次关闭，什么都不用恢复——下次会话启动时本来就会自动拉起 |
 | 余额显示「未找到 DeepSeek API Key」 | 三条凭据来源都没命中：环境变量 `DEEPSEEK_API_KEY`、`~/.zcode/whale/config.json`、ZCode provider 配置（含数据目录迁移后的 `$ZCODE_DATA_BASE_DIR/.zcode/v2/provider_config.json`；规则没写 baseUrl 时端点从 zcode-builtin 模板继承）。错误文案带探测摘要，逐条明细看 `/whale/health` 的 `keyProbe`（会标明本地网关/加密凭据为何被跳过）。也可用 `key` 子命令写入 |
 | 点击挂件/气泡没声音 | 检查菜单音量是否为 0、音效组是否已选；音频在页面加载时预热，系统输出设备切换后若无声，重启浮层即可。按压音只对「按鲸鱼」和「点气泡」发声，菜单按钮刻意不出声 |
 | 点设置键却有音效 / 点挂件没音效 | v1.3.0 起菜单按钮不再出声；鲸鱼与气泡的按压音依旧。若点鲸鱼完全没声音，先确认菜单音量不为 0 |
@@ -491,7 +495,7 @@ zcode-fox-widget/
 | `autostart.log` | 每次会话启动的自启结果 |
 | `desktop-runtime/` | Electron 运行时（下载包约 150MB，解压装机后占用约 370MB；删掉即回收，浮层随之失效） |
 
-服务接口（排查时可直接 curl）：页面与资产 `/`（`/index.html`）、`/whale/widget.js`、`/whale/image.png`、`/whale/rua.gif`、`/whale/bubble-img.png`（`?id=<图片 id>`，内置 `rua` 与导入件都走它）、`/whale/sound/press.mp3` 与 `/whale/sound/release.mp3`（`?set=<音效集 id>`）；状态查询 `/whale/health`、`/whale/balance.json`、`/whale/plan.json`、`/whale/cmdgo.json`（CommandCode 三重额度，`?refresh=1` 强制绕缓存）、`/whale/vendors.json`、`/whale/usage-records.json`、`/whale/session.json`、`/whale/last-turn.json`、`/whale/hook.json`（钩子接入状态与「等确认」标记）、`/whale/update.json`（更新状态与动作：GET 看状态，POST `action=check\|update\|skip\|unskip\|restart`）、`/whale/sounds.json`、`/whale/roles.json`、`/whale/bubble-content.json`（GET/POST）、`/whale/bubble-templates.json`（预警与消耗提示模板，GET/POST）、`/whale/bubble-imgs.json`（图库索引）、`/whale/balance-adjustments.json`（GET/POST）、`/whale/size.json`（GET/PUT）、`/whale/zcode-theme.json`；写操作 `/whale/role-upload.json`、`/whale/role-rename.json`、`/whale/role-delete.json`、`/whale/bubble-img.json`、`/whale/bubble-img-delete.json`、`/whale/sound-upload.json`、`/whale/sound-delete.json`（写操作校验 Origin）；关停 `/whale/shutdown`（需 `server.json` 随机令牌）。
+服务接口（排查时可直接 curl）：页面与资产 `/`（`/index.html`）、`/whale/widget.js`、`/whale/image.png`、`/whale/rua.gif`、`/whale/bubble-img.png`（`?id=<图片 id>`，内置 `rua` 与导入件都走它）、`/whale/sound/press.mp3` 与 `/whale/sound/release.mp3`（`?set=<音效集 id>`）；状态查询 `/whale/health`、`/whale/balance.json`、`/whale/plan.json`、`/whale/cmdgo.json`（CommandCode 三重额度，`?refresh=1` 强制绕缓存）、`/whale/vendors.json`、`/whale/usage-records.json`、`/whale/session.json`、`/whale/last-turn.json`、`/whale/hook.json`（钩子接入状态与「等确认」标记）、`/whale/update.json`（更新状态与动作：GET 看状态，POST `action=check\|update\|skip\|unskip\|restart\|close`）、`/whale/sounds.json`、`/whale/roles.json`、`/whale/bubble-content.json`（GET/POST）、`/whale/bubble-templates.json`（预警与消耗提示模板，GET/POST）、`/whale/bubble-imgs.json`（图库索引）、`/whale/balance-adjustments.json`（GET/POST）、`/whale/size.json`（GET/PUT）、`/whale/zcode-theme.json`；写操作 `/whale/role-upload.json`、`/whale/role-rename.json`、`/whale/role-delete.json`、`/whale/bubble-img.json`、`/whale/bubble-img-delete.json`、`/whale/sound-upload.json`、`/whale/sound-delete.json`（写操作校验 Origin）；关停 `/whale/shutdown`（需 `server.json` 随机令牌）。
 
 ---
 

@@ -1039,6 +1039,57 @@ try {
     )
   )
   check('记账二级页：返回按钮收起面板', !!bookClosed && bookClosed.open === false, JSON.stringify(bookClosed))
+  // ⑨e 预警内容模板的「出泡预览」与真出泡同源：预览要显示该预警来源自己的内置
+  //     文案（Plan / CmdGo / 余额 三份各不相同），而不是当前计费源的内置视图——
+  //     此前三个预览都显示同一份「DeepSeek 余额 ¥x 高峰时段」，与实际出泡不符。
+  async function alertPreviewText(label) {
+    await cdp.eval(
+      "(function(){var bs=document.querySelectorAll('.zcwv-menu-row button');" +
+        "for(var i=0;i<bs.length;i++){if(/^=.+=\\u8bb0\\u8d26=$/.test(bs[i].textContent)){bs[i].click();break}}return true})()"
+    )
+    await new Promise((r) => setTimeout(r, 500))
+    const clicked = await cdp.eval(
+      "(function(){var p=document.querySelector('.zcwv-book');if(!p)return false;var bs=p.querySelectorAll('button');" +
+        "for(var i=0;i<bs.length;i++){if(bs[i].textContent==='" +
+        label +
+        "'){bs[i].click();return true}}return false})()"
+    )
+    if (!clicked) return null
+    await new Promise((r) => setTimeout(r, 500))
+    const preview = JSON.parse(
+      await cdp.eval(
+        "(function(){var ed=document.querySelector('.zcwv-editor');if(!ed)return JSON.stringify({err:'no-editor'});" +
+          "var big=ed.querySelector('.zcwv-bprev-big');if(!big)return JSON.stringify({err:'no-preview'});" +
+          "var out=[];var ls=big.querySelectorAll('.zcwv-bprev-line');" +
+          "for(var k=0;k<ls.length;k++)out.push(ls[k].textContent);" +
+          "return JSON.stringify({lines:out})})()"
+      )
+    )
+    await cdp.eval(
+      "(function(){var ed=document.querySelector('.zcwv-editor');if(!ed)return false;var bs=ed.querySelectorAll('button');" +
+        "for(var i=0;i<bs.length;i++){if(bs[i].textContent==='\\u5173\\u95ed'){bs[i].click();return true}}return false})()"
+    )
+    await new Promise((r) => setTimeout(r, 300))
+    return preview && preview.lines ? preview.lines.join(' ') : null
+  }
+  const pvPlan = await alertPreviewText('Plan')
+  const pvCmdgo = await alertPreviewText('CmdGo')
+  const pvBalance = await alertPreviewText('\u4f59\u989d')
+  check(
+    '预警预览：Plan 模板的预览是 GLM Plan 的内置预警文案（不是当前计费源的内置视图）',
+    typeof pvPlan === 'string' && pvPlan.indexOf('GLM Plan \u5269\u4f59') !== -1,
+    JSON.stringify(pvPlan)
+  )
+  check(
+    '预警预览：CmdGo 模板的预览是 CommandCode 的内置预警文案',
+    typeof pvCmdgo === 'string' && pvCmdgo.indexOf('CommandCode') !== -1 && pvCmdgo.indexOf('GLM Plan') === -1,
+    JSON.stringify(pvCmdgo)
+  )
+  check(
+    '预警预览：余额模板的预览是 DeepSeek 余额预警文案（含阈值口径）',
+    typeof pvBalance === 'string' && pvBalance.indexOf('DeepSeek \u4f59\u989d') !== -1 && pvBalance.indexOf('\u4f4e\u4e8e') !== -1,
+    JSON.stringify(pvBalance)
+  )
   // 用量记录回到一级菜单（v1.8.7）：菜单里恰有一个「用量记录…」按钮
   const usageInMenu = JSON.parse(
     await cdp.eval(
@@ -2181,9 +2232,9 @@ try {
   //    走真实交互（菜单在，点按钮开面板、点跳过、点返回）。桩随 reload 生效，
   //    检查放在最后，免得重置前面的用例状态。
   const updateStub =
-    '(function(){var real=window.fetch;window.__upSkip=false;window.fetch=function(u,o){' +
+    '(function(){var real=window.fetch;window.__upSkip=false;window.__upClose=false;window.fetch=function(u,o){' +
     "var s=String(u&&u.url?u.url:u);if(s.indexOf('/whale/update.json')!==-1){" +
-    "if(o&&o.method==='POST'){try{var a=JSON.parse(o.body||'{}');if(a.action==='skip')window.__upSkip=true;if(a.action==='unskip')window.__upSkip=false}catch(e){}}" +
+    "if(o&&o.method==='POST'){try{var a=JSON.parse(o.body||'{}');if(a.action==='skip')window.__upSkip=true;if(a.action==='unskip')window.__upSkip=false;if(a.action==='close')window.__upClose=true}catch(e){}}" +
     "var b={ok:true,version:'1.10.0',latest:'9.9.9',available:true,skipped:window.__upSkip?'9.9.9':null," +
     "skipActive:window.__upSkip,busy:false,phase:null,progress:0,message:null,source:'stub'};" +
     "return Promise.resolve(new Response(JSON.stringify(b),{status:200,headers:{'Content-Type':'application/json'}}))}" +
@@ -2249,6 +2300,51 @@ try {
     6000
   )
   check('更新面板：跳过此版本 → 按钮变「取消跳过」（状态回报 skipActive）', !!upSkipped.clicked && !!upAfterSkip, JSON.stringify(upAfterSkip))
+  // 关闭插件：在「重启挂件」右侧，且要二次确认（关掉就没界面可点回来了）；
+  // 第一次点击只改文案，第二次才真的发 action=close（桩会记下，不会真关）
+  const upCloseOrder = JSON.parse(
+    await cdp.eval(
+      "(function(){var p=document.querySelector('.zcwv-update');if(!p)return JSON.stringify({err:'no-panel'});" +
+        "var bs=p.querySelectorAll('button');var labels=[];" +
+        "for(var i=0;i<bs.length;i++)labels.push(bs[i].textContent);" +
+        "var row=bs.length?bs[bs.length-1].parentNode:null;" +
+        "return JSON.stringify({labels:labels,restart:labels.indexOf('\\u91cd\\u542f\\u6302\\u4ef6')," +
+        "close:labels.indexOf('\\u5173\\u95ed\\u63d2\\u4ef6')," +
+        "panelClient:p.clientWidth,panelScroll:p.scrollWidth," +
+        "rowClient:row?row.clientWidth:null,rowScroll:row?row.scrollWidth:null})})()"
+    )
+  )
+  check(
+    '更新面板：「关闭插件」紧跟在「重启挂件」右侧',
+    !!upCloseOrder && upCloseOrder.restart >= 0 && upCloseOrder.close === upCloseOrder.restart + 1,
+    JSON.stringify(upCloseOrder)
+  )
+  check(
+    '更新面板：按钮行加满四个按钮后不横向溢出（面板 320px / 按钮行 nowrap）',
+    !!upCloseOrder && upCloseOrder.panelScroll <= upCloseOrder.panelClient + 1 &&
+      upCloseOrder.rowScroll <= upCloseOrder.rowClient + 1,
+    JSON.stringify({panelClient: upCloseOrder.panelClient, panelScroll: upCloseOrder.panelScroll, rowClient: upCloseOrder.rowClient, rowScroll: upCloseOrder.rowScroll})
+  )
+  const upCloseArmed = JSON.parse(
+    await cdp.eval(
+      "(function(){var p=document.querySelector('.zcwv-update');var bs=p.querySelectorAll('button');" +
+        "for(var i=0;i<bs.length;i++){if(bs[i].textContent==='\\u5173\\u95ed\\u63d2\\u4ef6'){bs[i].click();break}}" +
+        "return JSON.stringify({armed:window.__upClose===true,label:bs[bs.length-1].textContent})})()"
+    )
+  )
+  check(
+    '关闭插件：第一次点只改文案（确认关闭？），不发关闭请求',
+    !!upCloseArmed && upCloseArmed.armed === false && upCloseArmed.label === '\u786e\u8ba4\u5173\u95ed\uff1f',
+    JSON.stringify(upCloseArmed)
+  )
+  const upCloseFired = JSON.parse(
+    await cdp.eval(
+      "(function(){var p=document.querySelector('.zcwv-update');var bs=p.querySelectorAll('button');" +
+        "for(var i=0;i<bs.length;i++){if(bs[i].textContent==='\\u786e\\u8ba4\\u5173\\u95ed\\uff1f'){bs[i].click();break}}" +
+        "return JSON.stringify({fired:window.__upClose===true})})()"
+    )
+  )
+  check('关闭插件：第二次点才发 action=close', !!upCloseFired && upCloseFired.fired === true, JSON.stringify(upCloseFired))
   const upClosed = JSON.parse(
     await cdp.eval(
       "(function(){var p=document.querySelector('.zcwv-update');var bs=p.querySelectorAll('button');" +

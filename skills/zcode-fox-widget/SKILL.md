@@ -56,6 +56,7 @@ node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" status          # 余额 + 今日已用 
 node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" turn            # 上一轮对话消耗
 node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" start           # 启动挂件服务（返回地址）
 node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" stop            # 停止挂件服务
+node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" close           # 关闭插件（停浮层 + 停服务；只是本次关闭，下次会话照常自启）
 node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" json            # 结构化输出，便于程序消费
 node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" key sk-xxxx     # 写入 API Key
 node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" mode token      # 切换对账/兜底口径（v1.7.0 起主显示固定本机库，此项只决定账号口径）
@@ -64,11 +65,13 @@ node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" window stop     # 关闭浮层
 node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" desktop install # 安装 Electron 运行时（浮层前置，一次性）
 ```
 
-服务接口（排查时可直接 curl）：`/whale/health`、`/whale/balance.json`、`/whale/last-turn.json`、`/whale/size.json`（GET/PUT）、`/whale/session.json`、`/whale/plan.json`（GLM Plan 配额）、`/whale/cmdgo.json`（CommandCode 三重额度，`?refresh=1` 强制绕缓存）、`/whale/vendors.json`、`/whale/usage-records.json`、`/whale/hook.json`（等确认标记与最近事件，**菜单里已不再显示这行诊断**）、`/whale/update.json`（GET 看状态，POST `action=check|update|skip|unskip|restart`）、`/whale/roles.json`、`/whale/role-upload.json`、`/whale/role-rename.json`（POST）、`/whale/role-delete.json`（POST）、`/whale/bubble-content.json`（GET/POST）、`/whale/balance-adjustments.json`（GET/POST）、`/whale/sounds.json`、`/whale/sound-upload.json`（POST）、`/whale/sound-delete.json`（POST）、`/whale/zcode-theme.json`、`/whale/image.png`、`/whale/rua.gif`、`/whale/sound/press.mp3` 与 `/whale/sound/release.mp3`（`?set=<音效集 id>`）、`/whale/widget.js`、`/whale/shutdown`（POST，需 `server.json` 令牌）。
+服务接口（排查时可直接 curl）：`/whale/health`、`/whale/balance.json`、`/whale/last-turn.json`、`/whale/size.json`（GET/PUT）、`/whale/session.json`、`/whale/plan.json`（GLM Plan 配额）、`/whale/cmdgo.json`（CommandCode 三重额度，`?refresh=1` 强制绕缓存）、`/whale/vendors.json`、`/whale/usage-records.json`、`/whale/hook.json`（等确认标记与最近事件，**菜单里已不再显示这行诊断**）、`/whale/update.json`（GET 看状态，POST `action=check|update|skip|unskip|restart|close`）、`/whale/roles.json`、`/whale/role-upload.json`、`/whale/role-rename.json`（POST）、`/whale/role-delete.json`（POST）、`/whale/bubble-content.json`（GET/POST）、`/whale/balance-adjustments.json`（GET/POST）、`/whale/sounds.json`、`/whale/sound-upload.json`（POST）、`/whale/sound-delete.json`（POST）、`/whale/zcode-theme.json`、`/whale/image.png`、`/whale/rua.gif`、`/whale/sound/press.mp3` 与 `/whale/sound/release.mp3`（`?set=<音效集 id>`）、`/whale/widget.js`、`/whale/shutdown`（POST，需 `server.json` 令牌）。
 
 ## 挂件内自动更新（v1.11.0 起）
 
-菜单最下面一行是「=角色名记账= + 检查更新… + 状态小字」：点「检查更新…」打开更新面板，里面能看到当前版本 / 最新版本，主按钮在「检查更新」「立即更新」之间切换，另有「跳过此版本」（跳过之后出现更新版本会自动失效）和「重启挂件」。
+菜单最下面一行是「=角色名记账= + 检查更新… + 状态小字」：点「检查更新…」打开更新面板，里面能看到当前版本 / 最新版本，主按钮在「检查更新」「立即更新」之间切换，另有「跳过此版本」（跳过之后出现更新版本会自动失效）、「重启挂件」和最右侧的「关闭插件」。
+
+- **关闭插件**：把当前这一份停掉——桌面浮层与挂件服务都退出。**只是本次关闭**，不写任何「别再自启」的标记：下次会话启动（SessionStart 钩子）或收到提问时照常拉起。按钮要连点两次才生效（关掉就没有界面可点回来了）；想立刻回来：`node lib/cli.mjs start` 或让助手调用 `whale_widget` 的 `start`。`node lib/cli.mjs close` 是它的命令行等价入口。更新正在写文件时该按钮不可用。
 
 - **出站与镜像**：检查与下载都走国内可达的镜像链（ghproxy / gh-proxy / codeload / jsdelivr），单源失败自动换下一个；所有候选地址过 `lib/update.mjs` 的白名单校验（https + 主机白名单 + 拒绝环回/私有/保留地址）。代理地址由 `lib/update.mjs` 的 `UPDATE_HOSTS` / `buildVersionEndpoints` / `buildTarballUrls` 维护。
 - **不做签名校验**：完整性只依赖 HTTPS 与「包内 `plugin.json` 的版本号 == 目标版本」，下载内容没有哈希/签名校验（半可信镜像内的既有取舍）。
@@ -111,7 +114,8 @@ node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" desktop install # 安装 Electron 运行
 | 现象 | 原因与动作 |
 |---|---|
 | **界面上看不到挂件** | 插件无法注入 ZCode 客户端界面，必须走桌面浮层：先 `desktop install` 装运行时，再 `window start`。装好后会话启动会自动拉起 |
-| **打开 ZCode 没有自动出现鲸鱼** | 自启由 SessionStart hook（`lib/autostart.mjs`）负责，先看 `~/.zcode/whale/autostart.log` 最后一行：`server=... overlay=...`。没有新行说明 hook 没被加载（插件未启用，或改完配置后还没重启会话）；`overlay=skipped:no-runtime` 说明 Electron 运行时没装（`desktop install`）；`overlay=failed:...` 看括号里的原因。也可以直接 `node lib/autostart.mjs` 手动跑一次验证 |
+| **打开 ZCode 没有自动出现鲸鱼** | 自启由 SessionStart hook（`lib/autostart.mjs`）负责，先看 `~/.zcode/whale/autostart.log` 最后一行：`server=... overlay=...`。没有新行说明 hook 没被加载（插件未启用，或改完配置后还没重启会话）；`skip: autoStartWidget=false` 说明配置里关掉了自启（菜单里的「关闭插件」**不**写这个标记：它只是把当前这一份停掉）；`overlay=skipped:no-runtime` 说明 Electron 运行时没装（`desktop install`）；`overlay=failed:...` 看括号里的原因。也可以直接 `node lib/autostart.mjs` 手动跑一次验证 |
+| **点过「关闭插件」，现在想让它回来** | 启动一次即可：`node lib/cli.mjs start`（要浮层就 `window start`），或让助手调用 `whale_widget` 的 `start`。它只是本次关闭、不落任何状态，所以没有「恢复」这一步——下次会话启动时钩子本来就会照常拉起 |
 | **鲸鱼不跟着 ZCode 走** | 跟随由 `desktop/follow-window.ps1` 常驻探测（默认每 40ms 读一次 ZCode 主窗口矩形与前台状态）。完全不动时先确认该 PowerShell 子进程是否还活着（`window stop` 后 `window start` 重建）；跟进脚本的输出与判断依据会写进 `~/.zcode/whale/overlay-debug.log`（仅在 `WHALE_DEBUG_PORT` 开启时记录） |
 | 跟得不跟手 / 想更省资源 | 挂件菜单「跟随延迟」可即时切换 16/40/100/250ms（改完不需重启浮层），也可写进 `config.json` 的 `followIntervalMs`。默认 40ms 实测端到端延迟约 13ms、稳态 CPU 约 0.16% 单核（曾有的 5ms 档已移除：实际周期受系统定时器量子约束只能到 ≈11ms，名不副实） |
 | 探测脚本秒退 / 浮层跟着消失 | 多为 `follow-window.ps1` 里的 C# 编译失败或脚本被写成非 ASCII。`overlay-debug.log` 里搜 `csharp-compile-failed` / `follow-loop-error`；该文件必须保持纯 ASCII（PS 5.1 按 ANSI 代码页读） |
