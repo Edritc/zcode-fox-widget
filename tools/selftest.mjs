@@ -47,13 +47,13 @@ const { costOfUsage, priceFor, isPeakTime, nextPeakChange, resolveVendor, resolv
 // plan-balance 在 WorkBuddy 分支已冻结：只保留两个出口（readPlanBalance/turnPlanUsage），
 // 恒返回「宿主无此项」。GLM Plan 日志解析相关的断言在本文件里已按迁移要求删除。
 const { readPlanBalance, turnPlanUsage } = await import('../lib/plan-balance.mjs')
-const { getPath, TEMPLATES, fetchFromTemplate, pickVendorBalance } = await import('../lib/vendors.mjs')
+const { getPath, TEMPLATES, fetchFromTemplate, pickVendorBalance, listVendorStatus } = await import('../lib/vendors.mjs')
 const { isBlockedHost } = await import('../lib/blocked-host.mjs')
 const { matchTemplateId, buildProviderEntries, invalidateDiscoverCache } = await import('../lib/discover.mjs')
 const { computeTodayUsage, resolveTodayUsage, pickBalanceInfo, platformUsageUrl } = await import('../lib/balance.mjs')
 const { mapHostTheme, themeOfPreferences, resolveHostTheme } = await import('../lib/host-theme.mjs')
 const { safeMirrorUrl, overlaySpawnEnv, overlayStopOutcome, stopOverlay } = await import('../lib/overlay.mjs')
-const { MODEL_ROLE_RULES, roleIdForModel } = await import('../lib/paths.mjs')
+const { MODEL_ROLE_RULES, roleIdForModel, BUILTIN_ROLES } = await import('../lib/paths.mjs')
 const { findApiKey, readPluginConfig } = await import('../lib/credentials.mjs')
 const { resolveBillingSource, isNightOffpeak, resolveHostBillingSource } = await import('../lib/source.mjs')
 const { readLatestTurn, resolveSession, readContextUsage, usageFromRawUsage, CREDIT_CURRENCY } = await import('../lib/turn-cost.mjs')
@@ -492,6 +492,46 @@ function check(name, ok, detail) {
       q35f.tier === '128K-256K' && q35f.miss[0] === 0.8 && q35f.out[0] === 8,
     JSON.stringify({ p: q36p.miss, f: q36f.miss, f35: q35f.miss })
   )
+  // Gemini 全家桶（2026-10-15 官方价抓取）：4 Argon 促销价 + ar 短名 + 3.1 Pro 200K
+  // 分档 + 缓存写无按 token 价目记 0（隐式缓存只收缓存读）
+  const arFlat = resolvePricing({ model: 'gemini-4-argon', inTokens: 400000 })
+  const arAlias = resolvePricing({ model: 'gemini-4-ar' })
+  const proLo = resolvePricing({ model: 'gemini-3.1-pro-preview', inTokens: 150000 })
+  const proHi = resolvePricing({ model: 'gemini-3.1-pro-preview', inTokens: 300000 })
+  check(
+    'Gemini 全家桶：4 Ar 促销 $2/$10、缓存读 $0.10、缓存写记 0（输入档不影响）；3.1 Pro 200K 整单取档（$2/$12 → $4/$18）',
+    arFlat.vendor === 'gemini' && arFlat.currency === 'USD' &&
+      arFlat.tier === 'flat' && arFlat.miss[0] === 2 && arFlat.out[0] === 10 && arFlat.hit[0] === 0.1 && arFlat.cw[0] === 0 &&
+      arAlias.miss[0] === 2 &&
+      proLo.tier === '<=200K' && proLo.miss[0] === 2 && proLo.out[0] === 12 &&
+      proHi.tier === '>200K' && proHi.miss[0] === 4 && proHi.out[0] === 18,
+    JSON.stringify({ ar: [arFlat.miss, arFlat.out, arFlat.hit, arFlat.cw], proLo: proLo.miss, proHi: proHi.miss })
+  )
+  check(
+    'Gemini 网关前缀与其余在售族：google/ 网关、3.8/3.6 Flash、3.5/3.1 Flash-Lite、3 Flash preview、2.5 系各自命中',
+    resolvePricing({ providerId: 'google', model: 'whatever' }).vendor === 'gemini' &&
+      resolvePricing({ model: 'google/gemini-4-argon' }).vendor === 'gemini' &&
+      resolvePricing({ model: 'gemini-3.8-flash' }).miss[0] === 0.75 &&
+      resolvePricing({ model: 'gemini-3.6-flash' }).out[0] === 3.75 &&
+      resolvePricing({ model: 'gemini-3.5-flash-lite' }).miss[0] === 0.3 &&
+      resolvePricing({ model: 'gemini-3.1-flash-lite' }).out[0] === 1.5 &&
+      resolvePricing({ model: 'gemini-3-flash-preview' }).miss[0] === 0.5 &&
+      resolvePricing({ model: 'gemini-2.5-pro', inTokens: 250000 }).tier === '>200K' &&
+      resolvePricing({ model: 'gemini-2.5-flash' }).miss[0] === 0.3 &&
+      resolvePricing({ model: 'gemini-2.5-flash-lite' }).out[0] === 0.4,
+    JSON.stringify({
+      gw: resolvePricing({ providerId: 'google', model: 'whatever' }).vendor,
+      f38: resolvePricing({ model: 'gemini-3.8-flash' }).miss,
+      p25: resolvePricing({ model: 'gemini-2.5-pro', inTokens: 250000 }).tier,
+    })
+  )
+  check(
+    'Gemini 非文本族不套文本价（veo / imagen / embedding 只计 tokens）',
+    resolvePricing({ model: 'veo-3.1-generate' }).kind === 'none' &&
+      resolvePricing({ model: 'gemini-3-pro-image-preview' }).kind === 'none' &&
+      resolvePricing({ model: 'text-embedding-005' }).kind === 'none',
+    JSON.stringify([resolvePricing({ model: 'veo-3.1-generate' }).kind, resolvePricing({ model: 'text-embedding-005' }).kind])
+  )
   // 未知模型不套任何价目（含「仅 provider 名沾 DeepSeek」的误配场景）
   const unknown = costOfUsage('mystery-9000', { input_tokens: 1000, output_tokens: 10 }, at, 'weird-corp')
   const providerOnly = costOfUsage('totally-unknown', { input_tokens: 1000, output_tokens: 10 }, at, 'deepseek')
@@ -861,6 +901,14 @@ function check(name, ok, detail) {
       r('moonshot-kimi', 'kimi-k3', 'https://api.moonshot.cn/anthropic') === 'kimi'
   )
   check(
+    '计费源：Gemini 按官方端点 / provider 名 / 模型名三路识别（都是 USD 现金口径）',
+    r('google', 'gemini-4-argon', 'https://generativelanguage.googleapis.com/v1beta/openai') === 'gemini' &&
+      r('google-cloud', 'whatever', '') === 'gemini' &&
+      r('', 'gemini-4-ar', '') === 'gemini' &&
+      resolveBillingSource('google', 'gemini-4-argon').currency === 'USD' &&
+      resolveBillingSource('google', 'gemini-4-argon').timeMode === 'none'
+  )
+  check(
     '计费源：cmdgo 反代 → CommandCode 额度口径（限额走其套餐池，不看模型名）',
     r('cmdgo-bridge', 'deepseek/deepseek-v4-flash', 'http://127.0.0.1:11435/v1') === 'cmdgo' &&
       r('cmdgo-bridge', 'xiaomi/mimo-v2.6-pro', 'http://127.0.0.1:11435/v1') === 'cmdgo'
@@ -975,6 +1023,25 @@ function check(name, ok, detail) {
     '新模板：novita 原始单位 1e-4 换算 + stepfun 余额字段',
     nov && Math.abs(nov.amount - 12.3456) < 1e-9 && nov.currency === 'USD' && step && step.amount === 12.5 && step.currency === 'CNY',
     JSON.stringify({ nov, step })
+  )
+  // Gemini 双条目（2026-10-15）：API key 按量（凭据可发现）+ 订阅（无凭据设计，
+  // statusNote 说明「额度在官网看」，未配置凭据不是故障）
+  check(
+    'Gemini 模板：api 条目带 GEMINI_API_KEY 凭据链；订阅条目无凭据设计且 statusNote 就位',
+    TEMPLATES.gemini && TEMPLATES.gemini.kind === 'tokens' && (TEMPLATES.gemini.envKeys || []).indexOf('GEMINI_API_KEY') !== -1 &&
+      TEMPLATES['gemini-plan'] && TEMPLATES['gemini-plan'].kind === 'tokens' &&
+      (TEMPLATES['gemini-plan'].envKeys || []).length === 0 &&
+      String(TEMPLATES['gemini-plan'].statusNote || '').indexOf('gemini.google.com') !== -1,
+    JSON.stringify({ api: TEMPLATES.gemini && TEMPLATES.gemini.envKeys, plan: TEMPLATES['gemini-plan'] && TEMPLATES['gemini-plan'].kind })
+  )
+  // 订阅条目无凭据时的状态载荷：available=false 但 reason 是说明文案而非「未配置凭据」
+  //（listVendorStatus 不出网：tokens kind 只读本地配置）
+  const vstat = await listVendorStatus(true)
+  const gp = vstat.vendors.find((v) => v.id === 'gemini-plan')
+  check(
+    'Gemini 订阅：无凭据时状态回落到 statusNote（listVendorStatus 不出网）',
+    gp && gp.available === false && String(gp.reason || '').indexOf('官方无公开的订阅余额接口') !== -1,
+    JSON.stringify(gp && { available: gp.available, reason: (gp.reason || '').slice(0, 40) })
   )
   const mm = TEMPLATES['minimax-coding'].quota.pick({
     model_remains: [{ current_interval_remaining_percent: 62, current_weekly_remaining_percent: 81 }],
@@ -1598,7 +1665,7 @@ try {
   const byId = {}
   for (const v of (vendors && vendors.vendors) || []) byId[v.id] = v
   check(
-    '厂商模板清单完整（原 8 家 + v1.8.0 补齐的 26 条都在 vendors.json 里）',
+    '厂商模板清单完整（原 8 家 + v1.8.0 补齐的 26 条 + gemini-plan 都在 vendors.json 里）',
     vendors &&
       vendors.ok &&
       [
@@ -1619,6 +1686,7 @@ try {
         'openai',
         'anthropic',
         'gemini',
+        'gemini-plan',
         'xai',
         'groq',
         'mistral',
@@ -1986,22 +2054,23 @@ try {
   // `<provider>/<model>` 拼串，既有网关前缀也有套餐前缀，必须子串匹配
   {
     check(
-      'roleIdForModel：五个族各自的代表写法（含网关/套餐前缀）',
+      'roleIdForModel：六个族各自的代表写法（含网关/套餐前缀）',
       roleIdForModel('deepseek/deepseek-flash') === 'whale' &&
         roleIdForModel('account:zai-start-plan/GLM-5.3-Flash') === 'fox' &&
         roleIdForModel('cmdgo-bridge/claude-sonnet-5-5') === 'xiaoke' &&
         roleIdForModel('cmdgo-bridge/moonshotai/Kimi-K3') === 'kimi' &&
         roleIdForModel('zai-org/GLM-5.3') === 'fox' &&
         roleIdForModel('openai/gpt-5.6-terra') === 'gpt' &&
-        roleIdForModel('anthropic/claude-opus-5') === 'xiaoke',
-      [roleIdForModel('deepseek/deepseek-flash'), roleIdForModel('zai-org/GLM-5.3')].join(',')
+        roleIdForModel('anthropic/claude-opus-5') === 'xiaoke' &&
+        roleIdForModel('google/gemini-4-argon') === 'gemini' &&
+        roleIdForModel('gemini-3-pro') === 'gemini',
+      [roleIdForModel('deepseek/deepseek-flash'), roleIdForModel('google/gemini-4-argon')].join(',')
     )
     check(
       'roleIdForModel：认不出的模型返回 null（不动当前角色，不乱换人）',
       roleIdForModel('qwen3.8-max') === null &&
         roleIdForModel('MiniMax-M3') === null &&
         roleIdForModel('mimo-v2.6-pro') === null &&
-        roleIdForModel('gemini-3-pro') === null &&
         roleIdForModel('') === null &&
         roleIdForModel(null) === null
     )
@@ -2043,6 +2112,7 @@ try {
       'cmdgo-bridge/moonshotai/Kimi-K3',
       'cmdgo-bridge/claude-sonnet-5-5',
       'anthropic/claude-opus-5',
+      'google/gemini-4-argon',
       'qwen3.8-max',
       'MiniMax-M3',
       '',
@@ -2051,6 +2121,13 @@ try {
       '按模型换角色：前端副本的行为与 paths.mjs 逐项一致（' + samples.length + ' 个样本）',
       !!frontendRole && samples.every((m) => frontendRole(m) === roleIdForModel(m)),
       !!frontendRole ? samples.map((m) => m + '→' + String(frontendRole(m))).join(', ') : '未从 widget.js 解析到 roleForModel'
+    )
+    // 哈基米（gemini 族）的注册完整性：内置清单有它、立绘文件真实存在
+    check(
+      '内置角色：gemini（哈基米）在 BUILTIN_ROLES 里且立绘文件存在',
+      BUILTIN_ROLES.some((r) => r.id === 'gemini' && r.name === '哈基米') &&
+        BUILTIN_ROLES.every((r) => fs.existsSync(r.image)),
+      JSON.stringify(BUILTIN_ROLES.map((r) => r.id + ':' + (fs.existsSync(r.image) ? 'ok' : 'missing')))
     )
   }
 
@@ -2091,14 +2168,14 @@ try {
     }
     const ids = Object.keys(lights)
     check(
-      'U31：能从 widget.js 抠出对比度纯函数与五个内置角色墨色',
-      !!H && ids.length === 5,
+      'U31：能从 widget.js 抠出对比度纯函数与全部内置角色墨色',
+      !!H && ids.length === BUILTIN_ROLES.length && BUILTIN_ROLES.every((r) => lights[r.id]),
       JSON.stringify({ helper: !!H, ids })
     )
-    if (H && ids.length === 5) {
+    if (H && ids.length === BUILTIN_ROLES.length) {
       const bad = ids.filter((id) => H.contrastRatio(H.ensureContrast(lights[id], '#ffffff', 4.5), '#ffffff') < 4.5)
       check(
-        'U31：五个内置角色的浅色墨色经处理后正文对比度 ≥4.5:1（AA，白底）',
+        'U31：全部内置角色的浅色墨色经处理后正文对比度 ≥4.5:1（AA，白底）',
         bad.length === 0,
         bad.length ? '不达标：' + bad.map((id) => id + ' ' + lights[id] + ' ' + H.contrastRatio(H.ensureContrast(lights[id], '#ffffff', 4.5), '#ffffff').toFixed(2)).join(', ') : ids.map((id) => id + ' ' + H.contrastRatio(H.ensureContrast(lights[id], '#ffffff', 4.5), '#ffffff').toFixed(2)).join(', ')
       )
@@ -2574,20 +2651,11 @@ try {
   check('角色上传成功并自动启用', upRes.ok && upBody.ok && typeof upBody.id === 'string', JSON.stringify(upBody))
   const roles1 = await getJson(port, '/whale/roles.json')
   check(
-    '角色列表：五个内置形象在前（嘎啦嘛/大肥鱼/GPT娘/kimi娘/小克）+ 上传件，selected 指向上传件',
+    '角色列表：内置形象按 BUILTIN_ROLES 顺序在前（' + BUILTIN_ROLES.length + ' 个，含哈基米）+ 上传件，selected 指向上传件',
     roles1 &&
       roles1.ok &&
-      roles1.roles.length === 6 &&
-      roles1.roles[0].id === 'fox' &&
-      roles1.roles[0].name === '嘎啦嘛' &&
-      roles1.roles[1].id === 'whale' &&
-      roles1.roles[1].name === '大肥鱼' &&
-      roles1.roles[2].id === 'gpt' &&
-      roles1.roles[2].name === 'GPT娘' &&
-      roles1.roles[3].id === 'kimi' &&
-      roles1.roles[3].name === 'kimi娘' &&
-      roles1.roles[4].id === 'xiaoke' &&
-      roles1.roles[4].name === '小克' &&
+      roles1.roles.length === BUILTIN_ROLES.length + 1 &&
+      BUILTIN_ROLES.every((b, i) => roles1.roles[i].id === b.id && roles1.roles[i].name === b.name) &&
       roles1.selected === upBody.id,
     JSON.stringify(roles1).slice(0, 200)
   )
@@ -2717,7 +2785,7 @@ try {
   const rolesRestored = await getJson(port, '/whale/roles.json')
   check(
     '清掉 hiddenBuiltins 后内置形象回来（README 的找回路径可用）',
-    rolesRestored.roles.filter((r) => r.builtin).length === 5,
+    rolesRestored.roles.filter((r) => r.builtin).length === BUILTIN_ROLES.length,
     JSON.stringify(rolesRestored.roles.filter((r) => r.builtin).map((r) => r.id))
   )
 

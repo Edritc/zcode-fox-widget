@@ -465,8 +465,8 @@ try {
       roleView.names.indexOf('嘎啦嘛') !== -1 &&
       roleView.names.indexOf('大肥鱼') !== -1 &&
       roleView.names.indexOf('冒烟角色') !== -1 &&
-      roleView.del === 6 &&
-      roleView.builtin === 5 &&
+      roleView.del === 7 &&
+      roleView.builtin === 6 &&
       roleView.open === true &&
       roleView.trigger === '冒烟角色',
     JSON.stringify(roleView)
@@ -521,7 +521,8 @@ try {
   )
   check(
     '删除当前导入角色后回落默认嘎啦嘛（roles 只剩内置、图片 608px）',
-    rolesAfterDelete.roles.length === 5 && rolesAfterDelete.selected === 'fox' && imgAfterDelete === 608,
+    rolesAfterDelete.roles.length === 6 && rolesAfterDelete.roles.every((r) => r.builtin) &&
+      rolesAfterDelete.selected === 'fox' && imgAfterDelete === 608,
     JSON.stringify({ n: rolesAfterDelete.roles.length, selected: rolesAfterDelete.selected, nw: imgAfterDelete })
   )
   // ⑦d 内置形象也能删（v1.6.0）：删掉「嘎啦嘛」→ 列表少一个、选中的不再是它、
@@ -545,7 +546,7 @@ try {
   )
   check(
     '删掉内置「嘎啦嘛」：列表不再有它、选中项换人、图片仍可用',
-    rolesAfterBuiltinDel.roles.filter((r) => r.builtin).map((r) => r.id).join(',') === 'whale,gpt,kimi,xiaoke' &&
+    rolesAfterBuiltinDel.roles.filter((r) => r.builtin).map((r) => r.id).join(',') === 'whale,gpt,kimi,xiaoke,gemini' &&
       rolesAfterBuiltinDel.selected !== 'fox' &&
       imgAfterBuiltinDel > 1,
     JSON.stringify({ builtins: rolesAfterBuiltinDel.roles.filter((r) => r.builtin).map((r) => r.id), selected: rolesAfterBuiltinDel.selected, nw: imgAfterBuiltinDel })
@@ -558,7 +559,7 @@ try {
   const rolesRestored = await (await fetch('http://127.0.0.1:' + PORT + '/whale/roles.json')).json()
   check(
     '清掉 hiddenBuiltins 后内置形象回来（README 的找回路径）',
-    rolesRestored.roles.filter((r) => r.builtin).length === 5,
+    rolesRestored.roles.filter((r) => r.builtin).length === 6 && rolesRestored.roles.some((r) => r.builtin && r.id === 'gemini'),
     JSON.stringify(rolesRestored.roles.filter((r) => r.builtin).map((r) => r.id))
   )
 
@@ -2458,11 +2459,14 @@ try {
   await cdp.eval("window.__model='cmdgo-bridge/moonshotai/Kimi-K3'")
   await new Promise((r) => setTimeout(r, AUTO_ROLE_SETTLE_MS))
   const afterKimi = await roleNow()
+  await cdp.eval("window.__model='google/gemini-4-argon'")
+  await new Promise((r) => setTimeout(r, AUTO_ROLE_SETTLE_MS))
+  const afterGemini = await roleNow()
   check(
-    '按模型换角色：模型族切换 → 形象跟着换（DeepSeek / GLM / Kimi；缺失的角色不换）',
+    '按模型换角色：模型族切换 → 形象跟着换（DeepSeek / GLM / Kimi / Gemini→哈基米；缺失的角色不换）',
     afterDs === expectAfter('whale') && afterGlm === expectAfter('fox') && afterKimi === expectAfter('kimi') &&
-      afterKimi === nameOf('kimi'),
-    JSON.stringify({ ds: afterDs, glm: afterGlm, kimi: afterKimi, has: { whale: hasRole('whale'), fox: hasRole('fox'), kimi: hasRole('kimi') }, snap: snapGlm, pageErr: cdp.exceptions.slice(-2) })
+      afterKimi === nameOf('kimi') && afterGemini === expectAfter('gemini') && afterGemini === nameOf('gemini'),
+    JSON.stringify({ ds: afterDs, glm: afterGlm, kimi: afterKimi, gemini: afterGemini, has: { whale: hasRole('whale'), fox: hasRole('fox'), kimi: hasRole('kimi'), gemini: hasRole('gemini') }, snap: snapGlm, pageErr: cdp.exceptions.slice(-2) })
   )
   // 手动选角色 = 明确表态：开关自动关掉，之后模型再变也不跟随
   const manual = parseJsonSafe(
