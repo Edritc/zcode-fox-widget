@@ -53,5 +53,5 @@ Electron 对 `type:'toolbar'` 的窗口**创建即设 `WS_EX_TOOLWINDOW`，且�
 ## 提交信息
 
 - 提交内容：`desktop/main.cjs`（修复+注释）、`CHANGELOG.md`（「未发布」条目）。
-- 入库情况：本报告与 `OVERLAY-PAUSE-FINDINGS.md`（含闭环附录）已随 v1.12.0 入库；`HANDOFF.md` 等既有报告仍留在工作区未跟踪。
+- 入库情况：本报告与 `OVERLAY-PAUSE-FINDINGS.md`（含闭环附录）已随 v1.12.0 入库。
 - 发版清单（已在 v1.12.0 执行）：版本号（清单 + marketplace，health 同源）→ CHANGELOG 小节 → tag → Release → `git archive HEAD | tar -x -C <cache 副本>` → 重启服务/浮层。

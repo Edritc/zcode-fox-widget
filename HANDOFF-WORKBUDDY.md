@@ -58,8 +58,7 @@ zcode-fox-widget/
 ├── tools/                        ← 测试与演示（5 文件 ~7k 行）
 ├── assets/                       ← 角色立绘 / 音效 / 图片素材
 ├── README.md / CHANGELOG.md / CONTRIBUTING.md / LICENSE / NOTICE
-└── 调查报告（不发版时按惯例留在工作区）：OVERLAY-PAUSE-FINDINGS.md、
-    FIX-REPORT-ISSUE2-HOST-FREEZE.md、HANDOFF.md、CODE-*.md、UI-REVIEW-REPORT.md
+└── 调查报告（随版本入库）：OVERLAY-PAUSE-FINDINGS.md、FIX-REPORT-ISSUE2-HOST-FREEZE.md
 ```
 
 ### lib/ —— 后端（按重要性）
