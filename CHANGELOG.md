@@ -7,6 +7,13 @@
 
 ---
 
+## wb-v1.0.1 修复：运行时装残检测与浮层重试闸门
+
+- **运行时存在性改三哨兵判定**：`desktop install` 被中断会留下「装了一半」的运行时（electron.exe 在、icudtl.dat / v8_context_snapshot.bin / locales 等缺失），浮层每次启动都死在 `Invalid file descriptor to ICU data received`，桌面永远无挂件 —— 此前只查 electron.exe 存在，装残被当成可用。现在缺任一哨兵即视为未安装，`desktop install` 走修复路径，且装完自检、不完整直接报「下载被中断请重试」。
+- **看门狗去掉「连败 3 次就放弃」闸门**：浮层连续启动失败会把 15s 自检打成永久沉默（实测卡在 5/3 后 9 分钟无动作），表现为「挂件再也不出现」。现在宿主在跑就持续重试并如实上报；宿主真不在的情况由退出日志的分流检测兜底（转怠速）。
+
+---
+
 ## wb-v1.0.0 新增：移植到 WorkBuddy（积分口径 + 上下文余量）
 
 > 移植规划见 `MIGRATION-PLAN-WORKBUDDY.md`，分阶段实测与决策记录见 `docs/porting/`，
