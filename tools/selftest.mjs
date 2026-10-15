@@ -1024,6 +1024,85 @@ function check(name, ok, detail) {
     nov && Math.abs(nov.amount - 12.3456) < 1e-9 && nov.currency === 'USD' && step && step.amount === 12.5 && step.currency === 'CNY',
     JSON.stringify({ nov, step })
   )
+  // GLM 套餐用量接口（宿主无关，与 ZCode 线同源）：形状 / 窗口名 / 出站白名单。
+  // 本分支的「智谱 Coding Plan」厂商卡用它当 pick —— 此前只认嵌套形状，
+  // 现役 individual-coding-plan 账号一律「响应结构不符合模板」。
+  {
+    const { shapeQuotaPayload, windowLabel, GLM_PLAN_QUOTA_URL, GLM_PLAN_QUOTA_HOSTS } = await import('../lib/glm-plan-api.mjs')
+    const { assertSafeUpstream } = await import('../lib/credentials.mjs')
+    const flat = shapeQuotaPayload({
+      code: 200,
+      success: true,
+      data: {
+        level: 'lite',
+        limits: [
+          { type: 'CREDIT_LIMIT', unit: 3, number: 5, usage: 2000, currentValue: 0, remaining: 2000, percentage: 0 },
+          { type: 'CREDIT_LIMIT', unit: 6, number: 1, usage: 2000, currentValue: 1841, remaining: 158, percentage: 92, nextResetTime: 1792656212983 },
+        ],
+      },
+    })
+    check(
+      'GLM 套餐接口：平铺形状（CREDIT_LIMIT）→ 两窗口 + 主窗口取「剩余最低」那条',
+      !!flat &&
+        flat.ok &&
+        flat.source === 'glm-plan-api' &&
+        flat.unit === 'credits' &&
+        flat.level === 'lite' &&
+        flat.windows.length === 2 &&
+        flat.windows[0].label === '5 小时' &&
+        flat.windows[1].label === '本周' &&
+        flat.primaryWindow === '本周' &&
+        flat.remaining === 158 &&
+        flat.total === 2000 &&
+        Math.abs(flat.percentRemaining - 0.079) < 1e-9 &&
+        Math.abs(flat.percentUsed - 0.92) < 1e-9 &&
+        flat.nextResetAt === 1792656212983,
+      JSON.stringify(flat && { w: flat.windows, primary: flat.primaryWindow, pct: flat.percentRemaining })
+    )
+    const nested = shapeQuotaPayload({ data: { limits: [{ name: 'GLM-5.3', TOKENS_LIMIT: { percentage: 37.5, remaining: 62500000, total: 100000000 } }] } })
+    check(
+      'GLM 套餐接口：嵌套形状（TOKENS_LIMIT）照样收；认不出的响应不硬猜',
+      !!nested &&
+        nested.windows.length === 1 &&
+        nested.windows[0].label === 'GLM-5.3' &&
+        Math.abs(nested.percentRemaining - 0.625) < 1e-9 &&
+        shapeQuotaPayload({ data: { limits: [] } }) === null &&
+        shapeQuotaPayload(null) === null,
+      JSON.stringify(nested && nested.windows)
+    )
+    check(
+      'GLM 套餐接口：窗口名按 unit×number 归纳；出站地址过白名单（仅 https + 显式 host）',
+      windowLabel(3, 5) === '5 小时' &&
+        windowLabel(6, 1) === '本周' &&
+        windowLabel(9, 3) === 'unit9×3' &&
+        (() => {
+          try {
+            assertSafeUpstream(GLM_PLAN_QUOTA_URL, GLM_PLAN_QUOTA_HOSTS)
+            return true
+          } catch (err) {
+            return false
+          }
+        })() &&
+        (() => {
+          try {
+            assertSafeUpstream('http://open.bigmodel.cn/api/monitor/usage/quota/limit', GLM_PLAN_QUOTA_HOSTS)
+            return false
+          } catch (err) {
+            return true
+          }
+        })(),
+      GLM_PLAN_QUOTA_URL
+    )
+    // 厂商卡：模板直接吃同一份塑形（不出网，纯函数）
+    const card = TEMPLATES['zhipu-quota'].quota.pick({
+      data: { limits: [{ type: 'CREDIT_LIMIT', unit: 6, number: 1, usage: 2000, currentValue: 1841, remaining: 158, percentage: 92 }] },
+    })
+    check(
+      '智谱 Coding Plan 卡片：窗口带剩余额度（吃平铺形状）',
+      Array.isArray(card) && card.length === 1 && card[0].label === '本周' && card[0].percentUsed === 92 && card[0].remaining === 158 && card[0].total === 2000,
+      JSON.stringify(card)
+    )
+  }
   // Gemini 双条目（2026-10-15）：API key 按量（凭据可发现）+ 订阅（无凭据设计，
   // statusNote 说明「额度在官网看」，未配置凭据不是故障）
   check(

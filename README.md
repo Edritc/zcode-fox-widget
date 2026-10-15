@@ -445,7 +445,7 @@ node lib/cli.mjs json            # 结构化输出，便于脚本消费
 
 - **DeepSeek 余额**：`GET https://api.deepseek.com/user/balance`，需要 `DEEPSEEK_API_KEY`
   （环境变量或插件配置）。WorkBuddy 默认没有这个 key。
-- **35 家厂商模板**（余额 / 配额 / 订阅窗口 / 无接口）：与 ZCode 版共用同一套实现，凭据发现路径换成
+- **35 家厂商模板**（余额 / 配额 / 订阅窗口 / 无接口）：与 ZCode 版共用同一套实现（「智谱 Coding Plan」卡读官方套餐用量接口的窗口百分比与**剩余额度**，两种接口形状都收），凭据发现路径换成
   宿主侧（见 `lib/discover.mjs`）。**默认不可用是预期**——WorkBuddy 没有用户自带凭据的存储
   （实测 `settings.json` 的 `pluginConfigs` 为空、`models.json` 为 `[]`）。
 - **GLM Plan 配额：本分支已砍**。它唯一的数据源是 ZCode 客户端日志，WorkBuddy 没有对应物；
