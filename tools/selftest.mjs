@@ -1743,13 +1743,61 @@ try {
       : 'port=' + PORT + ' exitCode=' + child.exitCode + ' log=' + childLog.slice(0, 400)
   )
   if (!health) throw new Error('服务未就绪')
-  check(
-    'health 带 key 探测诊断（列出 provider 条目，enc 密文被标记）',
-    health.keyProbe && Array.isArray(health.keyProbe.entries) &&
-      health.keyProbe.entries.some((e) => e.providerId === 'deepseek-encrypted' && e.keyEncrypted === true),
-    'keySource=' + health.keySource + ' entries=' + ((health.keyProbe && health.keyProbe.entries) || []).length
-  )
   const port = health.port
+  // 凭据诊断需要令牌（审查 U2）：这个端口本机任意进程都能读，所以掩码 key / 候选凭据
+  // 文件路径 / 状态文件路径只在带令牌时回；未鉴权只回 keySource。
+  const serverInfo = JSON.parse(fs.readFileSync(path.join(dataDir, 'server.json'), 'utf8'))
+  const anonHealth = await (await fetch('http://127.0.0.1:' + port + '/whale/health')).json()
+  const authedHealth = await (
+    await fetch('http://127.0.0.1:' + port + '/whale/health', { headers: { 'x-whale-token': serverInfo.token } })
+  ).json()
+  check(
+    'health 免鉴权只回 keySource（掩码 key / 候选路径 / 状态文件路径都收起来）',
+    anonHealth.keySource !== undefined &&
+      anonHealth.keyProbe === undefined &&
+      anonHealth.keyMasked === undefined &&
+      anonHealth.stateFile === undefined,
+    JSON.stringify({
+      keySource: anonHealth.keySource,
+      probe: !!anonHealth.keyProbe,
+      masked: !!anonHealth.keyMasked,
+      stateFile: !!anonHealth.stateFile,
+    })
+  )
+  check(
+    'health 带令牌回 key 探测诊断（列出 provider 条目，enc 密文被标记）',
+    authedHealth.keyProbe &&
+      Array.isArray(authedHealth.keyProbe.entries) &&
+      authedHealth.keyProbe.entries.some((e) => e.providerId === 'deepseek-encrypted' && e.keyEncrypted === true),
+    'keySource=' + authedHealth.keySource + ' entries=' + ((authedHealth.keyProbe && authedHealth.keyProbe.entries) || []).length
+  )
+  // 浮层 spawn：环境清理 + profile 按端口隔离（审查 I1·U4）。这条是**行为**断言，
+  // 直接调真函数，不靠源码正则。
+  {
+    const { overlaySpawnEnv, overlayProfileDir } = await import('../lib/overlay.mjs')
+    const { DATA_DIR: overlayDataDir } = await import('../lib/paths.mjs')
+    const prevRN = process.env.ELECTRON_RUN_AS_NODE
+    const prevNO = process.env.NODE_OPTIONS
+    process.env.ELECTRON_RUN_AS_NODE = '1'
+    process.env.NODE_OPTIONS = '--require=host-shim.cjs'
+    const env = overlaySpawnEnv({ port: 12345 })
+    if (prevRN === undefined) delete process.env.ELECTRON_RUN_AS_NODE
+    else process.env.ELECTRON_RUN_AS_NODE = prevRN
+    if (prevNO === undefined) delete process.env.NODE_OPTIONS
+    else process.env.NODE_OPTIONS = prevNO
+    const prof = overlayProfileDir(12345)
+    check(
+      '浮层 spawn：清掉 ELECTRON_RUN_AS_NODE/NODE_OPTIONS，数据目录与 profile 按端口隔离',
+      env.ELECTRON_RUN_AS_NODE === undefined &&
+        env.NODE_OPTIONS === undefined &&
+        env.WHALE_PORT === '12345' &&
+        (env.WHALE_DATA_DIR === undefined || env.WHALE_DATA_DIR === overlayDataDir) &&
+        prof.indexOf(overlayDataDir) === 0 &&
+        prof.indexOf('12345') !== -1 &&
+        overlayProfileDir(12345) !== overlayProfileDir(12346),
+      JSON.stringify({ port: env.WHALE_PORT, dataDir: env.WHALE_DATA_DIR, profile: prof })
+    )
+  }
 
   // 审查 P2-2：版本号单一来源——health（server 动态读 plugin.json）、清单、
   // marketplace.json 副本三者一致，漂移即发版漏改
@@ -3655,6 +3703,47 @@ try {
   check('错误令牌关闭被 403', badToken.status === 403, 'HTTP ' + badToken.status)
   const noToken = await rawRequest('POST', '/whale/shutdown', { host: '127.0.0.1:' + port })
   check('无令牌关闭被 403', noToken.status === 403, 'HTTP ' + noToken.status)
+  // 跨站页面盲触发的凭据型 GET 被拒（审查 U1）；同源/无 Sec-Fetch-* 的正常请求不受影响
+  const crossSiteGet = await rawRequest('GET', '/whale/vendors.json', {
+    host: '127.0.0.1:' + port,
+    'sec-fetch-site': 'cross-site',
+  })
+  check('跨站来源的凭据型 GET 被 403', crossSiteGet.status === 403, 'HTTP ' + crossSiteGet.status)
+  const sameSiteGet = await rawRequest('GET', '/whale/vendors.json', {
+    host: '127.0.0.1:' + port,
+    'sec-fetch-site': 'same-origin',
+  })
+  check('同源 GET 不被跨站拦截误伤（反向断言）', sameSiteGet.status === 200, 'HTTP ' + sameSiteGet.status)
+  // 角色图 Content-Type 跟着真实扩展名走（审查 S2）：上传一张 gif，取图必须是 image/gif
+  {
+    const gifUp = await fetch('http://127.0.0.1:' + port + '/whale/role-upload.json', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'gif-selftest',
+        dataUrl: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+      }),
+    })
+    const gifBody = await gifUp.json()
+    const gifImg = await fetch('http://127.0.0.1:' + port + '/whale/image.png', {
+      method: 'GET',
+      headers: {},
+    })
+    // 先切到 gif 角色再取图，避免依赖默认角色
+    await fetch('http://127.0.0.1:' + port + '/whale/size.json', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scale: 1.5, roleId: gifBody.id }),
+    })
+    const gifRes = await fetch('http://127.0.0.1:' + port + '/whale/image.png')
+    const gifType = String(gifRes.headers.get('content-type') || '')
+    await fetch('http://127.0.0.1:' + port + '/whale/size.json', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scale: 1.5, roleId: null }),
+    })
+    check('角色图按真实扩展名给 Content-Type（gif → image/gif）', gifType.indexOf('image/gif') === 0, gifType + ' / ' + String(gifImg.status))
+  }
 
   // 服务重启：seq 必须从持久化值续上——否则重启后已打开的页面对齐在旧计数上，
   // 新服务的每一轮都会被当成"旧轮次"，每轮消耗气泡静默失效

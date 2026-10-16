@@ -20,8 +20,11 @@ const { isUpdaterRunning, yieldPlan } = require('./update-guard.cjs')
 const PORT = Number(process.env.WHALE_PORT) || 39321
 const TARGET_URL = 'http://127.0.0.1:' + PORT + '/'
 // 插件数据目录（与 lib/paths.mjs 的 DATA_DIR 同源：<ZCODE_HOME>/whale，默认 ~/.zcode/whale）。
-// WHALE_DATA_DIR 供测试注入，正常运行时走默认值。
-const DATA_DIR = process.env.WHALE_DATA_DIR || path.join(os.homedir(), '.zcode', 'whale')
+// ZCODE_HOME 认宿主环境变量（与 lib/paths.mjs 同口径），WHALE_DATA_DIR 供 lib/overlay.mjs 把
+// 解析结果显式传下来——两侧各自解析会在「设了 ZCODE_HOME 却没导出给子进程」时静默分叉，
+// 表现是「让路时停不掉本机服务」「跟随 ZCode 主题失效」（审查 I2）。
+const ZCODE_HOME = process.env.ZCODE_HOME || path.join(os.homedir(), '.zcode')
+const DATA_DIR = process.env.WHALE_DATA_DIR || path.join(ZCODE_HOME, 'whale')
 
 // 按压/松手音效走 HTMLAudio 播放。Electron 默认 autoplay 策略在部分环境会拦
 // 非手势起播（表现为「点击有时没声音」），显式放开（须在 app ready 前设置）。
@@ -147,6 +150,49 @@ function setPetMode(value) {
   log('pet-mode', petMode ? 'on' : 'off')
 }
 
+// 渲染进程"假活"兜底：窗口还在（IsWindowVisible=1、rect 正常），但**渲染进程已经死了**
+// 时，桌面看到的是一块空白透明层——所有"它还活着吗"的判据（overlay.json 的 pid 活着、
+// kill(pid,0) 成功、看门狗与钩子的补活逻辑）全都通过，于是这个僵尸态可以无限期留着。
+// 用**主进程侧**心跳兜住它：定时让页面吐一个值，超时或报错两次就重载页面。不依赖页面
+// 配合（页面已经死了，没法自证），也不依赖外部判活。与 WorkBuddy 线同口径。
+const PAGE_BEAT_MS = 30000
+const PAGE_BEAT_TIMEOUT_MS = 5000
+let pageBeatTimer = null
+let pageBeatFails = 0
+let pageBeatOk = 0
+
+function startPageHeartbeat() {
+  if (pageBeatTimer) return
+  pageBeatTimer = setInterval(probePage, PAGE_BEAT_MS)
+  if (pageBeatTimer.unref) pageBeatTimer.unref()
+}
+
+async function probePage() {
+  if (!win || win.isDestroyed()) return
+  const wc = win.webContents
+  if (!wc || wc.isDestroyed()) return
+  if (wc.isLoading()) return // 正在加载/重载：这一拍放过
+  try {
+    const v = await Promise.race([
+      wc.executeJavaScript('1+1'),
+      new Promise((_res, rej) => setTimeout(() => rej(new Error('page-timeout')), PAGE_BEAT_TIMEOUT_MS)),
+    ])
+    if (Number(v) !== 2) throw new Error('page-beat-bad:' + String(v))
+    if (pageBeatFails) log('page-beat-recovered', String(pageBeatFails) + ' fail(s) before')
+    pageBeatFails = 0
+    pageBeatOk++
+  } catch (err) {
+    pageBeatFails++
+    log('page-beat-fail', '(' + pageBeatFails + '/2) ' + String((err && err.message) || err) + ' ok=' + pageBeatOk)
+    if (pageBeatFails < 2) return
+    pageBeatFails = 0
+    log('page-reload', '页面无响应，重载以恢复挂件')
+    try {
+      wc.reload()
+    } catch (e) {}
+  }
+}
+
 function createWindow() {
   // 先在主显示器工作区里把窗口建出来（尺寸马上会被 ZCode 窗口矩形覆盖），
   // 但不显示——等拿到 ZCode 窗口位置后再 show，避免鲸鱼先在别处闪一下。
@@ -222,11 +268,27 @@ function createWindow() {
   // 页面加载完成后补发一次视口，避免启动早期的 rect 消息丢失
   win.webContents.on('did-finish-load', () => {
     pageReady = true
+    startPageHeartbeat()
     if (!lastViewport) return
     try {
       win.webContents.send('whale:viewport', lastViewport)
     } catch (err) {}
   })
+
+  // 渲染进程直接崩掉（GPU 被打死、OOM、页面异常）时立刻重载：Electron 不一定会把窗口
+  // 收掉，而是留一块空白窗口（见心跳那段注释）。
+  try {
+    win.webContents.on('render-process-gone', (_e, details) => {
+      log('render-gone', JSON.stringify(details || {}))
+      setTimeout(() => {
+        if (win && !win.isDestroyed()) {
+          try {
+            win.webContents.reload()
+          } catch (err) {}
+        }
+      }, 1500)
+    })
+  } catch (err) {}
 
   // 页面加载失败（多为挂件服务未启动）：稍后重试，避免留下空白窗口
   win.webContents.on('did-fail-load', () => {
@@ -332,13 +394,21 @@ function startFollower() {
     }
   })
   child.stderr.on('data', (chunk) => log('follower-stderr', chunk.toString('utf8').slice(0, 200)))
-  child.on('exit', (code) => {
+  child.on('exit', (code, signal) => {
     // 被主动替换掉的旧实例：这里不再做什么，否则会误退出整个浮层
     if (follower !== child) return
     follower = null
-    log('follower-exit', String(code))
+    log('follower-exit', code === null ? 'signal:' + signal : String(code))
+    if (app.isQuitting) return
+    // 被信号杀掉（code === null）= 脚本异常终止，不是「宿主退出」。此时窗口还在、
+    // overlay.json 仍记 pid 存活，而跟随/主题观测/前台判定全部停更、上层还认为浮层健康
+    // （假活）。重挂一次跟随脚本；宿主真没了的话，新脚本会立刻退出并走 app.quit()。
+    if (code === null) {
+      restartFollower('follower-signal')
+      return
+    }
     // 跟随脚本自己退了（多半是 ZCode 已退出）：浮层也没有存在意义了
-    if (code !== null && !app.isQuitting) app.quit()
+    app.quit()
   })
 }
 
