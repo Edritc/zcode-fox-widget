@@ -6,6 +6,7 @@
     ".gitattributes": "c4bff4e82cb743a78b570cfb220fbb5721221a342798e9d0ec4415300a84aaa3",
     ".gitignore": "8b41d07ede516fb7432658f93623ab474ffa74818de5ffd73ccb454e5a3b2043",
     ".mcp.json": "437e99a3e2d0745dc4322dbcb98f95dd0e5f1eba0addd290bada9461f0133b34",
+    ".release-pubkey.pem": "f6bd0095225a359f34d5fbc2fb5209c4e5669152dec4266729ac973330ba64b8",
     ".zcodeignore": "3b12bed4d7689b1837cde39a45291d1e78e8a8d6dba8925241c3040419d641bc",
     "BUGREPORT-CROSS-LINE-OVERLAY-KILL.md": "279229df20170b2b41ed4a589a9b973bbcfaeba3c701a2451318e27c59e33301",
     "CHANGELOG.md": "96cdad1b6306d7f75a98e40588daf15ab8ec7626e500a85b22695df379f1e2b6",

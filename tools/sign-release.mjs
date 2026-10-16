@@ -86,6 +86,15 @@ if (!version) {
   process.exit(1)
 }
 const { bytes, count } = manifestOf(files, version)
+// 公钥必须**在清单里**：它随包分发，而更新器会把「清单里没有的文件」判成篡改而拒装。
+// 更要紧的是它同时是信任锚——换钥时必须由旧私钥签的清单覆盖新公钥，链才成立。
+if (!Object.keys(JSON.parse(bytes.toString('utf8')).files).includes(PUBKEY)) {
+  console.error(
+    '公钥 ' + PUBKEY + ' 还没进清单（多半是没提交它就先签名了）。先把 ' + PUBKEY +
+      ' 提交，再跑签名：否则更新器会把包里的公钥当成「清单外的文件」拒装。'
+  )
+  process.exit(1)
+}
 
 if (check) {
   const onDisk = {
