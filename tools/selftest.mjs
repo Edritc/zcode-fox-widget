@@ -2226,7 +2226,8 @@ try {
 
   // UI 审查 U31：浅色档正文色的对比度下限。正文色由角色墨色按 4.5:1 派生
   //（装饰件仍用原色），这里把 widget.js 里的纯函数抠出来逐个内置角色断言——
-  // kimi娘 #ad81ff 对白底只有 2.85:1，是这一条要挡住的原状。
+  // 小克 #d97757 对白底只有 3.12:1（kimi 旧浅紫 #ad81ff 是 2.85:1、2026-10-16 已换掉），
+  // 是这一条要挡住的原状；下面用 #ad81ff 当输入只是取一个低对比度颜色。
   {
     const widgetSrc = fs.readFileSync(path.join(PLUGIN_ROOT, 'lib', 'widget.js'), 'utf8')
     const helperSrc = /function srgbToLinear[\s\S]*?\n  function readableOn\(bg\) \{[\s\S]*?\n  \}/.exec(widgetSrc)
