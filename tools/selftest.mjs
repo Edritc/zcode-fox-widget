@@ -2279,6 +2279,57 @@ try {
         widgetSrc.indexOf('border:solid var(--zcw-check-mark') !== -1,
       ''
     )
+    // 角色彩色渐变（装饰件）：色标要来自角色本身、两档齐全、是真正的渐变；
+    // 并且**只有装饰件**吃渐变——正文/描边仍走实色（渐变不能作 color，且正文要
+    // 按 4.5:1 派生）。接线按源码钉住（同 U31 的既有做法）。
+    {
+      const gradBlock = /var ROLE_INK_GRADIENT = \{([\s\S]*?)\n  \}/.exec(widgetSrc)
+      const parsed = {}
+      if (gradBlock) {
+        const re = /([a-z]+): \{\s*light: \[([^\]]*)\],\s*dark: \[([^\]]*)\]/g
+        let hit
+        while ((hit = re.exec(gradBlock[1])) !== null) {
+          const list = (raw) =>
+            raw
+              .split(',')
+              .map((x) => x.trim().replace(/^'|'$/g, ''))
+              .filter(Boolean)
+          parsed[hit[1]] = { light: list(hit[2]), dark: list(hit[3]) }
+        }
+      }
+      const gIds = Object.keys(parsed)
+      const hexOk = (v) => /^#[0-9a-f]{6}$/i.test(v)
+      check(
+        '角色渐变：色标齐备且合法（≥3 档、两档等长、全是 6 位 hex、确实是渐变不是单色）',
+        gIds.length >= 1 &&
+          gIds.every((id) => {
+            const g = parsed[id]
+            return (
+              g.light.length >= 3 &&
+              g.light.length === g.dark.length &&
+              g.light.every(hexOk) &&
+              g.dark.every(hexOk) &&
+              new Set(g.light).size >= 3
+            )
+          }),
+        JSON.stringify(parsed)
+      )
+      check(
+        '角色渐变：只有内置角色能声明渐变（拼错的 id 会让它静默失效）',
+        gIds.every((id) => BUILTIN_ROLES.some((r) => r.id === id)),
+        gIds.join(',')
+      )
+      check(
+        '角色渐变：接线只进装饰件（气泡描边走 SVG 渐变 url，装饰件走 --zcw-role-ink-grad；正文不动）',
+        widgetSrc.indexOf('url(#zcwInkGrad)') !== -1 &&
+          widgetSrc.indexOf('id="zcwInkGrad"') !== -1 &&
+          widgetSrc.indexOf('--zcw-role-ink-grad') !== -1 &&
+          widgetSrc.indexOf('background-image:var(--zcw-role-ink-grad,none)') !== -1 &&
+          // 正文派生仍从实色出发（不能被渐变变量顶掉）
+          widgetSrc.indexOf("--zcw-role-ink-text', ensureContrast(ink") !== -1,
+        ''
+      )
+    }
   }
 
   // UI 审查 U32/U33/U35/U36：四条纯 CSS/创建点的改动，按源码钉住
