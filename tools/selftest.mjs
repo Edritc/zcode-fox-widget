@@ -20,8 +20,10 @@
 //   node tools/selftest.mjs
 import fs from 'node:fs'
 import http from 'node:http'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+import zlib from 'node:zlib'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { spawn, spawnSync } from 'node:child_process'
@@ -84,7 +86,25 @@ fs.writeFileSync(
   'utf8'
 )
 
-const PORT = 39100 + Math.floor(Math.random() * 500)
+// 挑一个真的空闲的端口：服务发现端口被占会自动改试 +1（lib/server.mjs listen 的
+// attemptsLeft 回退），而测试只认自己写进 config 的 PORT——一旦被占（例如另一条
+// 产品线的自检同时在跑：两边都是从 39100 起的随机池），就会报「服务在临时端口就绪」
+// 的假失败。所以先探一下端口空闲再落进 config。
+async function pickFreePort(min, max) {
+  for (let i = 0; i < 50; i++) {
+    const p = min + Math.floor(Math.random() * (max - min))
+    const free = await new Promise((resolve) => {
+      const srv = net.createServer()
+      srv.once('error', () => resolve(false))
+      srv.once('listening', () => srv.close(() => resolve(true)))
+      srv.listen(p, '127.0.0.1')
+    })
+    if (free) return p
+  }
+  throw new Error('挑不到空闲端口（' + min + '-' + max + '）')
+}
+
+const PORT = await pickFreePort(39100, 39600)
 fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({ port: PORT }), 'utf8')
 
 // ---------- WorkBuddy 会话库 fixture ----------
@@ -1366,13 +1386,72 @@ function runMcp(requests, env, waitMs = 2500) {
   })
 }
 
-async function waitReady(port, deadlineMs) {
+// 立绘几何自检用：只解 PNG 拿「画布尺寸 + alpha 包围盒」，够判同画布/内容高/右边底边贴齐
+function pngGeom(buf) {
+  const w = buf.readUInt32BE(16)
+  const h = buf.readUInt32BE(20)
+  const ch = buf[25] === 6 ? 4 : buf[25] === 2 ? 3 : 1
+  let off = 8
+  const idat = []
+  while (off < buf.length - 8) {
+    const len = buf.readUInt32BE(off)
+    const type = buf.slice(off + 4, off + 8).toString('ascii')
+    if (type === 'IDAT') idat.push(buf.slice(off + 8, off + 8 + len))
+    else if (type === 'IEND') break
+    off += 12 + len
+  }
+  const raw = zlib.inflateSync(Buffer.concat(idat))
+  const stride = w * ch
+  let prev = Buffer.alloc(stride)
+  const rows = []
+  let p = 0
+  for (let y = 0; y < h; y++) {
+    const f = raw[p++]
+    const line = raw.slice(p, p + stride)
+    p += stride
+    const cur = Buffer.alloc(stride)
+    for (let i = 0; i < stride; i++) {
+      const a = i >= ch ? cur[i - ch] : 0
+      const b = prev[i]
+      const c = i >= ch ? prev[i - ch] : 0
+      let v = line[i]
+      if (f === 1) v += a
+      else if (f === 2) v += b
+      else if (f === 3) v += (a + b) >> 1
+      else if (f === 4) {
+        const pa = Math.abs(b - c)
+        const pb = Math.abs(a - c)
+        const pc = Math.abs(a + b - 2 * c)
+        v += pa <= pb && pa <= pc ? a : pb <= pc ? b : c
+      }
+      cur[i] = v & 0xff
+    }
+    rows.push(cur)
+    prev = cur
+  }
+  let minX = w, maxX = -1, minY = h, maxY = -1
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const al = ch === 4 ? rows[y][x * 4 + 3] : 255
+      if (al <= 8) continue
+      if (x < minX) minX = x
+      if (x > maxX) maxX = x
+      if (y < minY) minY = y
+      if (y > maxY) maxY = y
+    }
+  }
+  return { w, h, minX, maxX, minY, maxY, cw: maxX - minX + 1, chh: maxY - minY + 1 }
+}
+
+async function waitReady(port, deadlineMs, child) {
   const deadline = Date.now() + deadlineMs
   while (Date.now() < deadline) {
     try {
       const health = await getJson(port, '/whale/health')
       if (health && health.app === 'fox-widget') return health
     } catch (err) {}
+    // 子进程已经退了就别再空等：早退多半是端口占用或启动即崩，日志里有原因
+    if (child && child.exitCode !== null) return null
     await new Promise((r) => setTimeout(r, 200))
   }
   return null
@@ -1436,8 +1515,16 @@ let child = spawnServer()
 try {
   console.log('🐳 挂件自检（临时 CODEBUDDY_HOME=' + tmpHome + '）\n')
 
-  const health = await waitReady(PORT, 8000)
-  check('服务在临时端口就绪', !!health, health ? 'port=' + health.port + ' pid=' + health.pid : childLog.slice(0, 200))
+  // 启动等待给足 30 秒：机器忙（并发跑别的测试、杀软扫描、磁盘争用）时 node 冷启动
+  // 可能远超 8 秒，曾被判成「服务未就绪」的假失败。子进程早退则不等满。
+  const health = await waitReady(PORT, 30000, child)
+  check(
+    '服务在临时端口就绪',
+    !!health,
+    health
+      ? 'port=' + health.port + ' pid=' + health.pid
+      : 'port=' + PORT + ' exitCode=' + child.exitCode + ' log=' + childLog.slice(0, 400)
+  )
   if (!health) throw new Error('服务未就绪')
   check(
     'health：app 标识为 fox-widget（WorkBuddy 插件名）',
@@ -2819,10 +2906,25 @@ try {
   const imgDef = Buffer.from(await (await fetch('http://127.0.0.1:' + port + '/whale/image.png')).arrayBuffer())
   const glmPng = fs.readFileSync(path.join(PLUGIN_ROOT, 'assets', 'GLM.png'))
   check(
-    '默认形象图 = 嘎啦嘛 GLM.png（608x608）',
-    imgDef.equals(glmPng) && imgDef.readUInt32BE(16) === 608 && imgDef.readUInt32BE(20) === 608,
+    '默认形象图 = 嘎啦嘛 GLM.png（610x610 统一画布）',
+    imgDef.equals(glmPng) && imgDef.readUInt32BE(16) === 610 && imgDef.readUInt32BE(20) === 610,
     'len=' + imgDef.length
   )
+  // 六张内置立绘的统一几何：画布 610×610、内容高 587、内容右边与底边都贴到画布边。
+  // 这条是最容易在换立绘时漏掉的（漏了就会「每切一个角色位置都变」），所以钉进自检。
+  {
+    const geom = BUILTIN_ROLES.map((r) => ({ id: r.id, g: pngGeom(fs.readFileSync(r.image)) }))
+    const bad = geom.filter((it) => it.g.w !== 610 || it.g.h !== 610 || it.g.chh !== 587 || it.g.maxX !== 609 || it.g.maxY !== 609)
+    check(
+      '六张内置立绘几何统一（610×610 / 内容高 587 / 右边与底边贴齐）',
+      bad.length === 0,
+      bad.length
+        ? JSON.stringify(
+            bad.map((it) => it.id + '：画布' + it.g.w + 'x' + it.g.h + ' 内容' + it.g.cw + 'x' + it.g.chh + ' 右边距' + (609 - it.g.maxX) + ' 底边距' + (609 - it.g.maxY))
+          )
+        : geom.map((it) => it.id + ' ' + it.g.cw + 'x' + it.g.chh).join(' / ')
+    )
+  }
   await fetch('http://127.0.0.1:' + port + '/whale/size.json', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -3440,8 +3542,8 @@ try {
     child.kill()
   })
   child = spawnServer()
-  const health2 = await waitReady(port, 8000)
-  check('重启后服务重新就绪', !!health2, health2 ? 'pid=' + health2.pid : childLog.slice(-200))
+  const health2 = await waitReady(port, 30000, child)
+  check('重启后服务重新就绪', !!health2, health2 ? 'pid=' + health2.pid : 'exitCode=' + child.exitCode + ' log=' + childLog.slice(-400))
   const afterRestart = await getJson(port, '/whale/last-turn.json')
   check(
     '重启后 seq 从持久化值续上（对齐不回退）',

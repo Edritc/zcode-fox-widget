@@ -11,6 +11,7 @@
 // 本机找不到 Edge/Chrome 时打印 SKIP、以 0 退出（无浏览器的 CI 机器）。
 import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -42,7 +43,25 @@ const dataDir = path.join(tmpHome, 'plugin-data')
 fs.mkdirSync(dataDir, { recursive: true })
 process.env.CODEBUDDY_HOME = tmpHome
 process.env.FOX_WIDGET_DATA_DIR = dataDir
-const PORT = 39600 + Math.floor(Math.random() * 300)
+// 挑一个真的空闲的端口：服务发现端口被占会自动改试 +1（lib/server.mjs listen 的
+// attemptsLeft 回退），而测试只认自己写进 config 的 PORT——一旦被占（例如另一条
+// 产品线的冒烟同时在跑：两边都是从 39600 起的随机池），就会报「服务在临时端口就绪」
+// 的假失败。所以先探一下端口空闲再落进 config。
+async function pickFreePort(min, max) {
+  for (let i = 0; i < 50; i++) {
+    const p = min + Math.floor(Math.random() * (max - min))
+    const free = await new Promise((resolve) => {
+      const srv = net.createServer()
+      srv.once('error', () => resolve(false))
+      srv.once('listening', () => srv.close(() => resolve(true)))
+      srv.listen(p, '127.0.0.1')
+    })
+    if (free) return p
+  }
+  throw new Error('挑不到空闲端口（' + min + '-' + max + '）')
+}
+
+const PORT = await pickFreePort(39600, 39900)
 fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({ port: PORT }), 'utf8')
 
 // 宿主 preferences：theme = light。挂件主题里的「跟随 WorkBuddy」读它，
@@ -165,13 +184,15 @@ function check(name, ok, detail) {
   results.push({ name, ok })
   console.log((ok ? '  ✅ ' : '  ❌ ') + name + (detail ? '  — ' + detail : ''))
 }
-async function waitReady(port, deadlineMs) {
+async function waitReady(port, deadlineMs, child) {
   const deadline = Date.now() + deadlineMs
   while (Date.now() < deadline) {
     try {
       const h = await (await fetch('http://127.0.0.1:' + port + '/whale/health', { signal: AbortSignal.timeout(1500) })).json()
       if (h && h.app === 'fox-widget') return h
     } catch (err) {}
+    // 子进程已经退了就别再空等：早退多半是端口占用或启动即崩，日志里有原因
+    if (child && child.exitCode !== null) return null
     await new Promise((r) => setTimeout(r, 200))
   }
   return null
@@ -182,6 +203,16 @@ async function pollEval(cdp, expression, deadlineMs, intervalMs = 500) {
     const v = await cdp.eval(expression)
     if (v) return v
     await new Promise((r) => setTimeout(r, intervalMs))
+  }
+  return null
+}
+// 探针 + 重载重试：音效/角色列表是页面加载时一次性拉的，接口偶发一枪没回来就会
+// 缺项，而且这两处不轮询、不会自愈——实测偶发过一次假失败。第一次拿不到就重载再试。
+async function pollEvalReload(cdp, expression, deadlineMs, tries = 2) {
+  for (let i = 0; i < tries; i++) {
+    const v = await pollEval(cdp, expression, deadlineMs)
+    if (v) return v
+    if (i < tries - 1) await cdp.send('Page.reload')
   }
   return null
 }
@@ -197,15 +228,20 @@ const server = spawn(process.execPath, [path.join(PLUGIN_ROOT, 'lib', 'server.mj
     // 版本自检会向镜像发真实请求：冒烟环境关掉，更新面板改用 fetch 桩驱动
     WHALE_DISABLE_UPDATE_CHECK: '1',
   },
-  stdio: 'ignore',
+  // 接住服务日志：就绪失败时要能从 detail 里看出是端口占用还是启动崩
+  stdio: ['ignore', 'pipe', 'pipe'],
 })
+let serverLog = ''
+server.stdout.on('data', (chunk) => (serverLog += chunk))
+server.stderr.on('data', (chunk) => (serverLog += chunk))
 const tmpProfile = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-smoke-profile-'))
 let edge = null
 let cdp = null
 try {
   console.log('🖥️ 前端冒烟（' + path.basename(browser) + ' headless, 服务端口 ' + PORT + '）\n')
-  const health = await waitReady(PORT, 8000)
-  check('服务在临时端口就绪', !!health)
+  // 启动等待给足 30 秒：机器忙时 node 冷启动可能远超 8 秒，曾被判成假失败
+  const health = await waitReady(PORT, 30000, server)
+  check('服务在临时端口就绪', !!health, health ? 'pid=' + health.pid : 'port=' + PORT + ' exitCode=' + server.exitCode + ' log=' + serverLog.slice(0, 400))
   if (!health) throw new Error('服务未就绪')
 
   edge = spawn(
@@ -520,9 +556,9 @@ try {
     "(function(){var img=document.querySelector('img[src*=\"image.png\"]');return img?img.naturalWidth:0})()"
   )
   check(
-    '删除当前导入角色后回落默认嘎啦嘛（roles 只剩内置、图片 608px）',
+    '删除当前导入角色后回落默认嘎啦嘛（roles 只剩内置、图片 610px）',
     rolesAfterDelete.roles.length === 6 && rolesAfterDelete.roles.every((r) => r.builtin) &&
-      rolesAfterDelete.selected === 'fox' && imgAfterDelete === 608,
+      rolesAfterDelete.selected === 'fox' && imgAfterDelete === 610,
     JSON.stringify({ n: rolesAfterDelete.roles.length, selected: rolesAfterDelete.selected, nw: imgAfterDelete })
   )
   // ⑦d 内置形象也能删（v1.6.0）：删掉「嘎啦嘛」→ 列表少一个、选中的不再是它、
@@ -1958,7 +1994,7 @@ try {
     "var imp=0,bs=document.querySelectorAll('button');" +
     "for(var k=0;k<bs.length;k++){if(bs[k].textContent==='导入…')imp++}" +
     'return JSON.stringify({sets:hit?hit.vals:null,texts:hit?hit.texts:null,value:hit?hit.value:null,importBtns:imp})})()'
-  const sndView = JSON.parse((await pollEval(cdp, SND_PROBE, 8000)) || 'null')
+  const sndView = JSON.parse((await pollEvalReload(cdp, SND_PROBE, 8000)) || 'null')
   check(
     '音效库：内置两套 + 导入集都在下拉里（导入集带名字），音效/角色两行按钮都叫「导入…」',
     !!sndView &&
@@ -2014,9 +2050,9 @@ try {
   check('音效选择写入 widget-state（选中导入集）', sndState.soundSet === sndUp.id, JSON.stringify({ soundSet: sndState.soundSet }))
   await cdp.send('Page.reload')
   // 等到触发器真的跟上选中项（不能只等固定时长：重载后页面可能已经画出下拉但还没
-  // 应用状态，此时读到的是默认项 'duck'——实测偶发过一次假失败）
+  // 应用状态，此时读到的是默认项 'duck'——实测偶发过一次假失败）。首次超时再重载一次。
   const sndImported = JSON.parse(
-    (await pollEval(
+    (await pollEvalReload(
       cdp,
       "(function(){var ss=document.querySelectorAll('select'),hit=null;for(var i=0;i<ss.length;i++){" +
         "var vals=[];for(var j=0;j<ss[i].options.length;j++){vals.push(ss[i].options[j].value)}" +
