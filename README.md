@@ -145,6 +145,15 @@
 
 2. **注册为本地插件市场**，二选一：
 
+   > **最省事的一条：直接填 GitHub 源**（不用先克隆）。在「市场源」里填
+   > `pigeon189/zcode-fox-widget`（宿主认 `owner/repo`）。
+   > ⚠️ **注意分支**：GitHub 源通常拉**默认分支**，而这条产品线的代码在 **`workbuddy` 分支**；
+   > 默认分支 `main` 是 ZCode 线，里面没有 `.codebuddy-plugin/`，那样装上市场里不会出现
+   > `fox-widget`。所以：填得出分支就填 `pigeon189/zcode-fox-widget#workbuddy`；填不出分支
+   > 就用下面的本地目录方式，或直接给它一个 ZIP：
+   > `https://github.com/pigeon189/zcode-fox-widget/archive/refs/heads/workbuddy.zip`。
+   > 装完之后，升级就是在市场里点「刷新」。
+
    **方式 A：客户端界面（推荐）**
 
    1. 左栏点 **「专家·技能·连接器」** → 选 **「技能」** 分栏。

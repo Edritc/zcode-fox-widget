@@ -136,3 +136,28 @@ WorkBuddy 客户端大版本升级可能改钩子事件表 / db schema / 沙箱�
 - 共享内核 bug → 在 ZCode 侧（`main`）修。
 - WorkBuddy 数据源 / 宿主适配 → 在 WorkBuddy 侧（`workbuddy`）修。
 - 两侧都改不动的（如 Electron 版本级行为）→ 写调查报告升级给用户决策。
+
+### 发布物完整性（发布前必须做）
+
+更新内核会从镜像下载整包并**直接覆盖 `lib/*.mjs`**，所以只校验「包内版本号 == 目标版本」不够
+（版本号与包体来自同一批镜像）。现在下载后还会校验一份**发布签名**：
+
+- 信任锚：仓库根 `.release-pubkey.pem`（随包分发，安装副本自带；镜像伪造不了签名）。
+- 每次发布前跑一次签名工具，把生成的两份文件**一起提交**，然后才打 tag：
+
+  ```bash
+  # 一次性：生成密钥对（私钥留在仓库外，别提交）
+  node tools/sign-release.mjs --gen-key ../fox-release-key.pem
+  # 每次发版：生成清单 + 签名，然后 git add 两个文件并提交
+  node tools/sign-release.mjs --key ../fox-release-key.pem
+  # 提交前自检：清单与当前树是否一致、签名是否有效
+  node tools/sign-release.mjs --check
+  ```
+
+清单按 `git archive` 的**打包字节**计算 sha256（仓库有 `.gitattributes` 的 eol 规则，工作区与
+打包字节未必相同），逐个文件覆盖；签名覆盖清单本身。
+
+**换钥**：私钥丢了或要轮换时，先用**旧私钥**签一个把新公钥提交进去的版本（`--gen-key` 会写新的
+`.release-pubkey.pem`，再用旧私钥 `--key` 签），之后用新私钥签后续版本——否则已装副本会拒收新版本。
+
+**没有清单的旧版本会被拒装**（fail-closed），提示用户改用市场「重新抓取」或手动安装。
