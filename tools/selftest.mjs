@@ -1233,6 +1233,24 @@ function check(name, ok, detail) {
     r('cmdgo-bridge', 'deepseek/deepseek-v4-flash', 'http://127.0.0.1:11435/v1') === 'cmdgo' &&
       r('cmdgo-bridge', 'xiaomi/mimo-v2.6-pro', 'http://127.0.0.1:11435/v1') === 'cmdgo'
   )
+  // GLM 订阅修正：大模型的 provider/host 名字区分不出「订阅」与「按量」（同一个
+  // open.bigmodel.cn、同一把 key 形状），但账号事实分得出——有 GLM Coding Plan 套餐
+  // 配额时按 Plan 口径（订阅持有者的 GLM 用量扣的是订阅额度，不是按量账单）
+  check(
+    '计费源：GLM 订阅修正（账号有套餐配额时 GLM 源按 Plan 口径；无订阅事实时保持按量）',
+    resolveBillingSource('bigmodel-api', 'GLM-5.3-Flash', undefined, { glmSubscription: true }).source === 'plan' &&
+      resolveBillingSource('bigmodel-api', 'GLM-5.3-Flash', undefined, { glmSubscription: true }).label === 'GLM Plan 配额' &&
+      resolveBillingSource('bigmodel-api', 'GLM-5.3-Flash', undefined, { glmSubscription: false }).source === 'glm' &&
+      // 只改 GLM 源：其它厂商（含 DeepSeek / MiMo）不受这条修正影响
+      resolveBillingSource('deepseek', 'deepseek-flash', undefined, { glmSubscription: true }).source === 'ds' &&
+      resolveBillingSource('xiaomi-mimo', 'mimo-v2.6-pro', undefined, { glmSubscription: true }).source === 'mimo-api' &&
+      resolveBillingSource('bigmodel-standard-api', 'GLM-5.3', 'https://open.bigmodel.cn/api/paas/v4', { glmSubscription: true }).source === 'plan',
+    JSON.stringify({
+      sub: resolveBillingSource('bigmodel-api', 'GLM-5.3-Flash', undefined, { glmSubscription: true }).source,
+      plain: resolveBillingSource('bigmodel-api', 'GLM-5.3-Flash', undefined, { glmSubscription: false }).source,
+      ds: resolveBillingSource('deepseek', 'deepseek-flash', undefined, { glmSubscription: true }).source,
+    })
+  )
   check(
     '计费源：全未知 → tokens（不冒充任何厂商）',
     r('mystery-corp', 'totally-unknown-9000') === 'tokens' && resolveBillingSource('', '', '').source === 'tokens'
@@ -2412,8 +2430,16 @@ try {
         H.ensureContrast('#203170', '#ffffff', 4.5) === '#203170' && H.ensureContrast('#3d4460', '#ffffff', 4.5) === '#3d4460'
       )
       check(
-        'U31：勾选对勾按填充色明暗二选（浅填充上给黑勾，深填充上给白勾）',
-        H.readableOn('#ad81ff') === '#000000' && H.readableOn('#203170') === '#ffffff' && H.readableOn('#d97757') === '#000000'
+        'U31：勾选对勾默认白（内置六色都白勾），只有很浅的填充才给深色勾',
+        H.readableOn('#ad81ff') === '#ffffff' &&
+          H.readableOn('#203170') === '#ffffff' &&
+          H.readableOn('#d97757') === '#ffffff' &&
+          H.readableOn('#5b7cdd') === '#ffffff' &&
+          H.readableOn('#7b6fc4') === '#ffffff' &&
+          H.readableOn('#3d4460') === '#ffffff' &&
+          // 接近白的填充仍要能看见对勾（亮度阈值 0.7）
+          H.readableOn('#fff6cc') === '#000000' &&
+          H.readableOn('#ffffff') === '#000000'
       )
       check(
         'U31：派生幂等（对已达标的值再算一次结果不变）',
