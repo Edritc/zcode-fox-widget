@@ -11,7 +11,7 @@
     "BUGREPORT-CROSS-LINE-OVERLAY-KILL.md": "279229df20170b2b41ed4a589a9b973bbcfaeba3c701a2451318e27c59e33301",
     "CHANGELOG.md": "96cdad1b6306d7f75a98e40588daf15ab8ec7626e500a85b22695df379f1e2b6",
     "CODE-REVIEW-workbuddy-port.md": "3a12a889a43eeda77fe2240019a523508b8d947ec6ea9bf21dc678f5295cc1da",
-    "CONTRIBUTING.md": "fafdbe966f84a513730f23c07b5d54bd94a937671eddeae7d567f0469878f46f",
+    "CONTRIBUTING.md": "c5cdfdc5f093ecc95d0d6a91e7a3ae95daa4687899a61b5f5958d8ddeb480e6a",
     "FIX-REPORT-ISSUE2-HOST-FREEZE.md": "83fe24bac1dbaa6d44cfa1d1240303fbb0982a28535dcbe66665887f11f229b0",
     "HANDOFF-WORKBUDDY-PORT.md": "d54dd8f93910a164bff2e6631ac962e799a454621b1c03ff6758a88430fe1b43",
     "HANDOFF-WORKBUDDY.md": "1689bf90c93103521133fc83157deaef0be114f86e125398b9d03e155a912be9",
@@ -79,7 +79,7 @@
     "tools/demo.mjs": "749c16d5eea7b9f9b40662fc0fbe077dc2824b93a30d5004504a1a149169a124",
     "tools/selftest-update.mjs": "2d0f1fec8090a719acd2e860029a6fc30f93e0d0254f8e74aee26fd9e41950bb",
     "tools/selftest.mjs": "ff5dc58a93672472c575fb1779b68d2d994d9dbe6c5bd7c4165b34afd5007af8",
-    "tools/sign-release.mjs": "3230c072a5d8c333963fa5290213fa79ee4c108a984ab995b86e974e98d66c3b",
+    "tools/sign-release.mjs": "2c3bca18a72bdf60d53d61b36c7e1b097acdfccf74fe0870342be9715039436d",
     "tools/smoke-ui.mjs": "9c05dcf0c46de82c8ca67ec3b1dcd778c2c2fdcf7312e25c0f90ddf0f553a530"
   }
 }
