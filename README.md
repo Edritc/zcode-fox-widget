@@ -24,7 +24,7 @@
 |---|---|
 | **原版** | [MeteorNOX/DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)（MIT，Copyright (c) 2026 MeteorNOX）——DSH（DeepSeek Harness）的 Web 插件 |
 | **ZCode 移植** | [nb10yyds/zcode-whale-widget](https://github.com/nb10yyds/zcode-whale-widget) → 本仓库 `main` 分支的 `zcode-fox-widget`（ZCode狐娘小挂件） |
-| **本分支** | 自 `zcode-fox-widget` v1.11.1 移植到 WorkBuddy，版本号另起序列（`2.x.y`，tag 前缀 `wb-v`） |
+| **本分支** | 自 `zcode-fox-widget` v1.11.1 移植到 WorkBuddy，版本号另起序列（tag 前缀 `wb-v`） |
 
 **沿用自上游**：`assets/` 下上游素材（鲸鱼形象、`rua.gif`、两套音效）、气泡 SVG 几何、字号档、动画参数、拖拽/四分吸附/左吸附镜像/alpha 命中检测、随机台词六组的文案与权重、峰谷定价表与时段规则、记账模式语义、余额接口取项规则。
 
