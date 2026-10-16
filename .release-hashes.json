@@ -7,7 +7,7 @@
     ".zcode-plugin/plugin.json": "e0fe0c6f457e9d04b6c7ffd2246638b84eedfcb75babfb4fcd9acfcc4ba46ba4",
     ".zcodeignore": "3ee03bb1066025d02a8b9062f06592ec8aa258b48c9d09c02a50f9f0a406654b",
     "CHANGELOG.md": "3ce0a078ef77c2605470c9dd45de8f305a4d502f050c34e702947adc79f606fa",
-    "CONTRIBUTING.md": "46ade7510bd0cec391d2947673c850fff23728d5971e5733b476219464d25b44",
+    "CONTRIBUTING.md": "3f256a4e6451115114281ec75a48be1859c422f31c797464b8bf521fb06d25f6",
     "FIX-REPORT-ISSUE2-HOST-FREEZE.md": "e86649f05d82c8ef367e7861fe1488f6622f0d18f3e191a6df6a407523f0551e",
     "HANDOFF-WORKBUDDY.md": "a815a9b799562cb9cc526928f0ff46d435d0ca6240375019df8d017ab770100a",
     "LICENSE": "85e362f499ac3844695df1b581575c71cdc6542e63e026c2086d88387d95060a",
@@ -66,7 +66,7 @@
     "tools/demo.mjs": "00f50d744abefdf8a61dc747ce9553036a0da80c9e9a41e75b6b2308a57c2cb6",
     "tools/selftest-update.mjs": "eba0d31ed4ca4ea915453266b67e7ae36a4eeb5cb9ac495ac194ceba9ea2c835",
     "tools/selftest.mjs": "0652e3e1666562f6f0904b3b42ae55872f01e4deeba6d0839cf50215a82fbfc6",
-    "tools/sign-release.mjs": "3230c072a5d8c333963fa5290213fa79ee4c108a984ab995b86e974e98d66c3b",
+    "tools/sign-release.mjs": "2c3bca18a72bdf60d53d61b36c7e1b097acdfccf74fe0870342be9715039436d",
     "tools/smoke-ui.mjs": "95cf80fe0844a84eb1be4c906d68208b56edc7493ef76b5163a188ebdc26c225"
   }
 }
