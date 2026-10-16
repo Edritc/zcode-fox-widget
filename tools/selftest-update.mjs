@@ -464,23 +464,23 @@ function mkRoot(name, entries) {
     return files
   }
   const basePkg = () => [
-    ['.codebuddy-plugin/plugin.json', Buffer.from('{"version":"1.13.0"}')],
+    ['.codebuddy-plugin/plugin.json', Buffer.from('{"version":"9.9.9"}')],
     ['lib/server.mjs', Buffer.from('new server')],
   ]
   const pub = { publicKey: testPub }
-  const pkg = signedPkg(basePkg(), '1.13.0')
-  U.writeUpdateState({ latest: '1.13.0', available: true, busy: false, phase: null, error: null, source: null })
+  const pkg = signedPkg(basePkg(), '9.9.9')
+  U.writeUpdateState({ latest: '9.9.9', available: true, busy: false, phase: null, error: null, source: null })
   const r1 = await U.runUpdate({ files: pkg, roots: [root], source: 'test', ...pub })
   const state1 = U.readUpdateState()
   check(
     'runUpdate：注入整包 → 写入并落状态 done（appliedVersion / busy=false）',
-    r1.ok === true && state1.phase === 'done' && state1.appliedVersion === '1.13.0' && state1.busy === false && state1.available === false,
+    r1.ok === true && state1.phase === 'done' && state1.appliedVersion === '9.9.9' && state1.busy === false && state1.available === false,
     JSON.stringify({ ok: r1.ok, phase: state1.phase, applied: state1.appliedVersion })
   )
   check('runUpdate：旧文件被清理', !fs.existsSync(path.join(root, 'lib', 'old.js')))
   // 版本不符必须拒装
   const badPkg = new Map([['.codebuddy-plugin/plugin.json', Buffer.from('{"version":"1.12.0"}')]])
-  U.writeUpdateState({ latest: '1.13.0', available: true, busy: false })
+  U.writeUpdateState({ latest: '9.9.9', available: true, busy: false })
   const r2 = await U.runUpdate({ files: badPkg, roots: [root] })
   check('runUpdate：包内版本与目标不符 → 拒绝安装并报错', r2.ok === false && r2.error.includes('版本不符'), String(r2.error))
   // busy 防重入
@@ -488,14 +488,14 @@ function mkRoot(name, entries) {
   const r3 = await U.runUpdate({ files: pkg, roots: [root], ...pub })
   check('runUpdate：已有任务进行中 → 直接拒绝（防重入）', r3.ok === false && r3.error.includes('在进行'), String(r3.error))
   // 缺清单 / 包体被篡改 / 签名不是本仓库私钥签的：三种都必须拒装（供应链）
-  U.writeUpdateState({ busy: false, latest: '1.13.0', available: true, phase: null, error: null })
+  U.writeUpdateState({ busy: false, latest: '9.9.9', available: true, phase: null, error: null })
   const r4 = await U.runUpdate({ files: new Map(basePkg()), roots: [root], ...pub })
   check(
     'runUpdate：没有完整性清单 → 拒绝安装（审查 I3）',
     r4.ok === false && /完整性清单/.test(String(r4.error)),
     String(r4.error).slice(0, 90)
   )
-  const tampered = signedPkg(basePkg(), '1.13.0')
+  const tampered = signedPkg(basePkg(), '9.9.9')
   tampered.set('lib/server.mjs', Buffer.from('evil payload'))
   const r5 = await U.runUpdate({ files: tampered, roots: [root], ...pub })
   check(
@@ -503,14 +503,14 @@ function mkRoot(name, entries) {
     r5.ok === false && /清单不符/.test(String(r5.error)),
     String(r5.error).slice(0, 90)
   )
-  const foreignSig = signedPkg(basePkg(), '1.13.0', { key: crypto.generateKeyPairSync('ed25519').privateKey })
+  const foreignSig = signedPkg(basePkg(), '9.9.9', { key: crypto.generateKeyPairSync('ed25519').privateKey })
   const r6 = await U.runUpdate({ files: foreignSig, roots: [root], ...pub })
   check(
     'runUpdate：签名不是本仓库私钥签的 → 拒绝安装（签名无效）',
     r6.ok === false && /签名无效/.test(String(r6.error)),
     String(r6.error).slice(0, 90)
   )
-  const order = U.buildTarballUrls('1.13.0').map((u) => u.name)
+  const order = U.buildTarballUrls('9.9.9').map((u) => u.name)
   check('下载候选：直连 codeload 排第一（镜像只兜底）', order[0] === 'codeload', order.join(','))
   U.writeUpdateState({ busy: false, latest: null, available: false, phase: null, error: null })
 }
