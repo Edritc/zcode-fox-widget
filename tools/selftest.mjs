@@ -2263,8 +2263,16 @@ try {
         H.ensureContrast('#203170', '#ffffff', 4.5) === '#203170' && H.ensureContrast('#3d4460', '#ffffff', 4.5) === '#3d4460'
       )
       check(
-        'U31：勾选对勾按填充色明暗二选（浅填充上给黑勾，深填充上给白勾）',
-        H.readableOn('#ad81ff') === '#000000' && H.readableOn('#203170') === '#ffffff' && H.readableOn('#d97757') === '#000000'
+        'U31：勾选对勾默认白（内置六色都白勾），只有很浅的填充才给深色勾',
+        H.readableOn('#ad81ff') === '#ffffff' &&
+          H.readableOn('#203170') === '#ffffff' &&
+          H.readableOn('#d97757') === '#ffffff' &&
+          H.readableOn('#5b7cdd') === '#ffffff' &&
+          H.readableOn('#7b6fc4') === '#ffffff' &&
+          H.readableOn('#3d4460') === '#ffffff' &&
+          // 接近白的填充仍要能看见对勾（亮度阈值 0.7）
+          H.readableOn('#fff6cc') === '#000000' &&
+          H.readableOn('#ffffff') === '#000000'
       )
       check(
         'U31：派生幂等（对已达标的值再算一次结果不变）',

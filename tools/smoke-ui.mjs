@@ -2141,8 +2141,9 @@ try {
       // 次级文字（用量记录的对账/日志行、下拉表头…）也跟色
       !!inkXiaoke.dimColor &&
       inkXiaoke.dimColor !== inkDefault.dimColor &&
-      // 勾选对勾按填充明暗二选：小克是浅填充 → 给黑勾（U31）
-      inkXiaoke.checkMark === '#000000' &&
+      // 勾选对勾默认白（2026-10-16 起：内置六色一律白勾、整套界面统一；只有填充
+      // 浅到白勾看不清时才给深色勾——小克这种中间调仍是白勾）
+      inkXiaoke.checkMark === '#ffffff' &&
       // 复选框浅色档自绘：勾选态与未勾选态同为 1px 描边（原生勾选态偏重）
       inkXiaoke.checkAppearance === 'none' &&
       inkXiaoke.checkBorderW === '1px' &&
@@ -2528,10 +2529,12 @@ try {
       !!gradSnapGem &&
       gradSnapGem.bubbleInk === 'url(#zcwInkGrad)' &&
       gradSnapGem.grad.indexOf('linear-gradient') === 0 &&
-      gradSnapGem.grad.indexOf('#7cbfef') !== -1 &&
-      gradSnapGem.grad.indexOf('#f2d39b') !== -1 &&
-      gradSnapGem.stops[0] === '#7cbfef' &&
-      gradSnapGem.stops[1] === '#76a1eb',
+      gradSnapGem.grad.indexOf('#9cd5d0') !== -1 &&
+      gradSnapGem.grad.indexOf('#cce1ac') !== -1 &&
+      gradSnapGem.grad.indexOf('#f2ebb6') !== -1 &&
+      gradSnapGem.stops.length === 7 &&
+      gradSnapGem.stops[0] === '#9cd5d0' &&
+      gradSnapGem.stops[1] === '#80c0f1',
     JSON.stringify({ picked: gradPickedGem, grad: gradSnapGem })
   )
   check(
