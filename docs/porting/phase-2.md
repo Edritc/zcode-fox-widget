@@ -22,7 +22,7 @@
 
 ```
 resolveSession = { ok:true, sessionId:"12968ef3-…", model:"deepseek-v4.1-flash",
-                   transcriptPath:"…\\projects\\c-Users-paper-WorkBuddy-Worktrees-…\\12968ef3-….jsonl",
+                   transcriptPath:"…\\projects\\c-Users-<用户>-WorkBuddy-Worktrees-…\\12968ef3-….jsonl",
                    from:"latest-session" }
 context        = { ok:true, used:224003, size:1000000, pct:22.4, remaining:775997 }
 latestTurn     = { ok:true, source:"transcript", turnId:"01a1386e9212723d9280270ba883bfa9",

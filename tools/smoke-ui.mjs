@@ -1805,7 +1805,7 @@ try {
     '(function(){var real=window.fetch;' +
     'function json(o){return Promise.resolve(new Response(JSON.stringify(o),{status:200,headers:{"Content-Type":"application/json"}}))}' +
     'var S={ok:true,source:"cmdgo",vendor:"commandcode",label:"CommandCode",timeMode:"none",modelId:"zai-org/GLM-5.3",currency:"USD",from:"selection"};' +
-    'var C={ok:true,ref:"K",pool:{available:0,total:3},plan:"Go",userName:"paper189xkfx",limited:true,' +
+    'var C={ok:true,ref:"K",pool:{available:0,total:3},plan:"Go",userName:"demo-account-2",limited:true,' +
     'monthly:{remaining:3.96,total:10,percent:0.60,resetAt:' + (Date.now() + 26 * 86400000) + '},' +
     'fiveHour:{used:3.03,cap:3,exceeded:true,resetAt:' + soonReset + ',remaining:0,percent:1.01},' +
     'weekly:{used:6.12,cap:6,exceeded:true,resetAt:' + laterReset + ',remaining:0,percent:1.02},readAt:Date.now()};' +
