@@ -3,6 +3,7 @@
   "files": {
     ".gitattributes": "c4bff4e82cb743a78b570cfb220fbb5721221a342798e9d0ec4415300a84aaa3",
     ".gitignore": "52963b397207f863975f02a6395956cd8b8db4e201bf25fa33dc67e5d75cfbdb",
+    ".release-pubkey.pem": "f6bd0095225a359f34d5fbc2fb5209c4e5669152dec4266729ac973330ba64b8",
     ".zcode-plugin/plugin.json": "e0fe0c6f457e9d04b6c7ffd2246638b84eedfcb75babfb4fcd9acfcc4ba46ba4",
     ".zcodeignore": "3ee03bb1066025d02a8b9062f06592ec8aa258b48c9d09c02a50f9f0a406654b",
     "CHANGELOG.md": "3ce0a078ef77c2605470c9dd45de8f305a4d502f050c34e702947adc79f606fa",
