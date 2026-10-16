@@ -12,6 +12,7 @@
 //
 //   node tools/selftest-update.mjs
 
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -444,12 +445,32 @@ function mkRoot(name, entries) {
 // ---------- 8. 整包更新编排（注入 files，不出网） ----------
 {
   const root = mkRoot('run-root', { 'lib/old.js': 'old' })
-  const pkg = new Map([
+  // 发布物完整性（审查 I3）：造一对测试密钥 + 带签名的整包。生产环境私钥在仓库外，
+  // 公钥是安装副本里的 .release-pubkey.pem（更新器的信任锚）。
+  const testKeys = crypto.generateKeyPairSync('ed25519')
+  const testPub = testKeys.publicKey.export({ type: 'spki', format: 'pem' })
+  function signedPkg(entries, version, opts = {}) {
+    const files = new Map(entries)
+    const hashes = {}
+    for (const [rel, body] of files) hashes[rel] = crypto.createHash('sha256').update(body).digest('hex')
+    const sorted = {}
+    for (const k of Object.keys(hashes).sort()) sorted[k] = hashes[k]
+    const bytes = Buffer.from(JSON.stringify({ version, files: sorted }, null, 2) + '\n', 'utf8')
+    files.set('.release-hashes.json', bytes)
+    files.set(
+      '.release-hashes.json.sig',
+      Buffer.from(crypto.sign(null, bytes, opts.key || testKeys.privateKey).toString('base64'))
+    )
+    return files
+  }
+  const basePkg = () => [
     ['.codebuddy-plugin/plugin.json', Buffer.from('{"version":"1.13.0"}')],
     ['lib/server.mjs', Buffer.from('new server')],
-  ])
+  ]
+  const pub = { publicKey: testPub }
+  const pkg = signedPkg(basePkg(), '1.13.0')
   U.writeUpdateState({ latest: '1.13.0', available: true, busy: false, phase: null, error: null, source: null })
-  const r1 = await U.runUpdate({ files: pkg, roots: [root], source: 'test' })
+  const r1 = await U.runUpdate({ files: pkg, roots: [root], source: 'test', ...pub })
   const state1 = U.readUpdateState()
   check(
     'runUpdate：注入整包 → 写入并落状态 done（appliedVersion / busy=false）',
@@ -464,8 +485,33 @@ function mkRoot(name, entries) {
   check('runUpdate：包内版本与目标不符 → 拒绝安装并报错', r2.ok === false && r2.error.includes('版本不符'), String(r2.error))
   // busy 防重入
   U.writeUpdateState({ busy: true })
-  const r3 = await U.runUpdate({ files: pkg, roots: [root] })
+  const r3 = await U.runUpdate({ files: pkg, roots: [root], ...pub })
   check('runUpdate：已有任务进行中 → 直接拒绝（防重入）', r3.ok === false && r3.error.includes('在进行'), String(r3.error))
+  // 缺清单 / 包体被篡改 / 签名不是本仓库私钥签的：三种都必须拒装（供应链）
+  U.writeUpdateState({ busy: false, latest: '1.13.0', available: true, phase: null, error: null })
+  const r4 = await U.runUpdate({ files: new Map(basePkg()), roots: [root], ...pub })
+  check(
+    'runUpdate：没有完整性清单 → 拒绝安装（审查 I3）',
+    r4.ok === false && /完整性清单/.test(String(r4.error)),
+    String(r4.error).slice(0, 90)
+  )
+  const tampered = signedPkg(basePkg(), '1.13.0')
+  tampered.set('lib/server.mjs', Buffer.from('evil payload'))
+  const r5 = await U.runUpdate({ files: tampered, roots: [root], ...pub })
+  check(
+    'runUpdate：包体被篡改 → 拒绝安装（内容与清单不符）',
+    r5.ok === false && /清单不符/.test(String(r5.error)),
+    String(r5.error).slice(0, 90)
+  )
+  const foreignSig = signedPkg(basePkg(), '1.13.0', { key: crypto.generateKeyPairSync('ed25519').privateKey })
+  const r6 = await U.runUpdate({ files: foreignSig, roots: [root], ...pub })
+  check(
+    'runUpdate：签名不是本仓库私钥签的 → 拒绝安装（签名无效）',
+    r6.ok === false && /签名无效/.test(String(r6.error)),
+    String(r6.error).slice(0, 90)
+  )
+  const order = U.buildTarballUrls('1.13.0').map((u) => u.name)
+  check('下载候选：直连 codeload 排第一（镜像只兜底）', order[0] === 'codeload', order.join(','))
   U.writeUpdateState({ busy: false, latest: null, available: false, phase: null, error: null })
 }
 
