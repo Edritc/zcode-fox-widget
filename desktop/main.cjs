@@ -461,7 +461,7 @@ function startFollower() {
     noteFollowerAlive()
     log('follower-stderr', chunk.toString('utf8').slice(0, 200))
   })
-  child.on('exit', (code) => {
+  child.on('exit', (code, signal) => {
     // 被主动替换掉的旧实例：这里不再做什么，否则会误退出整个浮层
     if (follower !== child) return
     follower = null
@@ -469,9 +469,17 @@ function startFollower() {
       clearTimeout(followerSilentTimer)
       followerSilentTimer = null
     }
-    log('follower-exit', String(code))
-    // 跟随脚本自己退了（多半是 ZCode 已退出）：浮层也没有存在意义了
-    if (code !== null && !app.isQuitting) app.quit()
+    log('follower-exit', code === null ? 'signal:' + signal : String(code))
+    if (app.isQuitting) return
+    // 被信号杀掉（code === null）= 脚本异常终止，不是「宿主退出」。此时窗口还在、
+    // overlay.json 仍记 pid 存活，而跟随/主题观测/前台判定全部停更、看门狗还认为浮层
+    // 健康（假活）。重挂一次跟随脚本；宿主真没了的话，新脚本会立刻退出并走 app.quit()。
+    if (code === null) {
+      restartFollower('follower-signal')
+      return
+    }
+    // 跟随脚本自己退了（多半是宿主已退出）：浮层也没有存在意义了
+    app.quit()
   })
 }
 

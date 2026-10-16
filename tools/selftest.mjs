@@ -1531,13 +1531,60 @@ try {
     health.app === 'fox-widget',
     'app=' + health.app
   )
-  check(
-    'health 带 key 探测诊断（列出 provider 条目，enc 密文被标记）',
-    health.keyProbe && Array.isArray(health.keyProbe.entries) &&
-      health.keyProbe.entries.some((e) => e.providerId === 'enc-plugin' && e.keyEncrypted === true),
-    'keySource=' + health.keySource + ' entries=' + ((health.keyProbe && health.keyProbe.entries) || []).length
-  )
   const port = health.port
+  // 凭据诊断需要令牌（审查 U2）：这个端口本机任意进程都能读，所以掩码 key / 候选凭据
+  // 文件路径 / 状态文件路径只在带令牌时回；未鉴权只回 keySource。
+  const serverInfo = JSON.parse(fs.readFileSync(path.join(dataDir, 'server.json'), 'utf8'))
+  const anonHealth = await (await fetch('http://127.0.0.1:' + port + '/whale/health')).json()
+  const authedHealth = await (
+    await fetch('http://127.0.0.1:' + port + '/whale/health', { headers: { 'x-whale-token': serverInfo.token } })
+  ).json()
+  check(
+    'health 免鉴权只回 keySource（掩码 key / 候选路径 / 状态文件路径都收起来）',
+    anonHealth.keySource !== undefined &&
+      anonHealth.keyProbe === undefined &&
+      anonHealth.keyMasked === undefined &&
+      anonHealth.stateFile === undefined,
+    JSON.stringify({
+      keySource: anonHealth.keySource,
+      probe: !!anonHealth.keyProbe,
+      masked: !!anonHealth.keyMasked,
+      stateFile: !!anonHealth.stateFile,
+    })
+  )
+  check(
+    'health 带令牌回 key 探测诊断（列出 provider 条目，enc 密文被标记）',
+    authedHealth.keyProbe &&
+      Array.isArray(authedHealth.keyProbe.entries) &&
+      authedHealth.keyProbe.entries.some((e) => e.providerId === 'enc-plugin' && e.keyEncrypted === true),
+    'keySource=' + authedHealth.keySource + ' entries=' + ((authedHealth.keyProbe && authedHealth.keyProbe.entries) || []).length
+  )
+  // 浮层 spawn：环境清理 + profile 按端口隔离（审查 I1·U4）。行为断言，直接调真函数。
+  {
+    const { overlaySpawnEnv, overlayProfileDir } = await import('../lib/overlay.mjs')
+    const { DATA_DIR: overlayDataDir } = await import('../lib/paths.mjs')
+    const prevRN = process.env.ELECTRON_RUN_AS_NODE
+    const prevNO = process.env.NODE_OPTIONS
+    process.env.ELECTRON_RUN_AS_NODE = '1'
+    process.env.NODE_OPTIONS = '--require=host-shim.cjs'
+    const env = overlaySpawnEnv({ port: 12345 })
+    if (prevRN === undefined) delete process.env.ELECTRON_RUN_AS_NODE
+    else process.env.ELECTRON_RUN_AS_NODE = prevRN
+    if (prevNO === undefined) delete process.env.NODE_OPTIONS
+    else process.env.NODE_OPTIONS = prevNO
+    const prof = overlayProfileDir(12345)
+    check(
+      '浮层 spawn：清掉 ELECTRON_RUN_AS_NODE/NODE_OPTIONS，数据目录与 profile 按端口隔离',
+      env.ELECTRON_RUN_AS_NODE === undefined &&
+        env.NODE_OPTIONS === undefined &&
+        env.WHALE_PORT === '12345' &&
+        (env.WHALE_DATA_DIR === undefined || env.WHALE_DATA_DIR === overlayDataDir) &&
+        prof.indexOf(overlayDataDir) === 0 &&
+        prof.indexOf('12345') !== -1 &&
+        overlayProfileDir(12345) !== overlayProfileDir(12346),
+      JSON.stringify({ port: env.WHALE_PORT, dataDir: env.WHALE_DATA_DIR, profile: prof })
+    )
+  }
 
   // 审查 P2-2：版本号单一来源——health（server 动态读 plugin.json）、清单、
   // .codebuddy-plugin/marketplace.json 副本三者一致，漂移即发版漏改
