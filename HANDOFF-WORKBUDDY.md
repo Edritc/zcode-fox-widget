@@ -37,7 +37,7 @@
 - **Windows 优先**：桌面浮层的跟随、穿透、键盘焦点全依赖 Win32 窗口 API + PowerShell；macOS/Linux 只有浏览器页面形态。
 - 当前版本 `1.11.1`，共 4 个本地提交未发版（`git log --oneline` 看 `761e905` / `a500d59` / `2257e80` / `65698f3`）。
 
-**仓库位置**：`C:\Users\paper\.zcode\cli\plugins\marketplaces\zcode-fox-widget`（就是 ZCode 的本地 marketplace 目录）。
+**仓库位置**：`C:\Users\<用户>\.zcode\cli\plugins\marketplaces\zcode-fox-widget`（就是 ZCode 的本地 marketplace 目录）。
 **运行副本**：ZCode 实际加载的是 `~/.zcode/cli/plugins/cache/zcode-fox-local/zcode-fox-widget/1.0.0/`——**改完源码必须同步副本**，否则你测的是旧代码（上一个 AI 就在这上面误判过一次，见 `.workbuddy/memory/2026-10-13.md`）。
 
 ---

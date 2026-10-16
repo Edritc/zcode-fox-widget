@@ -1,7 +1,7 @@
 # Phase 6 · 真机验收（自动化部分）
 
 > 作者：WorkBuddy 侧移植会话（2026-10-14）。环境：WorkBuddy **5.8.2**（Windows），
-> node `C:/Users/paper/.workbuddy/binaries/node/versions/22.22.2-6/node.exe`（v22.22.2）。
+> node `<WorkBuddy 数据目录>/binaries/node/versions/22.22.2-6/node.exe`（v22.22.2）。
 > 本文只记录**在 agent shell 里能做的**那部分验收；必须动客户端 UI 的项在 §6，留给人工。
 >
 > **本次未发版**：未打 tag、未 push、未改 `main`、未动仓库以外任何既有配置。
@@ -283,7 +283,7 @@ async parseSource(t){
 
 | 检查点 | 结果 |
 |---|---|
-| `known_marketplaces.json` | `fox-local` → `C:\Users\paper\WorkBuddy\Worktrees\zcode-fox-widget\main-56fc9dd2` ✅ |
+| `known_marketplaces.json` | `fox-local` → `<开发副本的绝对路径>（本机为工作树目录，branch: workbuddy/main-<sha>）` ✅ |
 | `installed_plugins.json` | `fox-widget@fox-local` → `plugins/cache/fox-local/fox-widget/2.0.0` ✅ |
 | `settings.json` `enabledPlugins` | `"fox-widget@fox-local": true` ✅ |
 | 钩子 | `hook-state.json` 有会话身份（`UserPromptSubmit` 已落盘）✅ |

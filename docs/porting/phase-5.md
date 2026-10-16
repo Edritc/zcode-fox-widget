@@ -121,8 +121,8 @@
 本次移植在 WorkBuddy 的 git worktree 里完成：
 
 ```
-C:/Users/paper/WorkBuddy/Worktrees/zcode-fox-widget/main-56fc9dd2   # 本分支工作树（branch: workbuddy/main-56fc9dd2）
-C:/Users/paper/.zcode/cli/plugins/marketplaces/zcode-fox-widget     # 主仓库（branch: main，ZCode 侧）
+<WorkBuddy 工作区>/Worktrees/zcode-fox-widget/main-<sha>   # 本分支工作树（branch: workbuddy/main-<sha>）
+<ZCode 插件市场目录>/zcode-fox-widget                       # 主仓库（branch: main，ZCode 侧）
 ```
 
 - 主仓库（`main`）**未被改动**，ZCode 侧的挂件服务仍在运行（端口 39321），未受影响。

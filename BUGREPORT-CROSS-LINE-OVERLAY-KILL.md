@@ -62,10 +62,10 @@ export const OVERLAY_CMDLINE_MARKERS = ['fox-widget', 'zcode-fox-widget']
 所以 `'fox-widget'` 这一个标记就足够匹配到 ZCode 版的浮层。实测两条命令行：
 
 ```
-ZCode 版：C:\Users\paper\.zcode\whale\desktop-runtime\node_modules\electron\dist\electron.exe
-          C:\Users\paper\.zcode\cli\plugins\cache\zcode-fox-local\zcode-fox-widget\1.0.0\desktop
-WB 版  ：C:\Users\paper\.workbuddy\plugins\data\fox-widget-fox-local\desktop-runtime\node_modules\electron\dist\electron.exe
-          C:\Users\paper\.workbuddy\plugins\cache\fox-local\fox-widget\2.0.0\desktop
+ZCode 版：C:\Users\<用户>\.zcode\whale\desktop-runtime\node_modules\electron\dist\electron.exe
+          C:\Users\<用户>\.zcode\cli\plugins\cache\zcode-fox-local\zcode-fox-widget\1.0.0\desktop
+WB 版  ：C:\Users\<用户>\.workbuddy\plugins\data\fox-widget-fox-local\desktop-runtime\node_modules\electron\dist\electron.exe
+          C:\Users\<用户>\.workbuddy\plugins\cache\fox-local\fox-widget\2.0.0\desktop
 ```
 
 第二条虽然只含 `fox-widget`，但两条**都**含 `fox-widget`（第一条含在 `zcode-fox-widget` 里）。**删掉 `'zcode-fox-widget'` 无法解决**。
@@ -243,11 +243,11 @@ const other = 'C:\\Users\\u\\.zcode\\whale\\desktop-runtime\\node_modules\\elect
 
 ```
 # 浮层进程（只剩 WB 版）
-PID 10316  C:\Users\paper\.workbuddy\plugins\data\fox-widget-fox-local\desktop-runtime\node_modules\electron\dist\electron.exe
-           C:\Users\paper\.workbuddy\plugins\cache\fox-local\fox-widget\2.0.0\desktop
+PID 10316  C:\Users\<用户>\.workbuddy\plugins\data\fox-widget-fox-local\desktop-runtime\node_modules\electron\dist\electron.exe
+           C:\Users\<用户>\.workbuddy\plugins\cache\fox-local\fox-widget\2.0.0\desktop
 
 # 服务
-PID 32448  node C:\Users\paper\.workbuddy\plugins\cache\fox-local\fox-widget\2.0.0\lib\server.mjs   → 39321
+PID 32448  node C:\Users\<用户>\.workbuddy\plugins\cache\fox-local\fox-widget\2.0.0\lib\server.mjs   → 39321
 PID 28232  node …\zcode-fox-widget\1.0.0\lib\server.mjs（ZCode 版）                                 → 39322
 
 # 记录文件

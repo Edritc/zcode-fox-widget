@@ -244,11 +244,11 @@ grep -a -o -m1 "function resolveContainedPathAllowingRoot.\{0,300\}" \
 
 # 0.3 出站
 curl -s -o /dev/null -w '%{http_code}\n' https://api.deepseek.com/user/balance   # 401 = 可达
-"C:/Users/paper/.workbuddy/binaries/node/versions/22.22.2-6/node.exe" -e \
+"~/.workbuddy/binaries/node/versions/22.22.2-6/node.exe" -e \
   "fetch('https://api.deepseek.com/user/balance').then(r=>console.log(r.status))"
 
 # 0.4 node 版本
-"C:/Users/paper/.workbuddy/binaries/node/versions/22.22.2-6/node.exe" -v          # v22.22.2
+"~/.workbuddy/binaries/node/versions/22.22.2-6/node.exe" -v          # v22.22.2
 
 # 0.6 数据源（**先 copy 再读**，别直接开用户的 WAL 库）
 cp ~/.workbuddy/workbuddy.db* /tmp/wbprobe/ && node -e "…"                        # 见表结构
