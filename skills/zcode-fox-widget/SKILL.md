@@ -58,7 +58,7 @@ node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" start           # 启动挂件服务（�
 node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" stop            # 停止挂件服务
 node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" close           # 关闭插件（停浮层 + 停服务；只是本次关闭，下次会话照常自启）
 node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" json            # 结构化输出，便于程序消费
-node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" key sk-xxxx     # 写入 API Key
+echo 'sk-xxxx' | node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" key   # 写入 API Key（走 stdin，避免留在 shell 历史/进程列表）
 node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" mode token      # 切换对账/兜底口径（v1.7.0 起主显示固定本机库，此项只决定账号口径）
 node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" window start    # 桌面浮层（浮在 ZCode 界面上）
 node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" window stop     # 关闭浮层

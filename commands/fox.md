@@ -16,7 +16,7 @@ allowed-tools: Bash, mcp__whale__whale_balance, mcp__whale__whale_widget, mcp__w
 - `window start`：调用 `whale_widget`（`action=overlay_start`），把鲸鱼作为**桌面浮层**显示在 ZCode 界面之上（透明置顶、默认鼠标穿透，不挡操作）。若返回「需要运行 Electron 运行时」，就让用户在终端执行 `node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" desktop install`（一次性，约 150MB）后重试。
 - `window stop`：调用 `whale_widget`（`action=overlay_stop`）。
 - `window status`：调用 `whale_widget`（`action=overlay_status`）。
-- `key <sk-...>`：调用 `whale_config`（`action=set`，`apiKey=<值>`）写入 DeepSeek API Key。
+- `key <sk-...>`：调用 `whale_config`（`action=set`，`apiKey=<值>`）写入 DeepSeek API Key。**优先**引导用户改用 stdin 方式（`echo 'sk-...' | node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" key`）：走命令参数会让密钥留在 shell 历史、进程列表与会话记录里。
 - `mode ledger|token`：调用 `whale_config`（`action=set`，`usageMode=...`）切换对账口径（大肥鱼记账 / 实时·令牌）。
 
 若 MCP 工具不可用（例如插件刚装好还没重启会话），退回命令行：

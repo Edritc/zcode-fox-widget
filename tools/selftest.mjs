@@ -4249,6 +4249,27 @@ try {
     'sec-fetch-site': 'cross-site',
   })
   check('跨站来源的凭据型 GET 被 403', crossSiteGet.status === 403, 'HTTP ' + crossSiteGet.status)
+  // 判据必须反过来（除白名单外一律拦）：session.json 会带着用户 key 出站到中转站
+  // 与厂商，旧写法只手工列了 4 个端点，它漏在名单外（审查 I4/T4）。这条断言就是
+  // 当初漏掉它的直接原因——只测了 vendors.json，没测同类路径。
+  const crossSiteSession = await rawRequest('GET', '/whale/session.json', {
+    host: '127.0.0.1:' + port,
+    'sec-fetch-site': 'cross-site',
+  })
+  check('跨站触发出站型 session.json 被 403（默认拒绝）', crossSiteSession.status === 403, 'HTTP ' + crossSiteSession.status)
+  const crossSiteAsset = await rawRequest('GET', '/whale/image.png', {
+    host: '127.0.0.1:' + port,
+    'sec-fetch-site': 'cross-site',
+  })
+  check('跨站取静态素材不被拦（本地白名单）', crossSiteAsset.status === 200, 'HTTP ' + crossSiteAsset.status)
+  // 写操作只收 JSON（审查 S7）：text/plain 的跨站 simple request 不该进解析
+  const plainWrite = await rawRequest(
+    'PUT',
+    '/whale/size.json',
+    { host: '127.0.0.1:' + port, 'content-type': 'text/plain' },
+    JSON.stringify({ scale: 2 })
+  )
+  check('非 JSON 的写请求被 415', plainWrite.status === 415, 'HTTP ' + plainWrite.status)
   const sameSiteGet = await rawRequest('GET', '/whale/vendors.json', {
     host: '127.0.0.1:' + port,
     'sec-fetch-site': 'same-origin',

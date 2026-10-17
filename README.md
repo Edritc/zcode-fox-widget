@@ -242,7 +242,7 @@
 写入方式（任选其一）：
 
 ```bash
-node lib/cli.mjs key sk-xxxxxxxxxxxxxxxx     # 写进插件配置
+echo 'sk-xxxxxxxxxxxxxxxx' | node lib/cli.mjs key   # 从 stdin 读（密钥不进 shell 历史与进程列表）
 ```
 
 或让 ZCode 里的模型直接调 MCP 工具 `whale_config`（`action=set`, `apiKey=...`）。
@@ -287,14 +287,14 @@ node lib/cli.mjs window start    # 启动桌面浮层（浮在 ZCode 界面上�
 node lib/cli.mjs window stop     # 关闭浮层
 node lib/cli.mjs window status   # 浮层与运行时状态
 node lib/cli.mjs desktop install # 安装 Electron 运行时（仅浮层需要，一次性）
-node lib/cli.mjs key sk-...      # 写入 API Key
+echo 'sk-...' | node lib/cli.mjs key   # 写入 API Key（走 stdin，不留命令行痕迹）
 node lib/cli.mjs mode ledger|token  # 切换对账口径（大肥鱼记账 / 实时·令牌）
 node lib/cli.mjs json            # 结构化输出，便于脚本消费
 ```
 
 ### 在对话里直接用
 
-- 输入 `/fox`（或 `/fox turn`、`/fox window start`、`/fox key sk-...`）
+- 输入 `/fox`（或 `/fox turn`、`/fox window start`；写 Key 建议用上面的 stdin 方式，避免密钥留在对话与命令行历史里）
 - 或者直接问「我还有多少余额」「上一轮花了多少」，ZCode 会调用 MCP 工具：
 
 | MCP 工具 | 作用 |
