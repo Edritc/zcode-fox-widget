@@ -920,8 +920,17 @@ function check(name, ok, detail) {
 // CommandCode 三重额度：套餐目录恢复 + 窗口塑形 + 活跃账号选择（纯函数，
 // 不出网——HTTP 层只验 vendors.json 的 no-credentials 降级）
 {
-  const { shapeCmdgoUsage, resolveCmdgoPlan, pickActiveAccount, accountCandidates, readCmdgoAccounts, fetchCmdgoKey } =
-    await import('../lib/cmdgo.mjs')
+  const {
+    shapeCmdgoUsage,
+    resolveCmdgoPlan,
+    pickActiveAccount,
+    accountCandidates,
+    readCmdgoAccounts,
+    readHostCmdgoAccounts,
+    mergeAccountCandidates,
+    shapePoolQuota,
+    fetchCmdgoKey,
+  } = await import('../lib/cmdgo.mjs')
   const credits = {
     credits: { monthlyCredits: 6.9, purchasedCredits: 0.5, freeCredits: 0 },
     windowLimits: {
@@ -986,7 +995,7 @@ function check(name, ok, detail) {
     }),
     'utf8'
   )
-  const cands = accountCandidates(candDir)
+  const cands = accountCandidates(candDir, [])
   const candRefs = cands.ordered.map((c) => c.ref)
   check(
     '账号候选：停用账号被排除（展示与池计数都不含），裸 key 仍是候选',
@@ -997,6 +1006,112 @@ function check(name, ok, detail) {
       cands.pool.total === 2 &&
       cands.pool.available === 1,
     JSON.stringify({ refs: candRefs, pool: cands.pool })
+  )
+
+  // 官方 API 接入点（除 Go 套餐外发的就是这把 `user…` 官方 key）：宿主里同一
+  // 账号常配两个 provider（OpenAI 兼容 + Anthropic）共用一把 key，必须按 key
+  // 去重成一个账号；本地网关 / 密文 / 非 CommandCode 域名都不收。
+  const hostEntries = [
+    {
+      providerId: 'commandcode-goat-1',
+      providerName: 'CommandCode GOAT · 账号 1',
+      host: 'api.commandcode.ai',
+      apiKey: 'user-key-a',
+      isLocal: false,
+      keyEncrypted: false,
+    },
+    {
+      providerId: 'commandcode-goat-1-claude',
+      providerName: 'CommandCode GOAT · 账号 1 (Claude)',
+      host: 'api.commandcode.ai',
+      apiKey: 'user-key-a',
+      isLocal: false,
+      keyEncrypted: false,
+    },
+    {
+      providerId: 'commandcode-goat-2',
+      providerName: 'CommandCode GOAT · 账号 2',
+      host: 'api.commandcode.ai',
+      apiKey: 'user-key-b',
+      isLocal: false,
+      keyEncrypted: false,
+    },
+    { providerId: 'deepseek', providerName: 'DeepSeek', host: 'api.deepseek.com', apiKey: 'sk-x', isLocal: false },
+    { providerId: 'local-cc', providerName: '本地反代', host: '127.0.0.1', apiKey: 'user-key-c', isLocal: true },
+    {
+      providerId: 'commandcode-pool',
+      providerName: 'CommandCode GOAT Pool',
+      host: '127.0.0.1',
+      baseUrl: 'http://127.0.0.1:11490/v1',
+      apiKey: 'ccp-token',
+      isLocal: true,
+    },
+    {
+      providerId: 'commandcode-pool-claude',
+      providerName: 'CommandCode GOAT Pool (Claude)',
+      host: '127.0.0.1',
+      baseUrl: 'http://127.0.0.1:11490/v1',
+      apiKey: 'ccp-token',
+      isLocal: true,
+    },
+    { providerId: 'enc-cc', providerName: '密文', host: 'api.commandcode.ai', apiKey: '', isLocal: false, keyEncrypted: true },
+    { providerId: 'no-key', providerName: '无 key', host: 'api.commandcode.ai', apiKey: '', isLocal: false },
+  ]
+  const hostAccts = readHostCmdgoAccounts(hostEntries)
+  check(
+    'CommandCode 官方 API：同一账号两个 provider 共用 key 只算一个（名称去 (Claude) 后缀）',
+    hostAccts.length === 3 &&
+      hostAccts[0].ref === 'provider:commandcode-goat-1' &&
+      hostAccts[0].key === 'user-key-a' &&
+      hostAccts[0].userName === 'CommandCode GOAT · 账号 1' &&
+      hostAccts[1].key === 'user-key-b',
+    JSON.stringify(hostAccts.map((a) => ({ ref: a.ref, name: a.userName })))
+  )
+  check(
+    'CommandCode 本地池：按 pool origin 去重（OpenAI/Claude 两个接入点只查一次 /health）',
+    hostAccts[2].kind === 'pool' &&
+      hostAccts[2].ref === 'pool:http://127.0.0.1:11490' &&
+      hostAccts[2].poolBase === 'http://127.0.0.1:11490',
+    JSON.stringify(hostAccts[2])
+  )
+  const poolShaped = shapePoolQuota({
+    id: 'goat-1',
+    label: 'CommandCode GOAT 账号 1',
+    quota: {
+      monthlyCredits: 45.08,
+      fiveHour: { used: 0.6, cap: 14, exceeded: false, resetAt: 1792219604599 },
+      weekly: { used: 0.67, cap: 35, exceeded: false, resetAt: 1792804438334 },
+    },
+  })
+  check(
+    'CommandCode 本地池：/health 快照按帽对恢复套餐（14/35 → GOAT $70），月度已用比例与窗口一致',
+    poolShaped &&
+      poolShaped.plan === 'GOAT' &&
+      poolShaped.monthly.total === 70 &&
+      Math.abs(poolShaped.monthly.percent - (70 - 45.08) / 70) < 1e-9 &&
+      Math.abs(poolShaped.fiveHour.percent - 0.6 / 14) < 1e-9 &&
+      Math.abs(poolShaped.weekly.percent - 0.67 / 35) < 1e-9 &&
+      poolShaped.userName === 'CommandCode GOAT 账号 1',
+    JSON.stringify(poolShaped)
+  )
+  const merged = mergeAccountCandidates(readCmdgoAccounts(candDir), hostAccts)
+  check(
+    'CommandCode 账号池：反代账号在前、宿主 provider 并入，池总数/可用数含官方与本地池',
+    merged.ordered.length === 5 &&
+      merged.ordered[0].ref === 'REF_A' &&
+      merged.ordered[2].ref === 'provider:commandcode-goat-1' &&
+      merged.ordered[4].ref === 'pool:http://127.0.0.1:11490' &&
+      merged.pool.total === 5 &&
+      merged.pool.available === 4,
+    JSON.stringify({ refs: merged.ordered.map((c) => c.ref), pool: merged.pool })
+  )
+  const overlap = mergeAccountCandidates(readCmdgoAccounts(candDir), [
+    { ref: 'provider:x', key: 'k-a', userName: 'dup' },
+  ])
+  check(
+    'CommandCode 账号池：反代与官方 API 共用同一把 key 时只保留先出现的账号',
+    overlap.ordered.length === 2 && overlap.ordered.every((c) => c.key !== 'k-a' || c.ref === 'REF_A'),
+    JSON.stringify(overlap.ordered.map((c) => c.ref))
   )
   const shapes = readCmdgoAccounts(candDir)
   check(
@@ -1252,6 +1367,12 @@ function check(name, ok, detail) {
     '计费源：cmdgo 反代 → CommandCode 额度口径（限额走其套餐池，不看模型名）',
     r('cmdgo-bridge', 'deepseek/deepseek-v4-flash', 'http://127.0.0.1:11435/v1') === 'cmdgo' &&
       r('cmdgo-bridge', 'xiaomi/mimo-v2.6-pro', 'http://127.0.0.1:11435/v1') === 'cmdgo'
+  )
+  check(
+    '计费源：CommandCode 官方 API provider（commandcode-*）也走额度口径，不按模型名算成厂商真金白银',
+    r('commandcode-goat-1', 'gpt-6-luna') === 'cmdgo' &&
+      r('commandcode-goat-1-claude', 'claude-sonnet-5-5') === 'cmdgo' &&
+      r('commandcode-goat-2', 'deepseek/deepseek-v4-pro') === 'cmdgo'
   )
   // GLM 订阅修正：大模型的 provider/host 名字区分不出「订阅」与「按量」（同一个
   // open.bigmodel.cn、同一把 key 形状），但账号事实分得出——有 GLM Coding Plan 套餐
