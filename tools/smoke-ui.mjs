@@ -1241,10 +1241,15 @@ try {
       6000
     )
   )
+  let queueRole = null
+  try {
+    queueRole = (await (await fetch('http://127.0.0.1:' + PORT + '/whale/size.json')).json()).roleId
+  } catch (err) {}
+  const queueAllowsRua = queueRole === 'whale' || queueRole === 'xiaoke'
   check(
-    '出厂默认队列：再次点击是加权三选一（三张带权重角标的变体卡）',
-    !!defQueue && defQueue.badges === 3 && defQueue.cards >= 4,
-    JSON.stringify(defQueue)
+    '出厂默认队列：加权变体（大肥鱼/小克三选一，其他角色二选一）',
+    !!defQueue && defQueue.badges === (queueAllowsRua ? 3 : 2) && defQueue.cards >= 4,
+    JSON.stringify({ defQueue, role: queueRole, allowRua: queueAllowsRua })
   )
   // 调色板「直接拖进下方虚线框」（审查 P3-D 回归）：落点必须是面板里那个虚线框节点本身。
   // 曾经这里重复 var 出一个游离节点当落点，wirePointerDrop 的
@@ -1542,7 +1547,15 @@ try {
     )
   }
   // ⑪c 图挂降级：gif error 置 gifFailed 后，纯图步（r=0.99 确定性命中权重 5 的
-  // 图片变体）降级成一句备胎文案，不再渲染破图
+  // 图片变体）降级成一句备胎文案，不再渲染破图。rua 只在大肥鱼/小克身上，
+  // 先切到大肥鱼再测。
+  await fetch('http://127.0.0.1:' + PORT + '/whale/size.json', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scale: 1.5, roleId: 'whale' }),
+  })
+  await cdp.send('Page.reload')
+  await new Promise((r) => setTimeout(r, 2500))
   await cdp.eval(
     'Math.random=function(){return 0.99};' +
       "(function(){var g=document.querySelector('.zcwv-gif');if(g)g.dispatchEvent(new Event('error'));return true})()"
