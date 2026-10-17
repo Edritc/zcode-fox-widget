@@ -932,6 +932,365 @@ function check(name, ok, detail) {
   }
 }
 
+// 中转站额度：站点识别 + 三类平台响应塑形 + 余额/窗口卡 + HTTP 兜底链
+//（纯函数用 fixture；HTTP 用 mock fetch，不出网）
+{
+  const R = await import('../lib/relays.mjs')
+  const ids = R.RELAYS.map((r) => r.id)
+  check(
+    '中转站注册表：常用站覆盖（PackyCode/DuckCoding/云雾/H API/UU/APINebula/LinkAI/88Code/SSSAICode/Cubence）',
+    ids.indexOf('packycode') !== -1 &&
+      ids.indexOf('duckcoding') !== -1 &&
+      ids.indexOf('yunwu') !== -1 &&
+      ids.indexOf('hapi') !== -1 &&
+      ids.indexOf('uuapi') !== -1 &&
+      ids.indexOf('apinebula') !== -1 &&
+      ids.indexOf('linkai') !== -1 &&
+      ids.indexOf('88code') !== -1 &&
+      ids.indexOf('sssaicode') !== -1 &&
+      ids.indexOf('cubence') !== -1,
+    ids.join(',')
+  )
+  check(
+    '中转站识别：host 精确/子域都命中',
+    R.findRelay('api.packyapi.ai', '')?.id === 'packycode' &&
+      R.findRelay('api.duckcoding.ai', '')?.id === 'duckcoding' &&
+      R.findRelay('node-hk.sssaiapi.com', '')?.id === 'sssaicode' &&
+      R.findRelay('api.cubence.com', '')?.id === 'cubence' &&
+      R.findRelay('img-api.apinebula.ai', '')?.id === 'apinebula'
+  )
+  check(
+    '中转站识别：调用地址换成通用域名时按 provider 名兜底（cf.api.fan + PackyCode）',
+    R.findRelay('cf.api.fan', 'PackyCode')?.id === 'packycode' &&
+      R.findRelay('', 'SSSAICode')?.id === 'sssaicode' &&
+      R.findRelay('', 'Cubence')?.id === 'cubence'
+  )
+  check(
+    '中转站识别：不误伤官方域名 / 同名 Agent 平台 / 相似域名',
+    R.findRelay('api.deepseek.com', 'DeepSeek') === null &&
+      R.findRelay('api.openai.com', 'OpenAI') === null &&
+      R.findRelay('linkai.cloud', 'LinkAI Agent') === null &&
+      R.findRelay('cf.api.fan', '') === null &&
+      R.findRelay('evilpackyapi.ai', '') === null
+  )
+
+  const packy = R.RELAYS.find((r) => r.id === 'packycode')
+  const t1 = R.shapeNewApiTokenUsage(packy, {
+    data: { total_granted: 5000000, total_used: 1000000, total_available: 4000000 },
+  })
+  check(
+    'New API token 额度：quota 单位按 500000=$1 换算（$10 / 已用 $2 / 剩 $8）',
+    t1 && t1.ok && t1.kind === 'balance' && t1.balance.remaining === 8 && t1.balance.used === 2 && t1.balance.total === 10,
+    JSON.stringify(t1)
+  )
+  const t2 = R.shapeNewApiTokenUsage(packy, {
+    data: { total_granted: '15.5', total_used: '3.5', total_available: '12' },
+  })
+  check(
+    'New API token 额度：字符串数值 + 直接给美元的站（不再除以 500000）',
+    t2 && t2.balance.remaining === 12 && t2.balance.used === 3.5 && t2.balance.total === 15.5,
+    JSON.stringify(t2)
+  )
+  const t3 = R.shapeNewApiTokenUsage(packy, { data: { unlimited_quota: true, total_used: 1000000 } })
+  check(
+    'New API token 额度：unlimited_quota 不冒充 $0 余额',
+    t3 && t3.balance.unlimited === true && t3.balance.remaining === null,
+    JSON.stringify(t3)
+  )
+  const t4 = R.shapeNewApiTokenUsage(packy, { data: { total_granted: 5000000, total_used: 1000000 } })
+  check(
+    'New API token 额度：缺 total_available 时用 granted − used 兜底',
+    t4 && t4.balance.remaining === 8 && t4.balance.used === 2,
+    JSON.stringify(t4)
+  )
+  const b1 = R.shapeNewApiBilling(packy, { hard_limit_usd: 10 }, { total_usage: 400 })
+  check(
+    'New API 账单：hard_limit − 已用（total_usage 是美分）',
+    b1 && b1.kind === 'balance' && b1.balance.remaining === 6 && b1.balance.used === 4 && b1.balance.total === 10,
+    JSON.stringify(b1)
+  )
+  const b2 = R.shapeNewApiBilling(packy, { hard_limit_usd: 100000000 }, { total_usage: 1 })
+  check('New API 账单：哨兵值 100000000 = 无限制，不当成 $1 亿', b2 && b2.balance.unlimited === true, JSON.stringify(b2))
+  check(
+    'New API 账单：只有总额没有 usage 时返回 null（不编造剩余）',
+    R.shapeNewApiBilling(packy, { hard_limit_usd: 10 }, null) === null
+  )
+  const u1 = R.shapeNewApiUserSelf(packy, { data: { quota: 4000000, used_quota: 1000000 } })
+  check(
+    'New API /api/user/self：账户级 quota + used_quota 换算',
+    u1 && u1.balance.remaining === 8 && u1.balance.used === 2 && u1.balance.total === 10,
+    JSON.stringify(u1)
+  )
+  const monthly = R.shapeNewApiTokenUsage(
+    { id: 'monthly-demo', name: 'Monthly Demo', model: 'monthly' },
+    { data: { total_granted: 5000000, total_used: 1000000, total_available: 4000000 } }
+  )
+  check(
+    'New API 月限额：注册表标 monthly 时出「本月」窗口（20% 已用）',
+    monthly && monthly.kind === 'quota' && monthly.windows.length === 1 && monthly.windows[0].label === '本月' && monthly.windows[0].percentUsed === 20,
+    JSON.stringify(monthly)
+  )
+
+  const sssai = { id: 'sssaicode', name: 'SSSAICode' }
+  const s1 = R.shapeSub2Usage(sssai, {
+    mode: 'quota_limited',
+    rate_limits: [
+      { window: '5h', used: 1, total: 5, reset_at: '2026-10-18T00:00:00Z' },
+      { window: '1d', used: 2, total: 10 },
+      { window: '7d', used: 20, total: 100 },
+    ],
+  })
+  check(
+    'Sub2API：5h/1d/7d 三窗口映射为 5小时/本日/本周，百分比与重置时间都保留',
+    s1 &&
+      s1.kind === 'quota' &&
+      s1.windows.length === 3 &&
+      s1.windows[0].label === '5小时' &&
+      s1.windows[0].percentUsed === 20 &&
+      s1.windows[0].resetAt > 0 &&
+      s1.windows[1].label === '本日' &&
+      s1.windows[2].label === '本周' &&
+      s1.windows[2].percentUsed === 20,
+    JSON.stringify(s1)
+  )
+  const s2 = R.shapeSub2Usage(sssai, { data: { mode: 'quota_limited', rate_limits: [{ window: '5h', used: 12, total: 10 }] } })
+  check('Sub2API：已用超过总额时夹到 100%（不显示 120%）', s2 && s2.windows[0].percentUsed === 100, JSON.stringify(s2))
+  const s3 = R.shapeSub2Usage(sssai, { data: { mode: 'unrestricted', remaining: 12.5, used: 2.5, total: 15 } })
+  check(
+    'Sub2API：unrestricted 模式退回余额卡（不硬造窗口）',
+    s3 && s3.kind === 'balance' && s3.balance.remaining === 12.5 && s3.balance.used === 2.5,
+    JSON.stringify(s3)
+  )
+  check('Sub2API：结构不符返回 null（读取层报错）', R.shapeSub2Usage(sssai, { foo: 'bar' }) === null)
+
+  const cub = { id: 'cubence', name: 'Cubence' }
+  const c1 = R.shapeCubence(cub, { balance: 12.34, five_hour: { used: 1.23, limit: 5 } })
+  check(
+    'Cubence：5 小时窗口 + 余额同时展示',
+    c1 &&
+      c1.kind === 'quota' &&
+      c1.windows.length === 1 &&
+      c1.windows[0].label === '5小时' &&
+      c1.windows[0].percentUsed === 24.6 &&
+      c1.balance.remaining === 12.34,
+    JSON.stringify(c1)
+  )
+  const c2 = R.shapeCubence(cub, { data: { subscription: { balance: 9.5, fiveHour: { remaining: 4, total: 5 } } } })
+  check(
+    'Cubence：data/subscription 嵌套 + 只给 remaining/total 也能算出已用',
+    c2 && c2.windows[0].percentUsed === 20 && c2.balance.remaining === 9.5,
+    JSON.stringify(c2)
+  )
+  const c3 = R.shapeCubence(cub, { balance: 3.2 })
+  check('Cubence：只有余额时出余额卡', c3 && c3.kind === 'balance' && c3.balance.remaining === 3.2, JSON.stringify(c3))
+  check('Cubence：结构不符返回 null', R.shapeCubence(cub, { foo: 1 }) === null)
+
+  const cardWindows = R.quotaCardOf(s1)
+  const cardBalance = R.quotaCardOf(s3)
+  const cardError = R.quotaCardOf({ ok: false, name: 'DuckCoding', reason: '未找到该站的 API Key' })
+  check(
+    '额度卡形状：窗口卡带 rows，余额卡带 amount，错误卡带 reason',
+    cardWindows.kind === 'windows' &&
+      cardWindows.title === 'SSSAICode 额度' &&
+      cardWindows.rows.length === 3 &&
+      cardWindows.balance === null &&
+      cardBalance.kind === 'balance' &&
+      cardBalance.title === 'SSSAICode 余额' &&
+      cardBalance.balance.remaining === 12.5 &&
+      cardError.kind === 'error' &&
+      cardError.title === 'DuckCoding 额度' &&
+      cardError.reason.indexOf('API Key') !== -1,
+    JSON.stringify({ cardWindows, cardBalance, cardError })
+  )
+
+  // ---- HTTP 适配器：mock fetch 覆盖兜底链、缓存、并发与白名单 ----
+  const realFetch = globalThis.fetch
+  let calls = []
+  const json = (o, status) =>
+    new Response(JSON.stringify(o), { status: status || 200, headers: { 'content-type': 'application/json' } })
+  const provider = {
+    providerId: 'selftest-packy',
+    baseUrl: 'https://api.packyapi.ai',
+    host: 'api.packyapi.ai',
+    apiKey: 'k-test',
+    providerName: 'PackyCode',
+    isLocal: false,
+  }
+  try {
+    R.invalidateRelayCache()
+    calls = []
+    globalThis.fetch = async (url) => {
+      calls.push(String(url))
+      return json({ data: { total_granted: 5000000, total_used: 1000000, total_available: 4000000 } })
+    }
+    const q1 = await R.readRelayQuota(packy, { provider, auth: {} })
+    check(
+      'New API HTTP：/api/usage/token 成功即返回余额（只出网一次）',
+      q1.ok && q1.source === 'newapi-usage-token' && q1.balance.remaining === 8 && calls.length === 1,
+      JSON.stringify({ q1, calls })
+    )
+    const beforeCache = calls.length
+    await R.readRelayQuota(packy, { provider, auth: {} })
+    check('中转站缓存：45s 内同一 provider 不重复出网', calls.length === beforeCache, JSON.stringify(calls))
+
+    R.invalidateRelayCache()
+    calls = []
+    globalThis.fetch = async (url) => {
+      const s = String(url)
+      calls.push(s)
+      if (s.indexOf('/api/usage/token') !== -1) return json({ error: 'not found' }, 404)
+      if (s.indexOf('/v1/dashboard/billing/subscription') !== -1) return json({ hard_limit_usd: 10 })
+      if (s.indexOf('/v1/dashboard/billing/usage') !== -1) return json({ total_usage: 400 })
+      return json({}, 404)
+    }
+    const q2 = await R.readRelayQuota(packy, { provider, auth: {} })
+    check(
+      'New API HTTP：token 接口 404 → 账单接口兜底（subscription + usage 两次）',
+      q2.ok && q2.source === 'newapi-billing' && q2.balance.remaining === 6 && calls.length === 3,
+      JSON.stringify({ q2, calls })
+    )
+
+    R.invalidateRelayCache()
+    calls = []
+    let selfHeaders = null
+    globalThis.fetch = async (url, opts) => {
+      const s = String(url)
+      calls.push(s)
+      if (s.indexOf('/api/user/self') !== -1) {
+        selfHeaders = opts.headers
+        return json({ data: { quota: 4000000, used_quota: 1000000 } })
+      }
+      return json({}, 404)
+    }
+    const q3 = await R.readRelayQuota(packy, {
+      provider: { ...provider, apiKey: '' },
+      auth: { token: 'sys-token', userId: '42' },
+    })
+    check(
+      'New API HTTP：系统访问令牌 + 用户 ID 兜底（Authorization 原文 + New-Api-User）',
+      q3.ok &&
+        q3.source === 'newapi-user-self' &&
+        q3.balance.remaining === 8 &&
+        selfHeaders &&
+        selfHeaders.authorization === 'sys-token' &&
+        selfHeaders['New-Api-User'] === '42',
+      JSON.stringify({ q3, headers: selfHeaders && { authorization: selfHeaders.authorization, user: selfHeaders['New-Api-User'] } })
+    )
+
+    R.invalidateRelayCache()
+    calls = []
+    globalThis.fetch = async () => {
+      calls.push('SHOULD_NOT_FETCH')
+      throw new Error('network should not be reached')
+    }
+    const hapi = R.RELAYS.find((r) => r.id === 'hapi')
+    const q4 = await R.readRelayQuota(hapi, {
+      provider: {
+        providerId: 'selftest-hapi',
+        baseUrl: 'https://hapiopen.cc',
+        host: 'hapiopen.cc',
+        apiKey: '',
+        providerName: 'H API',
+        isLocal: false,
+      },
+      auth: {},
+    })
+    check(
+      '中转站无凭据：不出网，直接说「未找到 API Key」',
+      !q4.ok && /API Key/.test(String(q4.reason)) && calls.length === 0,
+      JSON.stringify({ q4, calls })
+    )
+
+    R.invalidateRelayCache()
+    calls = []
+    globalThis.fetch = async (url) => {
+      calls.push(String(url))
+      return json({
+        mode: 'quota_limited',
+        rate_limits: [
+          { window: '5h', used: 1, total: 5 },
+          { window: '7d', used: 50, total: 100 },
+        ],
+      })
+    }
+    const q5 = await R.readRelayQuota(R.RELAYS.find((r) => r.id === 'sssaicode'), {
+      provider: {
+        providerId: 'selftest-sssai',
+        baseUrl: 'https://node-hk.sssaiapi.com',
+        host: 'node-hk.sssaiapi.com',
+        apiKey: 'k-test',
+        providerName: 'SSSAICode',
+        isLocal: false,
+      },
+      auth: {},
+    })
+    check(
+      'Sub2API HTTP：/v1/usage 两窗口正常返回',
+      q5.ok && q5.windows.length === 2 && q5.windows[0].label === '5小时' && q5.windows[1].label === '本周',
+      JSON.stringify(q5)
+    )
+
+    R.invalidateRelayCache()
+    calls = []
+    globalThis.fetch = async (url) => {
+      calls.push(String(url))
+      return json({ balance: 12.34, five_hour: { used: 1.23, limit: 5 } })
+    }
+    const q6 = await R.readRelayQuota(R.RELAYS.find((r) => r.id === 'cubence'), {
+      provider: {
+        providerId: 'selftest-cubence',
+        baseUrl: 'https://api.cubence.com',
+        host: 'api.cubence.com',
+        apiKey: 'k-test',
+        providerName: 'Cubence',
+        isLocal: false,
+      },
+      auth: {},
+    })
+    check(
+      'Cubence HTTP：/v1/user/subscription-info 余额 + 5 小时窗口',
+      q6.ok && q6.windows[0].label === '5小时' && q6.balance.remaining === 12.34,
+      JSON.stringify(q6)
+    )
+
+    R.invalidateRelayCache()
+    calls = []
+    const q7 = await R.readRelayQuota(packy, {
+      provider: { ...provider, baseUrl: 'https://evil.example', host: 'evil.example' },
+      auth: {},
+    })
+    check(
+      '中转站出站白名单：provider 指向非注册表主机时拒绝，且不发请求',
+      !q7.ok && calls.length === 0,
+      JSON.stringify({ q7, calls })
+    )
+
+    R.invalidateRelayCache()
+    calls = []
+    let release = null
+    const gate = new Promise((resolve) => {
+      release = resolve
+    })
+    globalThis.fetch = async (url) => {
+      calls.push(String(url))
+      await gate
+      return json({ data: { total_granted: 5000000, total_used: 1000000, total_available: 4000000 } })
+    }
+    const p1 = R.readRelayQuota(packy, { provider, auth: {} })
+    const p2 = R.readRelayQuota(packy, { provider, auth: {} })
+    release()
+    const [r1, r2] = await Promise.all([p1, p2])
+    check(
+      '中转站并发合并：同一 provider 的两个并发请求只出网一次',
+      calls.length === 1 && r1.ok && r2.ok && r1.balance.remaining === 8,
+      JSON.stringify({ calls, ok: [r1.ok, r2.ok] })
+    )
+  } finally {
+    globalThis.fetch = realFetch
+    R.invalidateRelayCache()
+  }
+}
+
 // 凭据发现：WorkBuddy 侧的候选位（settings.json env / pluginConfigs、插件数据目录
 // config.json 的 apiKey / vendorKeys）。ZCode 的 provider_config.json 模板继承已不存在。
 {
