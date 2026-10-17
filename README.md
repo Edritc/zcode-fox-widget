@@ -2,193 +2,30 @@
 
 <div align="center"><img src="assets/fox.png" width="420" alt="ZCode狐娘小挂件"></div>
 
-> 产品名 **ZCode狐娘小挂件**（英文名 ZCode Fox Widget；更名前曾以「ZCode 版 DeepSeek 余额小鲸鱼挂件」「Widget of ZCode」发布）。在 ZCode 里常驻一位嘎啦嘛（可一键切回原版大肥鱼，或上传任意形象）：显示 **DeepSeek 余额**、**GLM Plan 剩余配额**、**CommandCode 三重额度**（月度池 + 5 小时/周窗口，多账号池）、**各厂商今日已用**（九家价目 + 35 个厂商模板、缓存/峰谷分档计价）、**当前峰谷时段**，每轮对话结束还会弹一个气泡告诉你 **上一轮花了多少钱 / 占了多少配额**。
+> 常驻 ZCode 右下角的桌宠：显示 **DeepSeek 余额**、**GLM Plan 剩余配额**、**CommandCode 三重额度**、**各厂商今日已用**与**当前峰谷时段**，每轮对话结束弹气泡报告本轮花费。
 >
-> 它浮在 ZCode 窗口的右下角，跟着窗口移动/最小化/关闭，指针不在它身上时点击直接穿透到下面的应用——**不挡任何操作**；开「桌宠模式」后以整个屏幕工作区为家，切应用也不隐身，一直浮在最上层。
+> 浮层跟着 ZCode 窗口移动、最小化、关闭，指针不在它身上时点击直接穿透；开「桌宠模式」后以整个工作区为家，切应用也不隐身。
+>
+> 同仓双分支：本分支 `main` 是 ZCode 线（按量余额口径），`workbuddy` 分支是 [WorkBuddy 线](https://github.com/pigeon189/zcode-fox-widget/tree/workbuddy)（订阅积分口径）。
 
 ---
 
-## 移植关系与协议
+## 快速开始
 
-**本项目不是原创，是移植版的延续。** 视觉与交互设计、鲸鱼素材、音效、台词、峰谷定价表和计费口径来自上游项目：
+**前置**：ZCode 客户端；`node -v` 可用（`node:sqlite` 需 ≥ 22.5，缺了「每轮消耗/用量记录」会退化）；Windows（浮层依赖 Win32，macOS / Linux 只能用本地页面）。
 
-| | |
-|---|---|
-| **原版** | [MeteorNOX/DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)（MIT，Copyright (c) 2026 MeteorNOX）——DSH（DeepSeek Harness）的 Web 插件 |
-| **ZCode 移植** | [nb10yyds/zcode-whale-widget](https://github.com/nb10yyds/zcode-whale-widget)——ZCode 没有上游依赖的脚本注入与凭据服务扩展点，宿主适配层（本地服务、凭据发现、每轮消耗数据源、平台集成）为移植期重写；挂件本身的观感与算法追求与上游一致 |
-| **本仓库** | fork 自上址（基线 e60e09c），fork 基线到 v1.8.4 共 137 个提交的继续开发，v1.8.5 起以「ZCode狐娘小挂件」独立建仓维护 |
+1. **加市场源（二选一）**
 
-**沿用自上游**：`assets/` 下上游素材（鲸鱼形象、`rua.gif`、两套音效）、气泡 SVG 几何、字号档、动画参数、拖拽/四分吸附/左吸附镜像/alpha 命中检测、随机台词六组的文案与权重、峰谷定价表与时段规则、记账模式语义、余额接口取项规则。
+   **A. GitHub 源（推荐）**：设置 → 插件管理 → **发现** → 右上角 `+` → 市场源填
+   `pigeon189/zcode-fox-widget`。宿主认 `owner/repo`，拉的就是默认分支 `main`；升级 = 对市场点「重新抓取」。
 
-**新增素材（非上游）**：`GLM.png`（嘎啦嘛）、`gpt.png`（GPT娘）、`kimi.png`（kimi娘）、`gemini.png`（哈基米）、README 头图 `fox.png` —— 均为项目自有素材；`xiaoke.png`（小克）取自 [aklnaaw/dsh-xiaoke-widget](https://github.com/aklnaaw/dsh-xiaoke-widget)（MIT），**已获原作者授权**。六张内置立绘统一到同一画布规格：**610×610 画布、内容高 587、内容右边与底边都贴到画布边**（右下对齐是刚需——挂件贴屏幕右缘，右对齐才能做到切换角色时角色不横向跳），视觉上六个角色的身高与离右边框的距离一致。
+   **B. 本地目录（要改代码时用）**：克隆后在同一入口点 `+`，把**仓库绝对路径**填进市场源（指向含 `marketplace.json` 的仓库根）。
 
-**移植期重写**：本地服务 + 独立页面 + 桌面浮层的呈现层；三级凭据发现链；每轮消耗改读 ZCode 落库的 `turn_usage`；MCP 服务、SessionStart 自启 hook、skill、`/fox` 命令与 CLI；出站白名单与本地服务加固。
+   > 同时装 WorkBuddy 版时，两边各克隆一份——两个宿主盯同一个工作区，任一端重抓都会覆盖另一端。
 
-逐条清单见 [`NOTICE`](./NOTICE)；MIT 许可全文见 [`LICENSE`](./LICENSE)。fork 之后新增了什么，见下一节与 [CHANGELOG](./CHANGELOG.md)。
-
-### 同仓的另一条产品线：WorkBuddy 版
-
-本仓库**同仓双分支**承载两条产品线，版本号各自独立、互不包含：
-
-| | `main`（本分支） | `workbuddy` 分支 |
-|---|---|---|
-| 产品 | **ZCode狐娘小挂件**（`zcode-fox-widget`） | **WorkBuddy狐娘小挂件**（`fox-widget`） |
-| 宿主 | ZCode 客户端 | WorkBuddy 客户端 |
-| 主口径 | 多厂商余额与计价（DeepSeek 峰谷 / GLM Plan / CommandCode 三重额度 / 每轮消耗） | **订阅积分**（今日积分 / 本轮 credit / 上下文余量） |
-| 插件清单 | `.zcode-plugin/plugin.json` | `.codebuddy-plugin/plugin.json` + `.mcp.json` |
-| 数据目录 | `~/.zcode/whale/` | 宿主的插件数据目录（`<WorkBuddy 数据目录>/plugins/data/fox-widget-fox-local/`） |
-| 发版 tag 前缀 | `v`（如 `v1.12.0`） | `wb-v`（如 `wb-v1.0.0`） |
-| 文档 | 本文件 | 该分支的 `README.md` 与 `CHANGELOG.md` 的 `## WorkBuddy` 小节 |
-
-两条线共用内核（角色与专属台词、角色配色、按压泡泡、记账与预警、厂商模板、桌面浮层、出站白名单与本地服务加固、自更新内核）；宿主相关的部分（数据源、主题、凭据发现、钩子事件、清单与路径变量）各自收在一个宿主适配文件里。共享内核的修复会在两边的 CHANGELOG 各记一条；只发布一条线时另一条线不动，详见 [CONTRIBUTING](./CONTRIBUTING.md) 的发布纪律。
-
-**两端同装时**各显示一个角色、各跟随各自的宿主窗口：浮层的单例判定只认「自己的运行时目录」，不会把对方的浮层当重复实例收掉（机制与真机证据见 `workbuddy` 分支的 `BUGREPORT-CROSS-LINE-OVERLAY-KILL.md`）。
-
----
-
-## 功能总览（基础功能）
-
-- **余额**：来自 `https://api.deepseek.com/user/balance`。
-- **今日已用**：主口径固定**本机库**——读 ZCode 落库的每轮模型用量、按各厂商价目折算，按模型看得见、不受充值干扰；**大肥鱼记账 / 实时·令牌**退居「对账 + 兜底」（详见「数据与计价口径」）。
-- **每轮对话消耗**：读取 ZCode 记录的每轮真实 token 用量，换算金额后弹出红色金额气泡（自动关闭秒数可设，填 0 表示手动关闭），可逐档核对明细；订阅套餐轮显示「本轮消耗余额: x%」而非虚构金额。
-- **余额与额度**：DeepSeek 走内置余额接口；**GLM Plan 剩余配额**（取源链：新鲜日志 > 直连 bigmodel 套餐用量接口 > 过期日志；接口那条要一把 GLM key，零配置时仍走日志）；**CommandCode 三重额度**（月度 credit 池 + 5 小时/周滚动窗口，多账号池）；另有 **35 个厂商模板**（含 Kimi Coding / MiniMax Coding / OpenCode Go 等订阅窗口与 **Gemini 订阅（AI Pro/Ultra）**——官方无公开订阅余额接口，卡片如实说明；以及 OpenAI / Anthropic / Gemini / 硅基流动 / 火山方舟 等 20 家「官方没有 API key 查余额」的厂商——这类只报凭据状态，金额走本机 token 用量）。有官方余额接口的厂商（Kimi/Moonshot 等）的余额会随气泡小字显示（v1.8.8）。
-- **记账二级页**：一级菜单有「**用量记录…**」（v1.8.7 移回一级）与「**=角色名记账=**」入口；额度预警、余额预警、余额校正收进记账页。
-- **预警**：一条「额度%」阈值对 GLM Plan 与 CommandCode 同时生效，加一条「余额¥」管 DeepSeek 余额见底；每源每天最多提醒一次，恢复后自动重新武装。
-- **桌宠模式**（浮层专属）：开启后挂件以**整个屏幕（工作区，自动排除任务栏）**为界面，可拖出 ZCode 窗口放到屏幕任何角落，且锁在所有窗口最上层——切到别的应用、ZCode 被盖住或最小化也不隐身；关闭后回到「跟随 ZCode 窗口」的原有行为。
-- **挂件交互**：拖拽、四边四分之一吸附、左吸附水平镜像（文字保持可读）、按压 Q 弹 + 音效、余额变化数字滚动、点击角色弹气泡、再点**气泡**切换下一句（点角色只延长气泡显示、气泡会轻弹一下作为反馈）（含 rua 动图；台词按内置角色分套——大肥鱼 = 原版文案也是默认套，嘎啦嘛 / GPT娘 / kimi娘 / 小克 各有一套专属台词，用户导入的角色用大肥鱼套；切角色当场换台词，不用刷新页面）。
-- **角色配色**（v1.10.0 起）：角色下拉每行末尾的小圆点打开配色弹层，浅/深两档各有内嵌 HSV 调色板与 HEX·RGB 输入，另有五个预设色块与「恢复默认」；浅色主题下整套界面的正文、描边、进度条随角色色走（正文按 4.5:1 派生达标色，装饰件用角色原色）。
-- **按模型自动换角色**（v1.12.0 起）：默认开启，按当前模型所属厂商族自动切换内置形象与该角色的配色、台词池（GLM 系→嘎啦嘛、DeepSeek→大肥鱼、GPT 系→GPT娘、Kimi→kimi娘、Claude→小克、Gemini→哈基米）；认不出的模型保持不动，在角色菜单里手动选过形象后自动关闭这一项。
-- **挂件内自动更新**（v1.11.0 起）：服务定时探测远端版本，菜单的记账行里有「检查更新…」与状态小字；更新面板支持镜像链下载、备份、跳过此版本与一键重启（详见下文「更新」小节）。
-- **汉堡菜单**：大小 0.6–2.5×、音效、音量、角色、对账口径、峰谷播报、主题（跟随 ZCode / 浅色 / 深色）、显示、气泡开关、按压泡泡、每轮消耗提示与自动关闭秒数、避让滚动条，浮层下还有「桌宠模式」与「跟随延迟」。
-- **会话自启**：打开 ZCode（新会话）时自动拉起，不用手动开；想随手停掉当前这一份，菜单更新面板里有「关闭插件」（见「更新」小节）。
-- **随窗口联动**：ZCode 移动/缩放时跟着走，最小化或被别的应用盖住时隐藏（除非开了桌宠模式），ZCode 退出时**浮层与本机服务一起退出**（下次会话启动时 SessionStart 钩子再拉起）。宿主更新（ZCode 自己被更新程序替换）时同理：窗口消失即隐身交还鼠标，探测到更新程序在跑、或宿主进程已退出就整体让路——**不留任何我们的进程**参与更新流程（issue #2 后半段「更新程序无法关闭 ZCode」）。
-
----
-
-## 相对原项目的新增与优化
-
-以上是「一只挂件」的基础能力；下面是 fork 之后（v1.1.0 – v1.8.5）在移植版基础上重点建设的部分，逐版本的完整说明见 [CHANGELOG](./CHANGELOG.md)。
-
-### 计费与额度体系
-
-- **多厂商计价内核**（v1.1.0/v1.2.0）：从上游仅 DeepSeek 峰谷扩展为八家价目（DeepSeek/GLM/OpenAI/Claude/Qwen/MiniMax/MiMo/Kimi，含 272K 整单取档等各家官方口径；Gemini 全家桶价目于后续版本补齐，现为九家），并立下「未知模型只计 tokens、不套别家价」的红线；后续持续补齐 GPT-6 系列、GPT-5.6-cyber 与 Kimi 全系条目（v1.7.6/v1.7.7）。
-- **GLM Plan 套餐配额**（v1.1.0 引入，零密钥；后续加直连套餐接口）：尾随客户端日志读套餐剩余，配套一整套鲁棒性修复——空桶快照跳过（v1.7.8）、日志尾窗逐级扩读与死套餐残值过滤（v1.4.2）、stale 观测标注（v1.4.1）。**切换订阅套餐后日志永久 stale 的那类账号**（客户端只在 start-plan 计费体系里轮询余额，individual-coding-plan 不在其中，日志只剩过期套餐的残留快照）改由 `lib/glm-plan-api.mjs` 直连 `open.bigmodel.cn` 的套餐用量接口取实时值：读 5 小时窗口与本周窗口的已用百分比与**剩余额度**（如「本周剩余 158 / 2000」），主显示取剩余最低的那个窗口——与「额度%」预警盯的是同一个窗口。接口没凭据或不可达时静默回落到日志（沿用 stale 标注）。**注意订阅与按量是两件事**：这条只读**订阅套餐**的窗口配额；按量账户余额没有公开接口（`bigmodel-glm` 模板仍只报凭据状态），两者 url 与语义都不同，不互相冒充。
-- **CommandCode 三重额度 + 多账号池**（v1.7.8–v1.7.10，v1.8.3/v1.8.4 打磨）：月度 credit 池 + 5 小时/周滚动窗口，直读网关 API；反代凭据现读不落盘、兼容两种凭据形状；多账号「最近使用优先、全撞墙时最早解锁兜底」；额度气泡卡（三窗口条 + 绑定约束窗口倒计时 + 账号池健康度）；对网关 `limited` 粘滞标志的正确解读（需佐证才采信，升级套餐后健康账号不再被误判限流）。
-- **今日已用口径重排**（v1.7.0）：主口径改本机库，充值当天不再归零；记账/实时·令牌退居「对账 + 兜底」；用量记录的模型排名给订阅套餐行按等价市值参与排序（v1.7.5，`≈¥` 标注、不虚报真金白银）。
-- **预警体系演进**（v1.3.0 → v1.7.7 → v1.8.0）：余额预警合并 → 取消消费型预警（语义回归「见底」）→ 泛化为「额度% + 余额¥」每源一条，旧配置键自动迁移。
-- **35 个厂商模板**（v1.1.0 首批 7 家 → v1.8.0 对齐上游 34 家 → 后续补 Gemini 订阅条目）：订阅窗口类 + 20 家无余额接口厂商只报凭据状态；模板必须显式声明 `host`，白名单 fail-closed。
-- **价目复核纪律**（v1.4.3 起）：`fox-pricing-review` 技能把「官方页核对 + LiteLLM 交叉验证 → 改表 → 改钉死断言 → 发版」固化为手动流程，本项目没有自动价目更新。
-
-### 桌宠与窗口行为
-
-- **桌宠模式**（v1.8.0 引入 → v1.8.1 重定义 → v1.8.2 贴顶）：视口 = 整个工作区、失焦不隐身、丢了置顶才重申；纵向钳制按命中画布**实测的角色不透明内容**计算，角色能真正拖到屏幕顶（气泡自动避让）。
-- **冻结防线**（v1.3.3 → v1.8.1，v1.8.6 精简）：禁用原生遮挡计算、首帧上屏、60 秒出帧保险、DPI 变更自动重建、显隐走透明度切换、视口钳到窗口交集——这套**被动防线**保留；主动的「活性点 + DXGI 桌面像素对账」检测（v1.4.2–v1.8.5）于 v1.8.6 移除：窗口拖动时采样链路时序错位会误报冻结（可见的闪烁）、检测点本身在拖动中滞后可见，而它能覆盖的场景被动防线已兜住（真冻结最迟 60 秒自愈，或 `node lib/cli.mjs window restart` 一键重建）。
-- **跟随引擎**（v1.3.1 → v1.5.3 → v1.8.1）：探测循环编译成 C#（40ms 档端到端 13ms、稳态 CPU ≈0.16% 单核），16/40/100/250ms 挡位实测表（曾有的 5ms 档已移除——实际周期受系统定时器量子约束只能到 ≈11ms，名不副实）；跟随目标选目标进程**面积最大的可见窗口**（绕开 MainWindowHandle 陷阱）；pid 身份门控，重开 ZCode 不再在加载动画里冒头。
-- **点击无响应根除**（v1.3.2/v1.4.3）：隐藏→重现改透明度切换，不再拆原生输入管线；输入复活改纯样式翻转。
-- **不可激活窗口**（v1.3.0）：与挂件互动不抢 ZCode 前台（`WS_EX_NOACTIVATE`）；指针按到输入类控件才临时接管键盘焦点，离开即交还。
-- **渲染节流三重防线**（v1.8.2）：三个 Chromium 后台化开关 + 页面侧帧调度逃生门（300ms 排不上一帧就整体关过渡）——二级面板在任何遮挡/节流环境下必然可见。
-
-### 交互与个性化
-
-- **按压泡泡**（v1.5.0–v1.5.3）：移植 DSH 自定义泡泡——点击队列 + 可选模块（文本占位符 / 随机语句 / 内置视图）+ 实时预览的两窗编辑器；点文本框冻结 ZCode、任务栏幽灵按钮两个深水 bug 根治。
-- **内置形象库**（v1.2.0 起默认嘎啦嘛；v1.7.4 台词分套；v1.8.2 台词修订）：内置 **嘎啦嘛 / 大肥鱼 / GPT娘 / kimi娘 / 小克 / 哈基米** 六个形象，台词按角色分套（嘎啦嘛 / GPT娘 / kimi娘 / 小克 / 哈基米 各有一套专属台词，大肥鱼那套是默认套、用户导入的角色也用它）；角色可导入、改名、删除，内置形象可隐藏找回（v1.3.0/v1.6.0）。
-- **音效库**（v1.6.0）：导入 1–2 个自定义音效（按压/松手）、逐行删除、回落内置。
-- **隐藏菜单按钮**（移植自 DSH）：菜单里可开「隐藏菜单按钮」——开启后挂件上的菜单按钮不再出现（悬停也不显形），改用**右键点击角色**唤出菜单，菜单位置与点按钮时完全一致（按钮仍在布局里作锚点）；关闭即恢复。设置随 `widget-state` 持久化。
-- **主题**（v1.2.0/v1.6.0/v1.7.2）：深色取自 ZCode 实测 token；「跟随 ZCode」三层判定（DWM 暗色标志观测 > 配置 > 系统），ZCode 里换主题 10 秒内跟变。**角色专属配色**：气泡的描边与文字按角色换色（浅/深两档）；**浅色模式下一整套界面**——设置按钮与菜单、二级页面（按压泡泡设置 / 记账 / 用量记录，含次级文字）、文本框、下拉列表、复选框、拖动条——都跟随该角色的浅色档色值（深色档不跟，保持主题中性）。
-- **气泡体验**：额度卡与台词互斥收口（v1.7.11/v1.8.0）、逐行缩字自适应（v1.4.0）、峰谷/重置芯片（v1.5.2）、99.5% 一位小数与「已限流」准确表达（v1.8.3）。
-
-### 平台集成与工程质量
-
-- **UI/UX 专项**（v1.7.3 + v1.8.0）：15 项 + 22 项审查清零——失败态状态机、遮挡叠层、格式与圆角/动效 token 化、对比度达标、焦点环、`prefers-reduced-motion`。
-- **接口诚实化**（v1.3.1）：CLI/MCP 金额按真实币种输出；MCP 版本号单一来源；发现缓存 TTL。
-- **可观测性**：浮层黑匣子日志常开（v1.4.3，超 5MB 轮转）、`/whale/health` 带凭据探测明细。
-- **质量面**：`tools/selftest.mjs` 端到端自检（计价口径/账本/账号池/降级路径）、`tools/smoke-ui.mjs` CDP 真机回归（headless 浏览器驱动真实页面）；Conventional Commits 与版本发布纪律成文（[CONTRIBUTING](./CONTRIBUTING.md)）。
-- **安全**：出站主机白名单与地址校验、厂商模板显式 `host` 声明、本地服务 Host/Origin 校验与关闭令牌、本地威胁模型显式化（v1.7.1）、子进程 `shell:false` 加固。
-
----
-
-## 显示方式：桌面浮层（推荐）
-
-一个独立的 Electron 窗口：透明、无边框、不进任务栏、始终置顶，**覆盖 ZCode 窗口范围但默认鼠标穿透**——只有指针压到鲸鱼、气泡或菜单上时才接管鼠标，其余位置的点击照常落到下面的 ZCode。装好运行时后打开 ZCode 就会自己出现，**不用浏览器、不用手动开任何东西**。
-
-长这样：
-
-![挂件气泡与角色](assets/example.png)
-
-### 本地页面地址（备用 / 排障入口）
-
-浮层加载的本来就是一个网页——同一个服务把同一个页面也挂在 `http://127.0.0.1:<port>/`，浏览器打开它看到的是**同一只鲸鱼、同一份 `lib/widget.js`、同一份配置**，不是第二套实现。平时不用关心它：服务随会话自启，浮层的显示与交互走的就是这个地址。
-
-会用到它的只有两种情况：
-
-- **排障**：浮层里输入框打不了字、或浮层行为可疑时，用浏览器打开这个地址直接操作，快速区分「页面逻辑的问题」还是「浮层窗口层的问题」（排查表见 skill 的「故障排查」一节）。
-- **非 Windows**：浮层依赖 Win32 窗口 API，macOS / Linux 上只有这个页面形态可用。
-
-`<port>` 默认 39321（被占用会顺延），以 `node lib/cli.mjs start` 的输出或 `~/.zcode/whale/server.json` 里的 `url` 为准；服务只监听 `127.0.0.1`，本机之外访问不到。
-
----
-
-## 安装
-
-### 前置条件
-
-- ZCode 客户端（插件系统）
-- Node.js（用于运行插件自带的脚本）——ZCode 通常已自带，命令行里 `node -v` 能跑即可
-- Windows（桌面浮层依赖 Win32 窗口 API；macOS / Linux 只能用本地页面）
-
-### 步骤
-
-1. **选安装来源（二选一）**：
-
-   **A. 直接填 GitHub 源（推荐，最省事）**
-
-   设置 → 插件管理 → **发现** → 右上角 `+` → 在「市场源」里填 `pigeon189/zcode-fox-widget`。
-   宿主认 `owner/repo` 形态，会自己去拉仓库；拉的是**默认分支 `main`**，正是这条产品线，所以不用填分支。
-   之后有新版本时，对这个市场点「重新抓取」就等于升级。不需要先克隆。
-
-   **B. 克隆到本地目录**（想改代码、或想跟某个本地工作副本同步时用）
-
-   - 把仓库克隆到一个固定位置（不要放在会被清理的临时目录）：
-
-     ```bash
-     git clone https://github.com/pigeon189/zcode-fox-widget.git ~/.zcode/plugins/zcode-fox-widget
-     ```
-
-     后面的命令都假设你在仓库根目录下执行。
-
-   - 注册为本地插件市场，二选一：
-
-     **客户端界面**
-     设置 → 插件管理 → **发现** → 右上角 `+` → 选择**本地目录**，指向仓库根目录（内含 `marketplace.json`）。
-
-     **手工写配置**
-     在 `~/.zcode/cli/plugins/known_marketplaces.json` 的 `marketplaces` 数组里追加：
-
-     ```json
-     {
-       "id": "zcode-fox-local",
-       "source": { "source": "directory", "path": "<仓库绝对路径>" },
-       "name": "zcode-fox-local",
-       "description": "Local marketplace for ZCode狐娘小挂件 (zcode-fox-widget).",
-       "pluginCount": 1
-     }
-     ```
-
-2. **安装并启用插件**：在插件管理里安装 `zcode-fox-widget`。手工方式则在 `~/.zcode/cli/config.json` 里写：
-
-   ```json
-   {
-     "plugins": {
-       "enabledPlugins": {
-         "zcode-fox-widget@zcode-fox-local": true
-       }
-     }
-   }
-   ```
-
-3. **重启会话**（或重开 ZCode），让 MCP 服务与 hook 生效。
-
-4. **想用桌面浮层的话，再装一次它的运行时**（下载约 150MB，一次性；只装到数据目录，不进仓库，解压后占用约 370MB）：
+2. **安装并启用** `zcode-fox-widget`（清单默认启用）。
+3. **重启会话**（或重开 ZCode），让 MCP 与 hooks 生效。
+4. **要桌面浮层再装运行时**（约 150MB 下载 / 370MB 占用，一次性）：
 
    ```bash
    node lib/cli.mjs desktop install
@@ -198,366 +35,167 @@
 
 ### 更新
 
-**方式一：挂件内一键更新（推荐，不依赖 GitHub 直连）**
+- **市场刷新**：对 `zcode-fox-local` 点「重新抓取」→ 重装 → 重启客户端（宿主按版本号建新目录，最干净）。
+- **挂件内更新**：菜单「检查更新…」→ 有新版时「立即更新」→ 完成后「重启挂件」。走镜像候选链，落盘前校验发布签名清单；也可以完全关掉（`WHALE_DISABLE_UPDATE_CHECK=1`）。
 
-挂件服务定时自检远端版本（启动 20 秒后首查，之后每 6 小时一次），发现新版本时会弹一次提醒气泡；也可以随时在菜单「更新」里手动检查。打开更新面板：
+数据（key、账本、角色、泡泡、Electron 运行时）都在 `~/.zcode/whale/`，两种方式都不丢配置。完整性与发布流程见 [`CONTRIBUTING.md`](./CONTRIBUTING.md) 的「发布物完整性」。
 
-1. 「当前版本 / 最新版本」两个数字一眼可见，有新版时主按钮变成「立即更新」。
-2. 点「立即更新」后，服务端按镜像候选链下载源码包（`gh-proxy` → `ghproxy` → `codeload` → 逐文件 jsdelivr 兜底），校验包内 `plugin.json` 的版本号与本机目标版本一致后才落盘——版本不符直接拒装。
-3. 落盘只替换代码文件：先备份被覆盖/删除的文件到 `~/.zcode/whale/update/backup/`（保留最近两份），再写入新文件、删掉「上一个版本有、新版本没有」的旧文件（依据更新时写下的文件清单 `~/.zcode/whale/update-files.json`）。清单**按安装目录分别记录**——本仓常见两个安装副本（仓库本体 + `cache/zcode-fox-local/zcode-fox-widget/<版本>/`），两边各留一份，互不覆盖。没有清单时 git 工作区用 `git ls-files`、缓存副本整目录扫描兜底，且兜底时**只清理新包里也存在的顶层目录下**的文件（git 兜底给的是当前 HEAD 的全部被跟踪文件，不设限会把本地独有的文件一并删掉）；两者都拿不到就只覆盖不删除。
-4. 更新完成后点「重启挂件」（或 `node lib/cli.mjs restart-all`）让新版本生效。
+---
 
-面板最右侧的「**关闭插件**」则相反：把当前这一份停掉——桌面浮层与挂件服务都退出。它**只是本次关闭**，不写任何「别再自启」的开关：下次会话启动（SessionStart 钩子）或收到提问时照常拉起，跟手动关掉一个窗口一个意思。它要连点两次（第二次按钮变成「确认关闭？」，面板里会提示）才算数，关掉之后界面上没有可点回来的入口；想立刻回来，在终端跑 `node lib/cli.mjs start`（要浮层就再 `window start`），或在会话里让助手调用 `whale_widget` 的 `start`。更新正在写文件时这个按钮不可用。
+## 功能
 
-不想被提醒可以点「跳过此版本」（记在 `widget-state.json` 的 `updateSkip`，出现更新的版本时自动失效）；完全不想有任何出站检查，把环境变量 `WHALE_DISABLE_UPDATE_CHECK=1` 传给服务进程即可。
+- **余额与今日已用**：DeepSeek 余额（需自带 key）、本机库口径的今日已用、当前峰谷时段；另有记账/实时令牌两种对账口径兜底。
+- **GLM Plan 配额**：客户端日志与直连套餐接口双源，显示窗口剩余额度与重置时间。
+- **CommandCode 三重额度**：月度池 + 5 小时 / 周窗口，支持本地账号池。
+- **厂商卡**：35 个模板（含 Kimi / MiniMax / Gemini 订阅窗口，以及 26 家无余额接口、只报凭据状态的厂商）。
+- **每轮消耗**：气泡报金额或配额百分比，`cli.mjs turn` 可逐档核对 token 分桶。
+- **记账二级页**：用量记录（今日 / 近 7 天 / 逐轮）、额度预警、余额预警、余额校正。
+- **角色**：六套内置（嘎啦嘛 / 大肥鱼 / GPT娘 / kimi娘 / 小克 / 哈基米），按模型自动换角色、配色自定义、可导入自己的图。
+- **桌宠模式**：整屏工作区漫游，锁在最上层，失焦不隐身。
 
-**方式二：手动拉取（本地目录安装）**
+---
 
-如果安装时选的是本地目录，更新 = 拉新代码 + 让客户端重抓一遍；GitHub 源安装则直接在市场里点「重新抓取」，不需要 `git pull`。
+## 使用
 
-1. 在仓库目录里 `git pull` 拿到最新版（每次发版 `.zcode-plugin/plugin.json` 与 `marketplace.json` 的版本号都会同步递增，这是客户端判断「有新版本」的依据）。
-2. 设置 → 插件管理 → 对 `zcode-fox-local` 市场重新抓取（或移除后重新添加），新版本会装进独立的缓存目录（`cache/zcode-fox-local/zcode-fox-widget/<版本>/`）。
-3. 重启客户端生效。
+### 挂件菜单
 
-说明：挂件的全部数据（API key、账本、角色、泡泡配置、Electron 运行时）都在 `~/.zcode/whale/`，与插件目录无关，更新不丢配置；两种方式都只动代码文件。
+悬停鲸鱼 → 右上角三点按钮：
 
-两种方式在缓存目录上的行为不同，值得知道：**方式一是原地覆盖**——它会把新版本的文件写进发现到的每一个安装目录（包括 `cache/zcode-fox-local/zcode-fox-widget/<旧版本>/`），目录名不会随内容改编，可能看到「目录名 1.0.0 / 内容 1.11.1」；**方式二是新装一个目录**，客户端按新版本号建目录。想让目录名与内容对齐，用方式二重抓一次即可（两者的代码内容一致）。
+| 分组 | 内容 |
+|---|---|
+| 外观 | 大小 0.6–2.5×（只缩放角色与气泡，菜单尺寸恒定）；主题：浅色 / 深色 / 跟随 ZCode |
+| 声音 | 音效组与音量，可导入自定义音效；音量 0 即静音 |
+| 角色 | 选内置形象或导入图片（可改名 / 删除，内置形象也能隐藏）；「按模型换角色」默认开，手选后自动关 |
+| 显示与口径 | 对账口径（记账 / 实时·令牌）、峰谷播报风格、气泡主显示跟随哪个计费源 |
+| 气泡 | 思考气泡开关、按压泡泡编辑器（含每轮消耗文案）、等确认提醒 |
+| 每轮消耗 | 是否弹气泡、自动关闭秒数（0 = 手动关） |
+| 浮层 | 桌宠模式、跟随延迟（16 / 40 / 100 / 250ms）、避让滚动条、隐藏菜单按钮 |
+| 更新与关闭 | 「检查更新…」面板（含「重启挂件」「关闭插件」）；关闭只停当前这一份，下次会话照常拉起 |
 
-注意：如果这份仓库里有你自己的未提交改动，更新会覆盖它们；**已经提交、但不在目标版本里的本地文件也会被清理**（目标是 tag 包，包里没有的东西视为「上一版有、这一版没有」）。被覆盖与删除的文件都会先备份到 `~/.zcode/whale/update/backup/`（保留最近两份），动手前先提交或备份。
+### 命令行
 
-**出站与安全**：更新链路的每个地址都过统一白名单校验（仅 https，且拒绝环回 / 私有 / 保留地址），镜像只做原样转发（不引入第三方账号或 token）；下载的整包在 `node:zlib` 内解压并自带最小 tar 解析（不调用系统 tar），解包后逐条校验路径（绝对路径 / `..` / 驱动器号一律丢弃）。下载**没有签名或哈希校验**：完整性只依赖 HTTPS 与「包内 `plugin.json` 的版本号 == 目标版本」这一条一致性检查——这是本插件「镜像半可信」取舍的一部分，在意这一点的用户请走方式二（`git pull` 自行核对）。响应体与解压输出都有大小上限（整包 80MB、解压总量 300MB），超限即中止。
+```bash
+node lib/cli.mjs status           # 余额 + 今日已用 + 服务与浮层状态
+node lib/cli.mjs turn             # 上一轮消耗与逐档明细
+node lib/cli.mjs start / stop     # 启停挂件服务（页面与浮层共用）
+node lib/cli.mjs window start|stop|status|restart
+node lib/cli.mjs desktop install  # 安装 Electron 运行时（仅浮层需要）
+node lib/cli.mjs restart-all      # 服务 + 浮层一起重启
+node lib/cli.mjs close            # 本次关闭（不写自启开关）
+echo 'sk-...' | node lib/cli.mjs key   # 写 Key（走 stdin，不留命令行痕迹）
+node lib/cli.mjs mode ledger|token     # 对账口径
+node lib/cli.mjs json             # 结构化输出
+```
+
+自动启动：插件带 SessionStart hook，每次会话启动幂等拉起；排查看 `~/.zcode/whale/autostart.log`。
+
+### 在对话里用
+
+输入 `/fox`（或 `/fox turn`、`/fox window start`），或直接问「我还有多少余额」——ZCode 会调 MCP：
+
+| 工具 | 作用 |
+|---|---|
+| `whale_balance` | 余额、今日已用、峰谷时段 |
+| `whale_last_turn` | 上一轮消耗与明细 |
+| `whale_widget` | 服务与浮层的启停 / 状态 |
+| `whale_config` | 查看或修改配置（Key、口径、端口、自启、跟随间隔） |
+
+### 浮层交互
+
+- 角色可拖到窗口内任意位置，靠边吸附，贴左缘时整体镜像。
+- **指针要先落在角色上，点击才被浮层接管**——穿透设计的必然代价，换来不误触。
+- 普通交互不抢 ZCode 前台；菜单里的输入控件按上去才临时接管键盘，离开即交还。
 
 ---
 
 ## 首次配置
 
-### API Key（通常不用配）
+**API Key 只服务于 DeepSeek 余额卡；不配也能用**（余额卡显示「未找到 Key」是正常状态）。
 
-余额接口需要一个 DeepSeek API Key。按以下顺序自动查找，**大多数情况第一条或第三条就能命中，无需配置**：
-
-1. 环境变量 `DEEPSEEK_API_KEY`
-2. 插件配置 `~/.zcode/whale/config.json` 的 `apiKey`
-3. **ZCode 客户端里已配置的 DeepSeek provider**（`baseURL` 指向 `api.deepseek.com` 的那一项）
-
-写入方式（任选其一）：
+查找顺序：环境变量 `DEEPSEEK_API_KEY` → `~/.zcode/whale/config.json` 的 `apiKey` / `vendorKeys.<模板 id>` → ZCode provider 配置。
 
 ```bash
-echo 'sk-xxxxxxxxxxxxxxxx' | node lib/cli.mjs key   # 从 stdin 读（密钥不进 shell 历史与进程列表）
+echo 'sk-xxxxxxxx' | node lib/cli.mjs key
 ```
 
-或让 ZCode 里的模型直接调 MCP 工具 `whale_config`（`action=set`, `apiKey=...`）。
-
-密钥只在本机内存中使用，只发往 `api.deepseek.com` / `platform.deepseek.com`，不写日志、不打印明文（对外只显示 `sk-04…994` 这样的掩码）。
-
-### 关掉不想要的自动化
-
-`~/.zcode/whale/config.json`：
+`~/.zcode/whale/config.json` 常用字段：
 
 | 字段 | 默认 | 作用 |
 |---|---|---|
-| `autoStartWidget` | `true` | 会话启动时自动拉起挂件服务 |
-| `autoStartOverlay` | `true` | 会话启动时顺便拉起桌面浮层 |
-| `followIntervalMs` | `40` | 跟随探测间隔（毫秒），菜单里的选择会覆盖它 |
-| `port` | 自动（39321） | 固定端口，被占用时自动顺延 |
-
-改完重启会话生效。
-
----
-
-## 使用指南
-
-### 打开 ZCode 就自动出现
-
-插件自带 SessionStart hook，**每次会话启动都会幂等拉起**（已在跑就复用，不会重复开）。确认方法：
-
-```bash
-cat ~/.zcode/whale/autostart.log      # 每次启动追加一行，如 server=started overlay=reused
-```
-
-> SessionStart 是在**会话启动**时触发的。正常情况下打开 ZCode 会恢复/创建会话，所以碰不到边界情况。
-
-### 命令行
-
-```bash
-node lib/cli.mjs status          # 余额 + 今日已用 + 挂件服务与桌面浮层状态
-node lib/cli.mjs turn            # 上一轮对话消耗（含逐档明细）
-node lib/cli.mjs start / stop    # 启停挂件服务（浮层与本地页面共用同一个）
-node lib/cli.mjs close           # 关闭插件：停浮层与服务（本次关闭，下次会话启动照常拉起）
-node lib/cli.mjs window start    # 启动桌面浮层（浮在 ZCode 界面上）
-node lib/cli.mjs window stop     # 关闭浮层
-node lib/cli.mjs window status   # 浮层与运行时状态
-node lib/cli.mjs desktop install # 安装 Electron 运行时（仅浮层需要，一次性）
-echo 'sk-...' | node lib/cli.mjs key   # 写入 API Key（走 stdin，不留命令行痕迹）
-node lib/cli.mjs mode ledger|token  # 切换对账口径（大肥鱼记账 / 实时·令牌）
-node lib/cli.mjs json            # 结构化输出，便于脚本消费
-```
-
-### 在对话里直接用
-
-- 输入 `/fox`（或 `/fox turn`、`/fox window start`；写 Key 建议用上面的 stdin 方式，避免密钥留在对话与命令行历史里）
-- 或者直接问「我还有多少余额」「上一轮花了多少」，ZCode 会调用 MCP 工具：
-
-| MCP 工具 | 作用 |
-|---|---|
-| `whale_balance` | 余额、今日已用、当前峰谷时段 |
-| `whale_last_turn` | 上一轮消耗金额与逐档明细 |
-| `whale_widget` | `start` / `stop` / `status` / `url` / `close`（关闭插件），以及浮层的 `overlay_start` / `overlay_stop` / `overlay_status` |
-| `whale_config` | 查看或修改配置（API Key、对账口径、端口、自启、跟随间隔） |
-
-### 挂件菜单
-
-悬停鲸鱼 → 右上角出现三点按钮 → 点击打开菜单：
-
-| 项 | 说明 |
-|---|---|
-| 大小 | 0.6–2.5×，滑块或数字（1–20）；只缩放角色本体与气泡，菜单/面板尺寸恒定 |
-| 音效 / 音量 | 内置小黄鸭/音效1，可导入自定义音效（1 个=按压松手共用，2 个=按压+松手）；音量 0 即静音 |
-| 角色 | 选择形象（内置：嘎啦嘛 / 大肥鱼 / GPT娘 / kimi娘 / 小克 / 哈基米）；导入的图片可改名（✎）或删除（×）；内置形象也可删（隐藏记在 roles.json 的 hiddenBuiltins，清掉即找回）。在角色菜单里手动选过形象会自动关掉「按模型换角色」，尊重手动选择 |
-| 按模型换角色 | 默认开：按当前模型的厂商族自动切换内置形象（GLM 系→嘎啦嘛、DeepSeek→大肥鱼、GPT 系→GPT娘、Kimi→kimi娘、Claude→小克、Gemini→哈基米），连带该角色的配色与台词池一起换；认不出的模型（Qwen / MiniMax / MiMo…）保持当前形象不动。在角色菜单里手动选过形象后自动关闭 |
-| 对账口径 | 大肥鱼记账 / 实时·令牌（v1.7.0 起决定「对账 + 兜底」用哪个账号数字，主显示固定本机库） |
-| 峰谷播报 | 台词里峰谷文案的风格（默认 / 梁文峰谷 / !?强强?!） |
-| 主题 | 浅色模式 / 深色模式 / 跟随 ZCode（三层判定：浮层观测 ZCode 窗口的 DWM 暗色标志 > 配置 ui.theme > 操作系统深浅色） |
-| 显示 | 气泡主显示跟随哪个计费源（自动 / Plan / CommandCode / GLM / DeepSeek） |
-| 气泡 | 左侧开关控制思考气泡显隐，中间「按压泡泡设置」打开自定义队列（DSH 式可视化编辑器：加权变体 / 随机语句带权重与样式 / 内置视图 / 图片与随机图片 / 超链接 / 模块库；首分区「每轮消耗提示内容」同面板编辑），末尾「等确认提醒」默认关：打开后 ZCode 弹出权限确认 / 提问等你处理时，挂件提醒一次（同一件事只提醒一次） |
-| 每轮消耗提示 | 是否在每轮结束后弹消耗气泡；自动关闭秒数（0 = 手动关）。提示内容在「按压泡泡设置」首分区编辑 |
-| 避让滚动条 | 让挂件右侧避开滚动条的像素宽度（默认关） |
-| 隐藏菜单按钮 | 开启后挂件上的菜单按钮不再出现，改用右键点击角色唤出菜单（位置不变） |
-| 桌宠模式 | **仅浮层**：锁在最上层、切应用不隐身 |
-| 跟随延迟 | **仅浮层**：探测 ZCode 窗口位置的间隔，16 / 40 / 100 / 250ms（16ms 为系统定时器粒度下的实际下限） |
-| 用量记录 | 今日金额与模型占比、近 7 天逐日、最近 50 条明细（一级菜单；v1.8.0–v1.8.6 曾收进记账页） |
-| =角色名记账= | 记账二级页入口（额度预警 / 余额预警 / 预警内容模板 / 余额校正——原「预警」「余额校正」两行已收编于此）；同一行末尾还有 **「检查更新…」与更新状态小字**（v1.11.0 起，原先独占一行）；点开更新面板后，里面另有「重启挂件」与最右侧的「关闭插件」 |
-
-### 浮层里的交互要点
-
-- 鲸鱼可以拖到窗口内任意位置，靠边会吸附，贴左缘时整体左右镜像。
-- **指针要先落在鲸鱼上，点击才会被浮层接管**——这是穿透设计的必然代价，好处是不会误触。
-- 普通交互（按鲸鱼、拖拽、开菜单、点气泡）不会抢走 ZCode 的前台，ZCode 不会因为挂件而停止刷新。
-- 菜单里的文本框/下拉**按上去就能打字**：指针按到输入类控件时浮层才临时接管键盘焦点，离开即交还。
-
----
-
-## 跟随延迟与性能
-
-浮层跟随靠一个常驻探测脚本（`desktop/follow-window.ps1`）读 ZCode 主窗口的位置、大小与前台状态。**默认 40ms 探测一次**，实测端到端跟随延迟约 **13ms**——拖窗口时鲸鱼基本是贴着走的。
-
-之所以能一边跑得勤、一边几乎不吃 CPU，是两点设计：
-
-- **探测循环编译成 C# 运行**（脚本内联 `Add-Type`），不是解释执行的 PowerShell 循环。同样 40ms 间隔，解释执行的循环体本身就吃掉约 3.4% 单核，编译后只剩 **0.16%**。
-- **贵的操作单独限频**：枚举进程（`GetProcessesByName`）用来定位 ZCode 主窗口句柄与其 pid 列表，按 3 秒预算刷新；「前台是不是浮层自己」不再靠进程名枚举，而是比对主进程传入的浮层 pid（v1.3.1 起，见上）。每个探测周期只做几个微秒级的 Win32 调用，且**只有状态真的变化才输出**。
-
-实测对照：
-
-| 探测间隔 | 端到端跟随延迟 | 探测进程 CPU（单核占比） |
-|---|---|---|
-| 40ms（默认） | 13ms | 0.16%（稳态） |
-| 250ms | 135ms | 探测次数少 6 倍，只会更低 |
-
-也就是说间隔调小几乎没有性能代价。菜单里改即时生效，不用重启浮层。
+| `autoStartWidget` | `true` | 会话启动时拉起服务 |
+| `autoStartOverlay` | `true` | 顺便拉起浮层 |
+| `followIntervalMs` | `40` | 跟随探测间隔（菜单选择会覆盖） |
+| `port` | 自动（39322） | 固定端口，占用时顺延 |
 
 ---
 
 ## 数据与计价口径
 
-### 今日已用
+- **今日已用 = 本机库（主口径）**：读 ZCode 落库的每轮用量，按各厂商价目折算；按模型可见、不受充值干扰。
+- **预付池不计真金白银**：GLM Plan 与 CommandCode credit 的钱在买额度时就付了，只按配额 / tokens 报，不并进「今日已用」。
+- **对账口径兜底**：记账（观测余额下降）覆盖该账号全部花费但会漏记停机期间；实时·令牌需要 `DEEPSEEK_PLATFORM_TOKEN`，过期自动回落。两口径不一致时并排展示。
+- **每轮消耗**：按缓存命中 / 未命中 / 缓存写入 / 输出分档计价，DeepSeek 再按峰谷取价；输入 token **含缓存**，折价前必须减掉（否则虚高十几倍）。
+- **等价金额（`≈`）不代表真实扣费**，只用于横向比较。
 
-- **本机库（主口径，v1.7.0 起）**：读 ZCode 落库的每轮模型用量、按各厂商价目折算（`lib/usage-records.mjs` 的 `todayVendorUsage()`，与用量记录面板同一次聚合）。按模型看得见、不受充值干扰；套餐/网关行按配额或 tokens 表达，不折算虚构金额。
-- **预付池不计真金白银**：订阅套餐（GLM Plan / coding plan）与 **CommandCode credit** 的钱在买额度时就付了，一轮轮的消耗只按配额/tokens 报，**不并进任何厂商的「今日已用」**。它们的折算值（等价市值）只出现在用量记录面板的「模型排名」（行上以 ≈ 标注，只用于排序与占比条），CommandCode 的消耗量另有它的三重额度卡表达。2026-10-15 修正：此前 CommandCode 是按模型市场价折算计入「今日已用」的，于是同一天先走 CommandCode、再转官方 API 时，官方那部分 ¥1.48 会被 credit 折算的 ¥4.26 抬高成 ¥5.73 —— 看上去像官方 API 花了 5 块多。
-- **大肥鱼记账（对账 + 兜底）**：靠「观测到的余额下降」累计，覆盖该 DeepSeek 账号的全部花费（含其它设备/其它 key），服务未运行期间产生的消耗会漏记（从下次观测的新基准开始）。不需要额外令牌。与本机库数字不一致时两口径并排展示（气泡小字 / 用量面板「对账（DeepSeek）」行）；本机库当天无记录时兜底为主显示并标注来源。充值当天该口径会归零（余额上涨记为「待核对调整」），用菜单「余额校正」记一笔即可对上。
-- **实时·令牌（对账 + 兜底）**：需要 `DEEPSEEK_PLATFORM_TOKEN`（平台会话令牌，不是 API Key）。令牌会过期，过期后自动回落记账口径。
-
-### 每轮消耗
-
-按 ZCode 记录的 token 分档计价：**缓存命中**走「命中」价、**未命中输入**走「未命中」价、**缓存写入**走「缓存写」价（DeepSeek 与未命中同价、GLM 限时免费记 0、Kimi 按 TTL 档、Claude/Qwen 1.25×输入，以各家官网为准）、**输出与思考**走「输出」价；DeepSeek 再按该轮所处时段选高峰或谷价，其余厂商平价。档位一律「整单取档」（档位由单次请求输入 token 总量决定，与 OpenAI/阿里云/MiniMax 官方口径一致）。金额按币种分列（¥/$ 不混加）；未维护价目的模型只计 tokens，不折算金额。预付池轮次（GLM Plan / CommandCode credit）同样不报金额：气泡按「配额%」或 tokens 展示，面板明细写明「套餐/网关」。
-
-> **一个必须注意的口径**：ZCode 记录的 `input_tokens` 是**含缓存的总输入**（实测 `computed_total_tokens = input + output` 且 `input ≥ cache_read`）。计价前必须减掉命中部分，否则缓存那 99% 会被按未命中价重复计费——实测同一轮会从 ¥3.05 虚高到 ¥76.95（约 25 倍）。代码用 `lib/pricing.mjs` 的 `splitInputTokens()` 统一处理，并用总量字段自动识别 Anthropic 那种「input 不含缓存」的口径。`tools/selftest.mjs` 里有针对两种口径的回归断言。
-
-想核对每一分钱，用 `node lib/cli.mjs turn`，它会逐档列出：
-
-```
-上一轮对话消耗   ¥ 0.62
-模型             deepseek-flash
-计价时段         空闲（base 价目）
-缓存命中输入     22,637,312 tokens × ¥0.02/M = ¥0.4527
-未命中输入       12,049 tokens × ¥1/M = ¥0.0120
-输出             40,034 tokens × ¥4/M = ¥0.1601
-```
-
-### 改价目
-
-DeepSeek 调价时改 `lib/pricing.mjs` 顶部的 `PEAK_HOURS` / `BASE_PRICE` / `PRO_PRICE`。两个档位表各自单独维护，**不按固定倍数换算**（当前快照下 `deepseek-v4-pro` 相对基础档约为命中 7.5× / 未命中 4.5× / 输出 3.375×，任一侧调价都会变）。
+`node lib/cli.mjs turn` 可逐档核对；价目在 `lib/pricing.mjs` 顶部，核对流程见 `skills/zcode-fox-widget/`。
 
 ---
 
 ## 常见问题
 
-| 现象 | 原因与处理 |
+| 现象 | 处理 |
 |---|---|
-| 界面上看不到挂件 | ZCode 客户端不提供界面注入点，必须走桌面浮层：`desktop install` 装运行时，再 `window start` |
-| 打开 ZCode 没有自动出现 | 看 `~/.zcode/whale/autostart.log` 最后一行。没有新行说明 hook 没加载（插件未启用，或改完配置后没重启会话）；`skip: autoStartWidget=false` 说明配置里关掉了自启；`overlay=skipped:no-runtime` 说明运行时没装；`overlay=failed:...` 看括号里的原因 |
-| 点过菜单里的「关闭插件」，想立刻让它回来 | 启动一次即可：`node lib/cli.mjs start`（要浮层再加 `window start`），或在会话里让助手调 `whale_widget` 的 `start`。它只是本次关闭，什么都不用恢复——下次会话启动时本来就会自动拉起 |
-| 余额显示「未找到 DeepSeek API Key」 | 三条凭据来源都没命中：环境变量 `DEEPSEEK_API_KEY`、`~/.zcode/whale/config.json`、ZCode provider 配置（含数据目录迁移后的 `$ZCODE_DATA_BASE_DIR/.zcode/v2/provider_config.json`；规则没写 baseUrl 时端点从 zcode-builtin 模板继承）。错误文案带探测摘要，逐条明细看 `/whale/health` 的 `keyProbe`（会标明本地网关/加密凭据为何被跳过）。也可用 `key` 子命令写入 |
-| 点击挂件/气泡没声音 | 检查菜单音量是否为 0、音效组是否已选；音频在页面加载时预热，系统输出设备切换后若无声，重启浮层即可。按压音只对「按鲸鱼」和「点气泡」发声，菜单按钮刻意不出声 |
-| 点设置键却有音效 / 点挂件没音效 | v1.3.0 起菜单按钮不再出声；鲸鱼与气泡的按压音依旧。若点鲸鱼完全没声音，先确认菜单音量不为 0 |
-| **和挂件互动后 ZCode 画面卡住，点一下 ZCode 才恢复** | v1.3.0 已修：浮层窗口改成不可激活，不再抢走 ZCode 的前台（此前 ZCode 失去前台即停止刷新）。若仍复现，检查浮层是否为旧版本（`window status` / `/whale/health` 的 version） |
-| 浮层里菜单的数字框打不了字 | v1.3.0 起按上去就能打字（浮层在指针落到输入类控件时临时接管键盘焦点）。若仍不行，检查是否在用旧版浮层 |
-| 切了模型气泡还是旧源 | 自动跟随 3 秒轮询一次输入框选择；选择读不到时回落最近一次真实模型调用。菜单「显示」手动锁定可立即切换 |
-| 余额显示旧值并带 `stale` | 接口瞬时失败（网络/5xx），服务在回退缓存；4xx 不会回退，会直接报错 |
-| 今日已用一直是 0 | 主口径是本机库：ZCode 今天还没有模型用量记录（或数据库读不到）时，才兜底显示账号口径并标注来源；账号口径（大肥鱼记账）只统计观测到的余额下降。用 `node lib/cli.mjs status` 看双口径、`/whale/health` 看数据来源 |
-| 每轮消耗不弹窗 | 需要 ZCode 至少完成过一轮对话（`turn_usage` 有 `completed` 行）；另外菜单里「每轮消耗提示」必须开着 |
-| **每轮消耗金额离谱（虚高十几倍）** | 计价口径踩了「input 含缓存」的坑。核对 `splitInputTokens()` 是否被 `costOfUsage()` 使用，并跑 `node tools/selftest.mjs`；用 `cli.mjs turn` 看逐档明细即可判断 |
-| 鲸鱼不跟着 ZCode 走 | 探测脚本可能挂了：`window stop` 后 `window start` 重建。开 `WHALE_DEBUG_PORT` 启动会把判断依据写进 `~/.zcode/whale/overlay-debug.log` |
-| 跟得不跟手 / 想更省资源 | 菜单「跟随延迟」即时切换 16/40/100/250ms（改完不需重启浮层），或写 `config.json` 的 `followIntervalMs`。默认 40ms 实测端到端延迟约 13ms、稳态 CPU 约 0.16% 单核（曾有的 5ms 档已移除：实际周期受定时器量子限制只能到 ≈11ms，名不副实） |
-| 浮层里点不动鲸鱼 | 指针要先落在鲸鱼上（光标变 `grab`、右上角出现菜单按钮）；若整块区域都点不动，检查是否被其它置顶窗口压住 |
-| 浮层启动失败 | `cli.mjs window status` 看运行时是否已装 |
-| 峰谷判定不对 | 看 `lib/pricing.mjs` 的 `PEAK_HOURS` 等常量；工作日高峰为北京时间 9–12、14–18，2026-08-23 起周末全天谷价 |
-| 换了图片/音效不生效 | 资产路由每次读盘且 `no-store`，强刷即可；确认替换的是 `assets/` 下的同名文件 |
-| Plan 剩余配额不显示 / 提示「Plan 日志未找到」 | 配额有两个源（见「相对原项目的新增与优化」的 GLM Plan 条目）：直连套餐用量接口（要一把 GLM key，取不到就静默跳过）与客户端日志。`no-plan-log` = 日志与接口都没数据、且机器上没配 GLM 凭据（多半是数据目录迁移后在**普通终端**里手动跑服务：没有 `ZCODE_DATA_BASE_DIR`，只会在 `~/.zcode/v2/logs` 下找日志；终端调试请先设置该变量）——响应里带 `probedDirs`（探测了哪些目录、各自最新日志是哪天）与 `apiReason`（接口侧为什么没成，如 `no-key`）。`no-plan-source` = 日志与接口都没有数据、但凭据是配了的（看 `apiReason`：`http-401` 凭据失效、`shape-mismatch` 接口改了形状）。配了 GLM key 却一直 `no-plan-log`/`no-plan-source`，先查 `/whale/plan.json` 的 `keySource` 与 `apiReason` |
-| CommandCode 额度读不到 / 卡片说「未找到反代凭据」 | 凭据是**现读**反代本地配置 `~/.cmdgo-bridge/credentials.json`（只支持本机反代），不在环境变量里；反代没跑或该文件不存在时就是这个提示。v1.7.9 起兼容两种凭据形状（纯字符串与 `{value,source}` 对象）。`cmdgo-bridge` 换过数据目录时用 `CMDGO_DIR` 指过去 |
-| CommandCode 额度卡显示「已限流」 | 网关的 `exceeded` 或已用 ≥100%：某一窗口到顶，补满前不可用。卡片最下面那行是**绑定约束**窗口的重置时间（多窗口同时撞墙时报最晚的那个，早重置的不解锁）；「账号池已全部限流」= 所有账号都没额度了 |
-| CommandCode 额度卡/气泡里出现 $ 之外的换算疑虑 | credit 池以美元计价，而价目表是各厂商本币价，所以 credit 的折算只是**等价市值**：它只进用量记录面板的「模型排名」（行上以 ≈ 标注），不计入「今日已用」（见「数据与计价口径」） |
-| 开了桌宠模式后鲸鱼可以在整个屏幕上拖 | 这就是桌宠模式（v1.8.1）：界面 = 整个工作区（自动排除任务栏，任务栏在哪条边都成立）+ 失焦不隐身 + 锁在最上层。关掉即回到「跟随 ZCode 窗口」 |
-| 挂件每隔几秒消失再出现一次 | 旧版冻结检测误判循环（v1.8.1 修过一轮）；v1.8.6 起「活性点 + DXGI」检测整体移除，该类误判不复存在。画面若真冻结（页面活着、屏幕停旧帧），最迟 60 秒出帧保险自愈，或 `node lib/cli.mjs window restart` 立即重建 |
-| 想要大肥鱼那张原版脸 | v1.8.1 已回滚「大肥鱼蓝白」主题（与浅色主题重复）；形象仍可在菜单「角色」切换 |
-
----
-
-## 自助排查工具
-
-> 运行环境：Node >= 22.5（依赖内置 `node:sqlite`）。`server.json` 含关停令牌，POSIX 下以 0600 落盘；Windows 靠用户目录 ACL 限制其他用户读取。
-
-```bash
-node tools/selftest.mjs        # 计价口径回归 + 每轮消耗链路端到端自检（不碰真实数据）
-node tools/smoke-ui.mjs        # 前端冒烟：headless Edge/Chrome + CDP 跑真实页面（气泡 hint、displayMode 持久化）
-node tools/demo.mjs            # 用假数据起一个服务并周期性产生新轮次，用于观察消耗气泡
-node tools/debug-overlay.mjs   # 连进浮层页面（需以 WHALE_DEBUG_PORT 启动）排查渲染/交互
-```
-
----
-
-## 架构
-
-```
-zcode-fox-widget/
-├─ .zcode-plugin/plugin.json   插件清单：commands / skills / hooks / mcpServers
-├─ marketplace.json            本地市场声明，便于在客户端添加
-├─ hooks/hooks.json            钩子接线：SessionStart 自启 + 两个低频事件（提问 / 权限确认）
-├─ commands/fox.md             /fox 命令
-├─ skills/zcode-fox-widget/    使用与排查说明（供 ZCode 内的助手阅读）
-├─ desktop/                    桌面浮层
-│  ├─ main.cjs                 Electron 主进程：透明置顶窗口、穿透切换、视口转发、启动门控
-│  ├─ preload.cjs              向页面暴露 setInteractive / onViewport / 跟随间隔 / 窗口失焦事件
-│  ├─ follow-window.ps1        常驻探测 ZCode 窗口位置/前台/暗色标志（C# 内核，纯 ASCII）
-│  ├─ ui-ready.cjs             从客户端日志判定 ZCode 本次启动是否就绪（启动门控）
-│  └─ package.json             浮层入口包声明（Electron 启动用）
-├─ lib/
-│  ├─ server.mjs               本地 HTTP 服务：页面、图片、音效、全部 JSON 接口
-│  ├─ widget.js                前端挂件：拖拽/吸附/翻转/菜单/气泡/音效/穿透
-│  ├─ balance.mjs              余额、记账账本、平台用量、缓存与回退、今日已用口径合并
-│  ├─ usage-records.mjs        用量记录聚合：model_usage 折价、今日/近 7 天、双口径排名、厂商汇总
-│  ├─ turn-cost.mjs            每轮消耗（读 turn_usage，回退模型 I/O 日志）
-│  ├─ pricing.mjs              九家价目 + 峰谷时段判定 + token→金额（含输入口径拆分）
-│  ├─ glm-plan-api.mjs         GLM 订阅套餐用量（直连 bigmodel 监控端点，仅订阅配额）
-│  ├─ source.mjs               计费源判定（provider/model/baseURL → Plan / DeepSeek / 按量厂商）
-│  ├─ plan-balance.mjs         GLM Plan 配额（取源链：日志 / 直连套餐接口）与轮级套餐百分比
-│  ├─ cmdgo.mjs                CommandCode 三重额度（月度池 + 5 小时/周窗口，网关 API 直读）
-│  ├─ vendors.mjs              厂商余额/配额模板框架（host 白名单、缓存、归一化）
-│  ├─ discover.mjs             厂商凭据自动发现（多路径扫描 + 短 TTL 缓存）
-│  ├─ zcode-theme.mjs          「跟随 ZCode」主题三层判定（观测 > 配置 > 系统）
-│  ├─ blocked-host.mjs         环回/私有/保留地址判定（出站硬约束与本地网关判定共用一份口径）
-│  ├─ update.mjs               挂件内自动更新：镜像链探测、纯 JS 解 tar.gz、落盘与清理、备份轮转
-│  ├─ hook-event.mjs           钩子事件 → hook-state.json（「等确认提醒」的数据面）
-│  ├─ paths.mjs                数据目录与文件路径常量（含数据目录迁移候选探测）
-│  ├─ credentials.mjs          凭据发现 + 出站主机白名单校验
-│  ├─ service.mjs              挂件服务的发现/拉起/关闭
-│  ├─ overlay.mjs              浮层的启停与 Electron 运行时按需安装
-│  ├─ autostart.mjs            SessionStart 自启入口
-│  ├─ cli.mjs                  命令行入口
-│  └─ mcp-server.mjs           MCP 工具
-├─ tools/                      自检、演示与排查脚本
-└─ assets/                     鲸鱼形象、rua 动图、两套音效（来自上游）
-```
-
-### 运行时数据
-
-都在 `~/.zcode/whale/`，与仓库完全分离：
-
-| 文件 | 内容 |
-|---|---|
-| `config.json` | API Key、平台令牌、厂商 key（vendorKeys）、端口、自启开关、跟随间隔 |
-| `widget-state.json` | 挂件外观与菜单开关（大小、音效、主题、气泡、对账口径、预警阈值、排名口径…） |
-| `bubble-content.json` | 按压泡泡队列（v2：`{v:2, tapAdvance, steps:[{modules}]}`；旧 v1 配置读取时自动迁移） |
-| `bubble-templates.json` | 预警内容模板与每轮消耗提示模板（与泡泡队列分文件存，v1.8.x 起） |
-| `bubble-imgs/` + `bubble-imgs.json` | 泡泡里可用的自备图片与索引（`/whale/bubble-img.png` 按图取字节） |
-| `hook-state.json` | 钩子事件状态：最近事件名 / 工具 / 时间戳 / 「等确认」标记与计数（菜单「等确认提醒」与 `/whale/hook.json` 读它） |
-| `update-state.json` | 自动更新状态：检查时间 / 当前与最新版本 / 阶段与进度 / 错误 |
-| `update-files.json` | 上一次更新写下的「各安装目录的文件清单」（按 root 分条），供下次清理旧文件 |
-| `update/backup/` | 更新前备份的被覆盖 / 被删除文件（按时间戳分目录，保留最近两份） |
-| `roles.json` + `roles/` | 导入的角色索引与图片；`hiddenBuiltins` 记录被删（隐藏）的内置形象，清掉即找回 |
-| `sounds/` + `sounds.json` | 导入的音效文件与索引（≤20 套，v1.6.0 起） |
-| `usage-ledger.json` | 记账口径的账本（含最近 30 天归档） |
-| `turn-seq.json` | 每轮序号持久化（服务重启后续号） |
-| `zcode-theme-observed.json` | 浮层观测到的 ZCode 窗口暗色标志（「跟随 ZCode」第一层；浮层干净退出即删、读取端 24h TTL） |
-| `server.json` | 挂件服务运行信息（pid / 端口 / 关闭令牌，0600） |
-| `overlay.json` | 浮层进程 pid |
-| `overlay-debug.log` | 浮层黑匣子日志（常开，超 5MB 轮转） |
-| `autostart.log` | 每次会话启动的自启结果 |
-| `desktop-runtime/` | Electron 运行时（下载包约 150MB，解压装机后占用约 370MB；删掉即回收，浮层随之失效） |
-
-服务接口（排查时可直接 curl）：页面与资产 `/`（`/index.html`）、`/whale/widget.js`、`/whale/image.png`、`/whale/rua.gif`、`/whale/bubble-img.png`（`?id=<图片 id>`，内置 `rua` 与导入件都走它）、`/whale/sound/press.mp3` 与 `/whale/sound/release.mp3`（`?set=<音效集 id>`）；状态查询 `/whale/health`、`/whale/balance.json`、`/whale/plan.json`（GLM Plan 配额：`source`/`unit` 标明取源与单位，接口源带 `windows[]` 与 `remaining`/`total`）、`/whale/cmdgo.json`（CommandCode 三重额度，`?refresh=1` 强制绕缓存）、`/whale/vendors.json`、`/whale/usage-records.json`、`/whale/session.json`、`/whale/last-turn.json`、`/whale/hook.json`（钩子接入状态与「等确认」标记）、`/whale/update.json`（更新状态与动作：GET 看状态，POST `action=check\|update\|skip\|unskip\|restart\|close`）、`/whale/sounds.json`、`/whale/roles.json`、`/whale/bubble-content.json`（GET/POST）、`/whale/bubble-templates.json`（预警与消耗提示模板，GET/POST）、`/whale/bubble-imgs.json`（图库索引）、`/whale/balance-adjustments.json`（GET/POST）、`/whale/size.json`（GET/PUT）、`/whale/zcode-theme.json`；写操作 `/whale/role-upload.json`、`/whale/role-rename.json`、`/whale/role-delete.json`、`/whale/bubble-img.json`、`/whale/bubble-img-delete.json`、`/whale/sound-upload.json`、`/whale/sound-delete.json`（写操作校验 Origin）；关停 `/whale/shutdown`（需 `server.json` 随机令牌）。
-
----
-
-## 安全说明
-
-- **出站白名单**：DeepSeek 的余额/用量只向 `api.deepseek.com`、`platform.deepseek.com` 发请求（要扩展目标需改 `lib/credentials.mjs` 的 `ALLOWED_HOSTS`）；厂商余额模板与 GLM 套餐接口各自在模板/模块里**显式声明 host**，请求前逐条过同一套校验（仅 https、拒环回/私有/保留地址、host 不匹配即拒），GLM 套餐接口的 host 是 `open.bigmodel.cn`。发请求前一律校验协议与主机名。更新链路是**另一份**白名单（`lib/update.mjs` 的 `UPDATE_HOSTS`：GitHub 与几个转发镜像），同样规则。
-- **本地服务**：只监听 `127.0.0.1`；校验 `Host` 头防 DNS rebinding；写操作校验 `Origin` 防跨站伪造；停止服务需要 `server.json` 里的随机令牌；不返回通配 CORS 头。
-- **更新接口的信任边界**：`/whale/update.json` 无令牌、同源即可触发，而它的作用是「按镜像内容替换自身代码」——爆炸半径大于其他写接口。可换来的保障只有 HTTPS、出站白名单与「包内版本号 == 目标版本」的一致性检查，**没有签名 / 哈希校验**（见上文「更新」小节的说明）。不愿意接受这一点的用户请用方式二自行 `git pull`。
-- **浮层**：只加载本机 `127.0.0.1` 的页面，运行在 `contextIsolation` 下，仅通过 preload 暴露 `setInteractive` / `setViewport` / `quit` / 跟随间隔几个能力，页面没有 Node 权限。气泡里的外链统一交给系统浏览器打开，浮层窗口自身拒绝导航与新开窗口。
-- **凭据**：API Key 只在内存中使用，不落日志、不打印明文。
-- 排查用的远程调试端口默认关闭，只有显式设置 `WHALE_DEBUG_PORT` 才打开。
+| 界面上看不到挂件 | ZCode 没有界面注入点，必须走桌面浮层：`desktop install` 后 `window start` |
+| 打开 ZCode 没自动出现 | 看 `~/.zcode/whale/autostart.log` 最后一行：无新行 = hook 没加载；`skip: autoStartWidget=false` = 配置关了自启；`overlay=skipped:no-runtime` = 运行时没装 |
+| 和挂件互动后 ZCode 画面卡住 | 确认浮层是新版（`window status` / `/whale/health` 的 version）。浮层的 `focusable:false` 与 `type:'toolbar'` 都不能删，否则会抢宿主前台或触发停帧 |
+| 余额显示「未找到 DeepSeek API Key」 | 预期：三条来源都没命中。逐条看 `/whale/health` 的 `keyProbe` |
+| 今日已用一直是 0 | 本机库今天还没记录；`cli.mjs status` 看双口径与来源 |
+| 每轮消耗不弹 | 需要至少完成一轮对话（`turn_usage` 有 `completed`），且菜单里开关是开的 |
+| 鲸鱼不跟着 ZCode 走 | `window stop` → `window start` 重建；`WHALE_DEBUG_PORT` 启动可看 `overlay-debug.log` |
+| 浮层里点不动 | 指针要先落在角色上（光标变 `grab`）；整块都点不动时检查是否有别的置顶窗口压着 |
+| 菜单数字框打不了字 | 指针按上去就会临时接管键盘；仍不行说明浮层是旧版 |
+| Plan 配额不显示 | 日志与接口都没数据；`/whale/plan.json` 的 `apiReason` / `probedDirs` 说明原因 |
+| CommandCode 读不到 | 只支持本机反代：`~/.cmdgo-bridge/credentials.json` 不存在或反代没跑 |
+| 换了图片 / 音效不生效 | 资产路由 `no-store`，强刷即可；确认替换的是 `assets/` 下的同名文件 |
 
 ---
 
 ## 已知限制
 
-- 浮层仅支持 **Windows**（依赖 Win32 窗口 API 与 PowerShell）；macOS / Linux 上只有本地页面形态可用。
-- 浮层跟随靠轮询，拖动时理论上存在约一个探测间隔的滞后（默认 40ms，实测 13ms，肉眼几乎看不出）。
-- 浮层里**吸附没有滑动动画**（位置直接就位）。这是为了避开透明窗口的合成层错位——详见下面「踩坑记录」；本地页面（浏览器打开）里动画完整。
-- 浮层穿透的必然代价：点击某个位置前，指针得先落在鲸鱼上。
-- 菜单里的数字输入框在浮层里建议用箭头/滑块，因为透明浮层窗口默认不抢键盘焦点。
-- 菜单默认弹在鲸鱼头顶；鲸鱼被拖到窗口顶部、上方放不下时会翻到按钮下方（两种模式都一样）。
-- 每轮消耗只统计 ZCode 自己记录的主对话轮次；ZCode 之外调用的 API 不计入。
-
-### 踩坑记录（写给后来改这份代码的人）
-
-1. **透明窗口不能靠 `setBounds` 贴合别的窗口**。一改尺寸/位置，Windows 合成层不重排，页面内容会被画到偏离窗口的地方（实测页面 `(0,0)` 的方块跑到窗口外）。现在的做法是窗口恒定铺满工作区，把 ZCode 窗口矩形作为「视口」发给页面。
-2. **浮层模式下必须禁用定位 CSS 过渡**（`.zcwv-root.zcwv-overlay{transition:none}`）。对 `left/top` 做过渡同样会触发合成层错位。
-3. **不要给浮层设 owner 窗口关系**。系统会在 Electron 背后直接显示/隐藏窗口，`BrowserWindow.isVisible()` 与实际状态脱节，恢复后不再显示。
-4. **`resizable:false` 会锁死窗口尺寸**（Electron 把 min/max 设成创建时大小），之后任何改尺寸的调用都被拒。
-5. **位置记忆必须在拿到真实坐标系之后再恢复**，否则会按屏幕尺寸算出错误锚点。
-6. **`desktop/follow-window.ps1` 必须保持纯 ASCII**。Windows PowerShell 5.1 按系统 ANSI 代码页读取无 BOM 的 `.ps1`，中文注释会被解码成破坏语法的字节，脚本直接退出、跟随失效。
-7. **`$ErrorActionPreference='SilentlyContinue'` 会吞掉 `Add-Type` 的编译错误**，表现成「脚本秒退、浮层跟着退出」。该脚本已改为显式输出编译/运行错误。
-8. **C# 内联代码只能用 .NET Framework 的 API**（PS 5.1 的编译目标），例如 `Environment.TickCount64` 不存在，要用 `TickCount`。
-9. **浮层里有两套坐标系，不能混用**。`viewport()` 返回的是 ZCode 窗口矩形（鲸鱼的位置、吸附、居中都按它算），而 `position:fixed` 的元素（挂在 `body` 上的挂件菜单）参照的是页面自身视口，也就是铺满整个工作区的浮层窗口。窗口化 ZCode 时两者差着几百像素，拿 `viewport()` 去算 `position:fixed` 的偏移会把菜单整个甩到屏幕外（实测菜单被算到 x=2812，而浮层只有 2560 宽）。这类 fixed 元素一律用 `pageViewport()`。
-10. **挂在 `body` 上的 fixed 元素不会跟着 root 走**。浮层里 ZCode 窗口一移动，鲸鱼跟着动、菜单留在原地，所以 `settle()` 里每次都带一次 `positionMenu()`。
+- 浮层仅 **Windows**（依赖 Win32 与 PowerShell）；macOS / Linux 只有本地页面。
+- 跟随靠轮询，拖动时理论上有约一个探测间隔的滞后（默认 40ms，实测约 13ms）。
+- 浮层内吸附无滑动动画（避免透明窗口合成层错位）；本地页面里动画完整。
+- 穿透的代价：点击前指针得先落在角色上。
+- 每轮消耗只统计 ZCode 记录的轮次，宿主外直接调用的 API 不计入。
 
 ---
 
-## 版本历史
+## 安全
 
-- 逐版本变更：[CHANGELOG.md](./CHANGELOG.md)（v1.1.0 起；相邻小修复版本按合并策略并入组内最后版本号，现存版本均有 tag 与 GitHub Release）。
-- 贡献与提交规范：[CONTRIBUTING.md](./CONTRIBUTING.md)。
-- 命名沿革：ZCode 版 DeepSeek 余额小鲸鱼挂件（移植期）→ Widget of ZCode（v1.8.2–v1.8.4）→ **ZCode狐娘小挂件**（v1.8.5 起）。
-- 调研与审查报告（仓库根，随代码一起维护）：[`FIX-REPORT-ISSUE2-HOST-FREEZE.md`](./FIX-REPORT-ISSUE2-HOST-FREEZE.md)（点角色后宿主停帧的根因与真机 A/B）、[`OVERLAY-PAUSE-FINDINGS.md`](./OVERLAY-PAUSE-FINDINGS.md)（同一问题的完整调查记录，含无效方向）、[`HANDOFF-WORKBUDDY.md`](./HANDOFF-WORKBUDDY.md)（移植到 WorkBuddy 的交接说明）。
+- **出站白名单**：业务请求只发往 `api.deepseek.com` / `platform.deepseek.com`；更新链路是另一份白名单（GitHub 与转发镜像）。两者都拒绝环回 / 私有地址。
+- **本地服务**：只监听 `127.0.0.1`，校验 `Host` 与写操作 `Origin`；停止服务要 `server.json` 里的随机令牌。
+- **更新**：下载整包在内存中解压、逐条校验路径，并核对发布签名清单（`.release-hashes.json` + ed25519）；清单外文件忽略不落盘。
+- **浮层**：只加载本机页面，`contextIsolation` 下仅暴露必要 IPC；外链交给系统浏览器。
+- **凭据**：只在内存中使用，不写日志、只显示掩码。
 
 ---
 
-## 许可与致谢
+## 移植与许可
 
-本仓库以 **MIT** 许可发布，见 [`LICENSE`](./LICENSE)。
+| | |
+|---|---|
+| 原版 | [MeteorNOX/DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)（MIT）——DSH 的 Web 插件 |
+| ZCode 移植 | [nb10yyds/zcode-whale-widget](https://github.com/nb10yyds/zcode-whale-widget)——宿主适配层重写 |
+| 本仓库 | fork 自上址（v1.1.0 起延续开发，v1.8.5 起用现名） |
 
-- 原版挂件的视觉与交互设计、鲸鱼形象、rua 动图与音效来自 **[MeteorNOX/DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)**（Copyright (c) 2026 MeteorNOX，MIT）。
-- ZCode 移植版（宿主适配层重写、凭据发现、每轮消耗数据源）由 **[nb10yyds/zcode-whale-widget](https://github.com/nb10yyds/zcode-whale-widget)** 完成，本仓库 fork 自其基线。
-- v1.1.0 起的功能与优化（详见 [CHANGELOG](./CHANGELOG.md)）为 fork 后的延续开发；`GLM.png`（嘎啦嘛）、`gpt.png`、`kimi.png`、`gemini.png`（哈基米）与 README 头图 `fox.png` 为项目自有素材。
-- 内置形象 **小克**（`assets/xiaoke.png`）取自 **[aklnaaw/dsh-xiaoke-widget](https://github.com/aklnaaw/dsh-xiaoke-widget)**（MIT，Copyright (c) 2026 MeteorNOX；该仓库二创自本仓库的上游），**已获原作者授权**在本项目中使用，图片按本仓库角色画布规格做了等比归一化。
-- 沿用与新增的逐条清单见 [`NOTICE`](./NOTICE)。如果喜欢这只鲸鱼（或狐娘），请去给上游点个 star。
+视觉、鲸鱼素材、音效、台词与定价表来自上游；`GLM.png` / `gpt.png` / `kimi.png` / `gemini.png` 为自有素材，`xiaoke.png` 取自 [aklnaaw/dsh-xiaoke-widget](https://github.com/aklnaaw/dsh-xiaoke-widget)（MIT，已获授权）。逐条清单见 [`NOTICE`](./NOTICE)，许可见 [`LICENSE`](./LICENSE)。
+
+## 文档地图
+
+| 想找 | 去哪 |
+|---|---|
+| 安装 / 使用 / 排障 | 本文件 |
+| 这版改了什么 | [CHANGELOG.md](./CHANGELOG.md) |
+| 发布流程与发布物完整性 | [CONTRIBUTING.md](./CONTRIBUTING.md) |
+| 给 ZCode 内助手读的使用说明 | [skills/zcode-fox-widget/SKILL.md](./skills/zcode-fox-widget/SKILL.md) |
+| 贡献规范 | [CONTRIBUTING.md](./CONTRIBUTING.md) |
