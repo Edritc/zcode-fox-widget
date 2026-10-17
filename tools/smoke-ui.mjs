@@ -1810,6 +1810,112 @@ try {
   )
   if (stubCmdgo && stubCmdgo.identifier) await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: stubCmdgo.identifier })
 
+  // ⑯a 中转站额度卡：服务端在 session.json 里给 quotaCard，前端按形状渲染。
+  // 三种形状各验一次：多窗口（Sub2API）、纯余额（New API）、读取失败。
+  await putSize({ scale: 1.5, theme: 'dark', displayMode: 'auto', alerts: { quotaPct: 0, moneyAlert: 0 } })
+  const relayStub = (card) =>
+    '(function(){var real=window.fetch;' +
+    'function json(o){return Promise.resolve(new Response(JSON.stringify(o),{status:200,headers:{"Content-Type":"application/json"}}))}' +
+    'var S={ok:true,source:"claude",vendor:"anthropic",label:"Claude",timeMode:"none",modelId:"claude-sonnet-5-5",currency:"USD",from:"selection",quotaCard:' +
+    JSON.stringify(card) +
+    '};' +
+    'window.fetch=function(u,o){var s=String(u&&u.url?u.url:u);' +
+    'if(s.indexOf("/whale/session.json")!==-1)return json(S);' +
+    'return real.apply(this,arguments)}})()'
+  const windowsCard = {
+    kind: 'windows',
+    title: 'SSSAICode 额度',
+    rows: [
+      { label: '5小时', percentUsed: 20, resetAt: Date.now() + 84 * 60000 },
+      { label: '本日', percentUsed: 55 },
+      { label: '本周', percentUsed: 82, resetAt: Date.now() + 3 * 86400000 },
+    ],
+    balance: { remaining: 12.34, used: 3.21, total: 15.55, currency: 'USD' },
+    currency: 'USD',
+  }
+  const stubRelayWindows = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: relayStub(windowsCard) })
+  await cdp.send('Page.reload')
+  const relayWindowsView = await pollEval(
+    cdp,
+    "(function(){var q=document.querySelector('.zcwv-qcard');" +
+      "if(!q||getComputedStyle(q).display==='none')return null;" +
+      'var head=q.querySelector(".zcwv-qhead").textContent;' +
+      'var rows=[].map.call(q.querySelectorAll(".zcwv-qrow"),function(r){return{name:r.querySelector(".zcwv-qname").textContent,pct:r.querySelector(".zcwv-qpct").textContent,fill:r.querySelector(".zcwv-qbar i").style.width}});' +
+      'var subs=[].map.call(q.querySelectorAll(".zcwv-qsub"),function(s){return s.textContent});' +
+      'var textHidden=document.querySelector(".zcwv-label").style.display==="none";' +
+      'return JSON.stringify({head:head,rows:rows,subs:subs,textHidden:textHidden})})()',
+    15000
+  )
+  const relayWindowsObj = relayWindowsView ? JSON.parse(relayWindowsView) : null
+  check(
+    '中转站窗口卡：标题 + 5小时/本日/本周三行 + 余额小字 + 最紧窗口倒计时，三行文本隐藏',
+    !!relayWindowsObj &&
+      relayWindowsObj.head === 'SSSAICode 额度' &&
+      relayWindowsObj.textHidden === true &&
+      relayWindowsObj.rows.length === 3 &&
+      relayWindowsObj.rows[0].name === '5小时' &&
+      relayWindowsObj.rows[0].pct === '20%' &&
+      relayWindowsObj.rows[1].name === '本日' &&
+      relayWindowsObj.rows[1].pct === '55%' &&
+      relayWindowsObj.rows[2].name === '本周' &&
+      relayWindowsObj.rows[2].pct === '82%' &&
+      relayWindowsObj.subs[0].indexOf('剩 12.34 USD') !== -1 &&
+      relayWindowsObj.subs[0].indexOf('已用 3.21 USD') !== -1 &&
+      relayWindowsObj.subs[1].indexOf('本周') === 0 &&
+      relayWindowsObj.subs[1].indexOf('后重置') !== -1,
+    JSON.stringify(relayWindowsObj)
+  )
+  if (stubRelayWindows && stubRelayWindows.identifier) await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: stubRelayWindows.identifier })
+
+  const balanceCard = {
+    kind: 'balance',
+    title: 'PackyCode 余额',
+    balance: { remaining: 12.34, used: 3.21, total: 15.55, currency: 'USD' },
+    currency: 'USD',
+  }
+  const stubRelayBalance = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: relayStub(balanceCard) })
+  await cdp.send('Page.reload')
+  const relayBalanceView = await pollEval(
+    cdp,
+    "(function(){var q=document.querySelector('.zcwv-qcard');" +
+      "if(document.querySelector('.zcwv-label').textContent!=='PackyCode 余额')return null;" +
+      "return JSON.stringify({qcard:q&&getComputedStyle(q).display!=='none'," +
+      'label:document.querySelector(".zcwv-label").textContent,' +
+      'amount:document.querySelector(".zcwv-amount").textContent,' +
+      'hint:document.querySelector(".zcwv-hint").textContent})})()',
+    15000
+  )
+  const relayBalanceObj = relayBalanceView ? JSON.parse(relayBalanceView) : null
+  check(
+    '中转站余额卡：主数字 = 剩余余额，小字 = 已用/总额，额度卡隐藏',
+    !!relayBalanceObj &&
+      relayBalanceObj.qcard === false &&
+      relayBalanceObj.label === 'PackyCode 余额' &&
+      relayBalanceObj.amount === '12.34 USD' &&
+      relayBalanceObj.hint.indexOf('已用 3.21 USD') !== -1 &&
+      relayBalanceObj.hint.indexOf('总额 15.55 USD') !== -1,
+    JSON.stringify(relayBalanceObj)
+  )
+  if (stubRelayBalance && stubRelayBalance.identifier) await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: stubRelayBalance.identifier })
+
+  const errorCard = { kind: 'error', title: 'DuckCoding 额度', reason: '未找到该站的 API Key' }
+  const stubRelayError = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: relayStub(errorCard) })
+  await cdp.send('Page.reload')
+  const relayErrorView = await pollEval(
+    cdp,
+    "(function(){var q=document.querySelector('.zcwv-qcard');" +
+      "if(!q||getComputedStyle(q).display==='none')return null;" +
+      'return JSON.stringify({head:q.querySelector(".zcwv-qhead").textContent,sub:q.querySelector(".zcwv-qsub").textContent})})()',
+    15000
+  )
+  const relayErrorObj = relayErrorView ? JSON.parse(relayErrorView) : null
+  check(
+    '中转站额度读取失败：卡片说清原因，不冒充余额',
+    !!relayErrorObj && relayErrorObj.head === 'DuckCoding 额度' && relayErrorObj.sub.indexOf('API Key') !== -1,
+    JSON.stringify(relayErrorObj)
+  )
+  if (stubRelayError && stubRelayError.identifier) await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: stubRelayError.identifier })
+
   // ⑯b 撞墙窗口（真实数据实测到：三账号均撞周限）。这里构造「5小时 + 本周」同时
   // 撞墙、且本周重置更晚的场景，一次验三件事：已限流文案（不显示 101%）、
   // 倒计时取**最晚**重置的那道墙（本周，而不是时间更早的 5小时）、池全满时的说人话文案
