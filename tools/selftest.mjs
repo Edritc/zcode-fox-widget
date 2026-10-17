@@ -778,7 +778,7 @@ function check(name, ok, detail) {
       Math.abs(poolShaped.monthly.percent - (70 - 45.08) / 70) < 1e-9 &&
       Math.abs(poolShaped.fiveHour.percent - 0.6 / 14) < 1e-9 &&
       Math.abs(poolShaped.weekly.percent - 0.67 / 35) < 1e-9 &&
-      poolShaped.userName === 'CommandCode GOAT 账号 1',
+      poolShaped.userName === 'GOAT 账号 1',
     JSON.stringify(poolShaped)
   )
   const merged = mergeAccountCandidates(readCmdgoAccounts(candDir), hostAccts)
