@@ -1845,8 +1845,8 @@ try {
       relayWindowsObj.rows[1].pct === '55%' &&
       relayWindowsObj.rows[2].name === '本周' &&
       relayWindowsObj.rows[2].pct === '82%' &&
-      relayWindowsObj.subs[0].indexOf('剩 12.34 USD') !== -1 &&
-      relayWindowsObj.subs[0].indexOf('已用 3.21 USD') !== -1 &&
+      relayWindowsObj.subs[0].indexOf('剩 $12.34') !== -1 &&
+      relayWindowsObj.subs[0].indexOf('已用 $3.21') !== -1 &&
       relayWindowsObj.subs[1].indexOf('本周') === 0 &&
       relayWindowsObj.subs[1].indexOf('后重置') !== -1,
     JSON.stringify(relayWindowsObj)
@@ -1878,8 +1878,8 @@ try {
       relayBalanceObj.qcard === false &&
       relayBalanceObj.label === 'PackyCode 余额' &&
       relayBalanceObj.amount === '12.34 USD' &&
-      relayBalanceObj.hint.indexOf('已用 3.21 USD') !== -1 &&
-      relayBalanceObj.hint.indexOf('总额 15.55 USD') !== -1,
+      relayBalanceObj.hint.indexOf('已用 $3.21') !== -1 &&
+      relayBalanceObj.hint.indexOf('总额 $15.55') !== -1,
     JSON.stringify(relayBalanceObj)
   )
   if (stubRelayBalance && stubRelayBalance.identifier) await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: stubRelayBalance.identifier })
