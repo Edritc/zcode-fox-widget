@@ -133,68 +133,70 @@
 
 ### 步骤
 
-1. **把仓库克隆到一个固定位置**（不要放在会被清理的临时目录；本分支是 `workbuddy` 分支）：
+1. **选安装来源（二选一）**：
 
-   ```bash
-   git clone -b workbuddy https://github.com/pigeon189/zcode-fox-widget.git ~/.workbuddy/dev/fox-widget
-   ```
+   **A. 直接填 GitHub 源（推荐，最省事）**
 
-   后面的命令都假设你在仓库根目录下执行。
+   左栏 **「专家·技能·连接器」** → **「技能」** → 子分页 **「插件」** → 右上角 `＋` →
+   在「市场源」里填 `pigeon189/zcode-fox-widget#workbuddy`。
+   这条产品线的代码在 **`workbuddy` 分支**；默认分支 `main` 是 ZCode 线，里面没有
+   `.codebuddy-plugin/`，所以必须带分支。宿主接受 `#分支` 时这是最省事的一条；
+   不接受时填 ZIP（仍是 GitHub 源，不用克隆）：
+   `https://github.com/pigeon189/zcode-fox-widget/archive/refs/heads/workbuddy.zip`。
+   装完后升级 = 在市场里点「刷新」。
 
-   > **别把这份仓库直接注册成 WorkBuddy 的市场，同时又让 ZCode 盯着它**——两个宿主同时盯一个工作区，任一端「重新抓取」都会覆盖另一端的认知。本机同时装两端时，用上面这种**单独克隆一份**的开发副本。
+   **B. 克隆到本地目录**（想改代码、或想跟某个本地工作副本同步时用）
 
-2. **注册为本地插件市场**，二选一：
+   1. **把仓库克隆到一个固定位置**（不要放在会被清理的临时目录；本分支是 `workbuddy` 分支）：
 
-   > **最省事的一条：直接填 GitHub 源**（不用先克隆）。在「市场源」里填
-   > `pigeon189/zcode-fox-widget`（宿主认 `owner/repo`）。
-   > ⚠️ **注意分支**：GitHub 源通常拉**默认分支**，而这条产品线的代码在 **`workbuddy` 分支**；
-   > 默认分支 `main` 是 ZCode 线，里面没有 `.codebuddy-plugin/`，那样装上市场里不会出现
-   > `fox-widget`。所以：填得出分支就填 `pigeon189/zcode-fox-widget#workbuddy`；填不出分支
-   > 就用下面的本地目录方式，或直接给它一个 ZIP：
-   > `https://github.com/pigeon189/zcode-fox-widget/archive/refs/heads/workbuddy.zip`。
-   > 装完之后，升级就是在市场里点「刷新」。
+      ```bash
+      git clone -b workbuddy https://github.com/pigeon189/zcode-fox-widget.git ~/.workbuddy/dev/fox-widget
+      ```
 
-   **方式 A：客户端界面（推荐）**
+      后面的命令都假设你在仓库根目录下执行。
 
-   1. 左栏点 **「专家·技能·连接器」** → 选 **「技能」** 分栏。
-   2. 进「技能」页后，再选它的**子分页「插件」**。
-      该页的子分页是：推荐 / 技能库 / **插件** / 结绳 / 企业（对应宿主路由 `/plugins`、组件 `PluginsPage`）。
-   3. 点页头右上角的圆形 **`＋`**（悬浮提示「添加市场」）。
-      ⚠️ **它不是一个文件夹选择框**：弹出的「添加市场」对话框里只有一个**「市场源」文本框**。
-   4. 在「市场源」里粘贴**仓库的绝对路径**（就是你克隆出来的那份目录，例如
-      `D:\code\fox-widget`），然后点「提交」。
-   5. 市场 `fox-local` 出现后，在它下面安装 `fox-widget`（会让你选安装范围，选 **user** 即可）。
+      > **别把这份仓库直接注册成 WorkBuddy 的市场，同时又让 ZCode 盯着它**——两个宿主同时盯一个工作区，任一端「重新抓取」都会覆盖另一端的认知。本机同时装两端时，用上面这种**单独克隆一份**的开发副本。
 
-   > 别走「技能」页的「**导入技能**」——那条路只接受 `.skill` 技能包，
-   > 选插件仓库目录会报「没有 .skill」。插件必须走「插件」分页的「添加市场」。
+   2. **注册为本地插件市场**，二选一：
 
-   > **这一步最容易踩坑**，记一下宿主的判定逻辑（`pluginManager.parseSource()`）：
-   > 它先把输入按工作目录解析成路径，**路径真实存在**就当成「本地目录市场」；
-   > 路径不存在才依次试 GitHub 简写 `owner/repo`、`git@…`（SSH）、URL、ZIP。
-   > 所以**填市场名、插件名或目录名都不会生效，必须填一个真实存在的路径**，且路径要指向
-   > 含 `.codebuddy-plugin/marketplace.json` 的目录（= 本仓库根目录）。
-   > 宿主自带的输入提示原文：`owner/repo（GitHub）、git@…（SSH）、https://….zip（ZIP）、./path/to/marketplace（本地）`。
+      **客户端界面（推荐）**
 
-   **方式 B：手工写配置**（宿主在运行时可能把这两个文件写回，导致手改被覆盖，仅作备用）
-   先完全退出 WorkBuddy，再在 `~/.workbuddy/plugins/known_marketplaces.json` 里追加一条（key 就是市场名）：
+      1. 左栏点 **「专家·技能·连接器」** → 选 **「技能」** 分栏。
+      2. 进「技能」页后，再选它的**子分页「插件」**。
+         该页的子分页是：推荐 / 技能库 / **插件** / 结绳 / 企业（对应宿主路由 `/plugins`、组件 `PluginsPage`）。
+      3. 点页头右上角的圆形 **`＋`**（悬浮提示「添加市场」）。
+         ⚠️ **它不是一个文件夹选择框**：弹出的「添加市场」对话框里只有一个**「市场源」文本框**。
+      4. 在「市场源」里粘贴**仓库的绝对路径**（就是你克隆出来的那份目录，例如
+         `D:\code\fox-widget`），然后点「提交」。
+      5. 市场 `fox-local` 出现后，在它下面安装 `fox-widget`（会让你选安装范围，选 **user** 即可）。
 
-   ```json
-   {
-     "fox-local": {
-       "manifestName": "fox-local",
-       "type": "directory",
-       "source": { "source": "directory", "path": "<仓库绝对路径>" },
-       "installLocation": "<仓库绝对路径>",
-       "description": "Local marketplace for WorkBuddy狐娘小挂件 (fox-widget).",
-       "autoUpdate": false
-     }
-   }
-   ```
+      > 别走「技能」页的「**导入技能**」——那条路只接受 `.skill` 技能包，
+      > 选插件仓库目录会报「没有 .skill」。插件必须走「插件」分页的「添加市场」。
 
-   > 想把这份插件分享给别人从 GitHub 安装，把 `source` 换成仓库形式即可：
-   > `"source": { "source": "github", "repo": "pigeon189/zcode-fox-widget", "branch": "workbuddy" }`
+      > **这一步最容易踩坑**，记一下宿主的判定逻辑（`pluginManager.parseSource()`）：
+      > 它先把输入按工作目录解析成路径，**路径真实存在**就当成「本地目录市场」；
+      > 路径不存在才依次试 GitHub 简写 `owner/repo`、`git@…`（SSH）、URL、ZIP。
+      > 所以**填市场名、插件名或目录名都不会生效，必须填一个真实存在的路径**，且路径要指向
+      > 含 `.codebuddy-plugin/marketplace.json` 的目录（= 本仓库根目录）。
+      > 宿主自带的输入提示原文：`owner/repo（GitHub）、git@…（SSH）、https://….zip（ZIP）、./path/to/marketplace（本地）`。
 
-3. **安装并启用插件**：在刚添加的市场下安装 `fox-widget`（会问安装范围，选 **user**）。
+      **手工写配置**（宿主在运行时可能把这两个文件写回，导致手改被覆盖，仅作备用）
+      先完全退出 WorkBuddy，再在 `~/.workbuddy/plugins/known_marketplaces.json` 里追加一条（key 就是市场名）：
+
+      ```json
+      {
+        "fox-local": {
+          "manifestName": "fox-local",
+          "type": "directory",
+          "source": { "source": "directory", "path": "<仓库绝对路径>" },
+          "installLocation": "<仓库绝对路径>",
+          "description": "Local marketplace for WorkBuddy狐娘小挂件 (fox-widget).",
+          "autoUpdate": false
+        }
+      }
+      ```
+
+2. **安装并启用插件**：在刚添加的市场下安装 `fox-widget`（会问安装范围，选 **user**）。
    手工方式则先退出 WorkBuddy，再在 `~/.workbuddy/settings.json` 的顶层加：
 
    ```json
@@ -224,12 +226,12 @@
 > 而 WorkBuddy 的版本账本由 `installed_plugins.json` 记录、**目录名里带版本号**——
 > 原地覆盖会让「cache 里的文件」与「注册表记的版本」对不上。推荐走下面的手动方式。
 
-**推荐：手动拉取**
+**推荐：手动拉取（本地目录安装）**
 
-插件的安装来源就是这份克隆的仓库，更新 = 拉新代码 + 让客户端重抓一遍：
+如果安装时选的是本地目录，更新 = 拉新代码 + 让客户端重抓一遍；GitHub 源安装则直接在市场里点「刷新」，不需要 `git pull`。
 
 1. 在仓库目录里 `git pull` 拿到最新版（每次发版 `.codebuddy-plugin/plugin.json` 与 `.codebuddy-plugin/marketplace.json` 的版本号都会同步递增，这是客户端判断「有新版本」的依据）。
-2. 在技能市场页选中 `fox-local` 市场，点「**刷新**」（或先「删除」再按上面的方式 A 重新添加），新版本会装进独立的缓存目录（`cache/fox-local/fox-widget/<版本>/`）。
+2. 在技能市场页选中 `fox-local` 市场，点「**刷新**」（或先「删除」再按上面的方式 B 重新添加），新版本会装进独立的缓存目录（`cache/fox-local/fox-widget/<版本>/`）。
 3. 重启客户端生效。
 
 说明：挂件的全部数据（API key、账本、角色、泡泡配置、Electron 运行时）都在 `<插件数据目录>`（默认 `~/.workbuddy/plugins/data/fox-widget-fox-local/`），与插件目录无关，更新不丢配置。
