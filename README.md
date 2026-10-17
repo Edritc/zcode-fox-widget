@@ -199,3 +199,4 @@ echo 'sk-xxxxxxxx' | node lib/cli.mjs key
 | 发布流程与发布物完整性 | [CONTRIBUTING.md](./CONTRIBUTING.md) |
 | 给 ZCode 内助手读的使用说明 | [skills/zcode-fox-widget/SKILL.md](./skills/zcode-fox-widget/SKILL.md) |
 | 贡献规范 | [CONTRIBUTING.md](./CONTRIBUTING.md) |
+| 一次性调查 / 交接档案 | [docs/INDEX.md](./docs/INDEX.md) |

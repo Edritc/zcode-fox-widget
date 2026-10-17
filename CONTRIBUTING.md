@@ -55,6 +55,15 @@
 - **`Latest` 徽章留给 `v*` 那条线**：WorkBuddy 线的 release 用 `gh release create … --latest=false`。它的探测本来就是「枚举 releases 再挑 `wb-v*`」，不依赖徽章；而 ZCode 线的探测走 `/releases/latest`，徽章被 `wb-v*` 抢走会让这条探测源失效。
 - **pre-release 的可见性两线不同**：ZCode 线的 `/releases/latest` 会被 GitHub 跳过（prerelease 与 draft 都不返回），所以 pre-release 不会自动送达 ZCode 用户；WorkBuddy 线是枚举 releases + 前缀过滤，**会**送达已装用户。发 pre-release 前先确认这是不是想要的。
 
+### 版本说明的写法（2026-10-18 统一）
+
+- **版本标题**：`## vX.Y.Z <动词>：<一句话>`，动词只用 **新增 / 修复 / 变更**；并入多个小版本的写「（并入 …）」。
+- **条目**：平铺列表，每条**一句话、≤150 字**，只写「现象 → 影响」；实现细节、调查过程、字段名不进 CHANGELOG。
+- **数量**：每版聚焦重点（一般 ≤10 条）；批次大或并入多个小版本时可放宽，但不再逐条罗列实现。
+- **层级**：正文不出现 `###`；跨版本的回撤/补全说明用 `>` 引用块。
+- **Release 正文**：首行一句总述并指回 CHANGELOG 小节；分节标题用 `##`；**不逐字复制 CHANGELOG**，只挑 3–6 条用户最关心的；末尾固定「升级」（ZCode 线）/「安装 / 升级」（WorkBuddy 线）。
+- **两条线同批修复**用同一段文字，只替换宿主名词（ZCode↔WorkBuddy、余额↔积分）。
+
 ## 提交纪律
 
 - **不改写已推送历史**：不 force-push 已推送分支、不 rebase 已进入 PR 的提交；修错用新提交。

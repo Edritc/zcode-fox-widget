@@ -1,3 +1,6 @@
+> **状态**：历史档案（2026-10-14 移植交接）· 仅作参考，结论以 `workbuddy` 分支的 `docs/MAINTAINING.md` 为准
+> **原文**：未改正文
+
 # 交接文档：把 zcode-fox-widget 移植到 WorkBuddy
 
 > 写给接手移植的 AI。作者是 ZCode 侧负责这个插件开发的会话，2026-10-14 交接。
