@@ -138,12 +138,15 @@
    **A. 直接填 GitHub 源（推荐，最省事）**
 
    左栏 **「专家·技能·连接器」** → **「技能」** → 子分页 **「插件」** → 右上角 `＋` →
-   在「市场源」里填 `pigeon189/zcode-fox-widget#workbuddy`。
-   这条产品线的代码在 **`workbuddy` 分支**；默认分支 `main` 是 ZCode 线，里面没有
-   `.codebuddy-plugin/`，所以必须带分支。宿主接受 `#分支` 时这是最省事的一条；
-   不接受时填 ZIP（仍是 GitHub 源，不用克隆）：
-   `https://github.com/pigeon189/zcode-fox-widget/archive/refs/heads/workbuddy.zip`。
-   装完后升级 = 在市场里点「刷新」。
+   在「市场源」里填 workbuddy 分支的 ZIP 地址：
+
+   ```text
+   https://github.com/pigeon189/zcode-fox-widget/archive/refs/heads/workbuddy.zip
+   ```
+
+   WorkBuddy 的「添加市场」会把 `http` 开头的源按 ZIP 下载；它**不认 `owner/repo#分支`**，
+   直接填 `pigeon189/zcode-fox-widget` 会拉默认分支 `main`（ZCode 线，没有 `.codebuddy-plugin/`），
+   市场里不会出现 `fox-widget`。装完后升级 = 在市场里点「刷新」。
 
    **B. 克隆到本地目录**（想改代码、或想跟某个本地工作副本同步时用）
 
