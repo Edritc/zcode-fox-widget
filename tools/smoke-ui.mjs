@@ -1853,6 +1853,40 @@ try {
   )
   if (stubRelayWindows && stubRelayWindows.identifier) await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: stubRelayWindows.identifier })
 
+  // 单窗口（月度 / Cubence 5小时）按 GLM Plan 的数字口径：大号剩余百分比 + 重置/余额小字
+  const singleCard = {
+    kind: 'windows',
+    title: 'Cubence 额度',
+    rows: [{ label: '5小时', percentUsed: 24.6, resetAt: Date.now() + 3 * 3600000 }],
+    balance: { remaining: 12.34, used: 3.21, total: 15.55, currency: 'USD' },
+    currency: 'USD',
+  }
+  const stubRelaySingle = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: relayStub(singleCard) })
+  await cdp.send('Page.reload')
+  const relaySingleView = await pollEval(
+    cdp,
+    "(function(){var q=document.querySelector('.zcwv-qcard');" +
+      "if(document.querySelector('.zcwv-label').textContent!=='Cubence 额度')return null;" +
+      "return JSON.stringify({qcard:q&&getComputedStyle(q).display!=='none'," +
+      'label:document.querySelector(".zcwv-label").textContent,' +
+      'amount:document.querySelector(".zcwv-amount").textContent,' +
+      'hint:document.querySelector(".zcwv-hint").textContent})})()',
+    15000
+  )
+  const relaySingleObj = relaySingleView ? JSON.parse(relaySingleView) : null
+  check(
+    '中转站单窗口：大号剩余百分比（75.4%）+ 重置/余额小字，不画进度条',
+    !!relaySingleObj &&
+      relaySingleObj.qcard === false &&
+      relaySingleObj.label === 'Cubence 额度' &&
+      relaySingleObj.amount === '75.4%' &&
+      relaySingleObj.hint.indexOf('5小时') !== -1 &&
+      relaySingleObj.hint.indexOf('后重置') !== -1 &&
+      relaySingleObj.hint.indexOf('剩 $12.34') !== -1,
+    JSON.stringify(relaySingleObj)
+  )
+  if (stubRelaySingle && stubRelaySingle.identifier) await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: stubRelaySingle.identifier })
+
   const balanceCard = {
     kind: 'balance',
     title: 'PackyCode 余额',
