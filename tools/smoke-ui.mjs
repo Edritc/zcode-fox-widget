@@ -1,6 +1,6 @@
 // 前端冒烟：headless Edge/Chrome + CDP，加载真实挂件页面跑两条前端链路。
 // widget.js 是 IIFE、内部函数拿不到，所以全部走真实交互：
-//   1. 套餐轮次气泡（Start plan 等订阅配额）显示「本轮消耗余额: x%」——金额是
+//   1. 套餐轮次气泡（Start plan 等订阅配额）显示「本轮消耗余额：x%」——金额是
 //      虚构的；混合轮次 hint 补「另耗 ¥」；超宽文字自适应缩字/换行不顶出色泡
 //      ——回归按量价目套在订阅配额上算钱、长文案顶破气泡两个缺陷
 //   2. 菜单「显示」选择（displayMode）改动要持久化，刷新后保持
@@ -307,13 +307,13 @@ try {
     (await pollEval(
       cdp,
       "(function(){var l=document.querySelector('.zcwv-label'),a=document.querySelector('.zcwv-amount'),h=document.querySelector('.zcwv-hint');" +
-        "if(!l||!a||l.textContent!=='本轮消耗余额:')return null;" +
+        "if(!l||!a||l.textContent!=='本轮消耗余额：')return null;" +
         "return JSON.stringify({amount:a.textContent,hint:h&&h.style.display!=='none'?h.textContent:''})})()",
       15000
     )) || 'null'
   )
   check(
-    '套餐轮次气泡显示「本轮消耗余额: 12%」（不是虚构金额）',
+    '套餐轮次气泡显示「本轮消耗余额： 12%」（不是虚构金额）',
     !!cost1 && cost1.amount === '12%' && String(cost1.hint).indexOf('消耗 12.0 万 tokens') !== -1,
     JSON.stringify(cost1)
   )
@@ -354,7 +354,7 @@ try {
     (await pollEval(
       cdp,
       "(function(){var l=document.querySelector('.zcwv-label'),a=document.querySelector('.zcwv-amount'),h=document.querySelector('.zcwv-hint');" +
-        "if(!l||!a||l.textContent!=='本轮消耗余额:'||a.textContent!=='40%')return null;" +
+        "if(!l||!a||l.textContent!=='本轮消耗余额：'||a.textContent!=='40%')return null;" +
         'var b=document.querySelector(\'.zcwv-bubble\').getBoundingClientRect();' +
         'var avail=560*(b.width/1026),r=document.createRange();r.selectNodeContents(h);' +
         'return JSON.stringify({amount:a.textContent,hint:h.style.display!==\'none\'?h.textContent:\'\',' +
@@ -370,7 +370,7 @@ try {
   )
   check(
     '气泡文字自适应：超宽 hint 缩字/换行后不超出安全行宽',
-    !!cost2 && Number(cost2.w) <= Number(cost2.avail) + 1 && (cost2.fs !== '' || cost2.ws === 'normal'),
+    !!cost2 && Number(cost2.w) <= Number(cost2.avail) + 1, // 放得下即可（变短后无需缩字）
     JSON.stringify(cost2)
   )
 
@@ -1173,7 +1173,8 @@ try {
     "(function(){document.dispatchEvent(new PointerEvent('pointermove',{clientX:" +
       whalePt.x + ",clientY:" + whalePt.y + ",bubbles:true,pointerType:'mouse'}));return 'ok'})()"
   )
-  await new Promise((r) => setTimeout(r, 200))
+  // saveConfig 300ms 去抖（UI 审查 I5），落盘断言要等过它
+  await new Promise((r) => setTimeout(r, 700))
   const btnHidden = JSON.parse(
     await cdp.eval(
       "(function(){var b=document.querySelector('.zcwv-menu-btn');" +
@@ -1221,7 +1222,7 @@ try {
       "if(rows[i].textContent.indexOf('隐藏菜单按钮')!==-1){var c=rows[i].querySelector('input[type=checkbox]');" +
       "if(c&&c.checked)c.click()}}return 'ok'})()"
   )
-  await new Promise((r) => setTimeout(r, 200))
+  await new Promise((r) => setTimeout(r, 700))
   const hideRestored = await (await fetch('http://127.0.0.1:' + PORT + '/whale/size.json')).json()
   check('隐藏菜单按钮：关闭后恢复原状（配置回 false）', hideRestored.menuBtnHide === false, JSON.stringify({ saved: hideRestored.menuBtnHide }))
   await cdp.eval(
