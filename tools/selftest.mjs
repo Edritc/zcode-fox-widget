@@ -4928,6 +4928,38 @@ try {
   }
 
   {
+    // 台词包/rua 的角色边界（源码级：台词包和出厂队列都在 widget.js 的 IIFE 里，
+    // 没有模块导出；行为侧由 smoke-ui 的「大肥鱼默认队列」用例覆盖）。
+    const src = fs.readFileSync(path.join(PLUGIN_ROOT, 'lib', 'widget.js'), 'utf8')
+    const count = (needle) => (src.match(new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length
+    check(
+      '台词池：三条新鲸鱼台词在 quotes 与 pool 各一份',
+      count('dsv4.1-1017已发布，亿万鲸子必须崛起...') === 2 &&
+        count('我要吃白饭！我要吃——白——饭——！') === 2 &&
+        count('鲸鱼的斩杀线已经到达了极限') === 2,
+      JSON.stringify({
+        dsv: count('dsv4.1-1017已发布，亿万鲸子必须崛起...'),
+        rice: count('我要吃白饭！我要吃——白——饭——！'),
+        slay: count('鲸鱼的斩杀线已经到达了极限'),
+      })
+    )
+    check(
+      '台词池：哦鲸鲸只留大肥鱼，其余五个角色 ohh 为空',
+      count("ohh: ''") === 5 && count("ohh: '哦鲸鲸... '") === 1 && count("var ohh = String(pack.ohh || '').trim()") === 1,
+      JSON.stringify({ empty: count("ohh: ''"), whale: count("ohh: '哦鲸鲸... '") })
+    )
+    check(
+      'rua：角色门控只留大肥鱼/小克，出厂队列按角色增删 C 变体',
+      /roleId === 'whale' \|\| roleId === 'xiaoke'/.test(src) &&
+        /if \(allowRua\) variants\.push\(\{ w: 5, modules: \[\{ type: 'img', img: 'rua', size: 'A' \}\] \}\)/.test(src) &&
+        /variants\.splice\(ruaIdx, 1\)/.test(src) &&
+        /w: allowRua \? 45 : 50/.test(src) &&
+        /randVar\.w = 50/.test(src),
+      'allowRua/同步片段=' + [/allowRuaForRole/.test(src), /variants\.splice\(ruaIdx, 1\)/.test(src)].join(',')
+    )
+  }
+
+  {
     // 平台用量接口 URL（纯函数）：start=当日零点（秒）、end=+24h、tz=偏移秒数
     check(
       '平台用量 URL：start/end/tz 拼装正确',

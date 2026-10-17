@@ -1251,10 +1251,15 @@ try {
       6000
     )
   )
+  let queueRole = null
+  try {
+    queueRole = (await (await fetch('http://127.0.0.1:' + PORT + '/whale/size.json')).json()).roleId
+  } catch (err) {}
+  const queueAllowsRua = queueRole === 'whale' || queueRole === 'xiaoke'
   check(
-    '出厂默认队列：再次点击是加权三选一（三张带权重角标的变体卡）',
-    !!defQueue && defQueue.badges === 3 && defQueue.cards >= 4,
-    JSON.stringify(defQueue)
+    '出厂默认队列：加权变体（大肥鱼/小克三选一，其他角色二选一）',
+    !!defQueue && defQueue.badges === (queueAllowsRua ? 3 : 2) && defQueue.cards >= 4,
+    JSON.stringify({ defQueue, role: queueRole, allowRua: queueAllowsRua })
   )
   // 调色板「直接拖进下方虚线框」（审查 P3-D 回归）：落点必须是面板里那个虚线框节点本身。
   // 曾经这里重复 var 出一个游离节点当落点，wirePointerDrop 的
@@ -1552,7 +1557,15 @@ try {
     )
   }
   // ⑪c 图挂降级：gif error 置 gifFailed 后，纯图步（r=0.99 确定性命中权重 5 的
-  // 图片变体）降级成一句备胎文案，不再渲染破图
+  // 图片变体）降级成一句备胎文案，不再渲染破图。rua 只在大肥鱼/小克身上，
+  // 先切到大肥鱼再测。
+  await fetch('http://127.0.0.1:' + PORT + '/whale/size.json', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scale: 1.5, roleId: 'whale' }),
+  })
+  await cdp.send('Page.reload')
+  await new Promise((r) => setTimeout(r, 2500))
   await cdp.eval(
     'Math.random=function(){return 0.99};' +
       "(function(){var g=document.querySelector('.zcwv-gif');if(g)g.dispatchEvent(new Event('error'));return true})()"
@@ -2445,6 +2458,72 @@ try {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ v: 2, tapAdvance: true, steps: [] }),
   })
+
+  // ⑮c 出场台词与 rua 动图的角色边界：
+  //   - 「哦鲸鲸」只给大肥鱼；
+  //   - rua 动图只给大肥鱼和小克，其他角色出厂队列是「峰谷 / 随机」二选一；
+  //   - 大肥鱼池里包含新增的三条台词。
+  // 走真实编辑器：按角色重载后打开「按压泡泡设置」，读变体卡数量与随机语句表。
+  const readDefaultQueueByRole = async (roleId) => {
+    // 直接改 size.json 的角色再重载：验证「重载后按当前角色烤出厂队列」这条真实路径，
+    // 不依赖角色下拉的 UI 状态（下拉/编辑器互相遮挡，容易测成假失败）。
+    await fetch('http://127.0.0.1:' + PORT + '/whale/size.json', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scale: 1.5, roleId }),
+    })
+    await cdp.send('Page.reload')
+    await new Promise((r) => setTimeout(r, 2500))
+    await cdp.eval(
+      "(function(){var m=document.querySelector('.zcwv-menu');if(m&&m.classList.contains('zcwv-menu-open'))return true;" +
+        "var b=document.querySelector('.zcwv-menu-btn');if(b){b.click();return true}return false})()"
+    )
+    await new Promise((r) => setTimeout(r, 300))
+    await cdp.eval(
+      "(function(){var bs=document.querySelectorAll('button');for(var i=0;i<bs.length;i++){" +
+        "if(bs[i].textContent==='按压泡泡设置'){bs[i].click();return true}}return false})()"
+    )
+    const info = JSON.parse(
+      (await pollEval(
+        cdp,
+        "(function(){var b=document.querySelectorAll('.zcwv-bq-wbadge');var c=document.querySelectorAll('.zcwv-bq-cols .zcwv-bq-card');" +
+          'return b.length?JSON.stringify({badges:b.length,cards:c.length}):null})()',
+        8000
+      )) || 'null'
+    )
+    let lines = []
+    if (info && info.badges >= 2) {
+      await cdp.eval(
+        "(function(){var cs=document.querySelectorAll('.zcwv-bq-cols .zcwv-bq-card');if(cs.length>1){cs[1].click();return true}return false})()"
+      )
+      await new Promise((r) => setTimeout(r, 400))
+      await cdp.eval(
+        "(function(){var cs=document.querySelectorAll('.zcwv-bq-chip');for(var i=0;i<cs.length;i++){" +
+          "var b=cs[i].querySelector('button');if(b&&b.textContent==='✎'){b.click();return true}}return false})()"
+      )
+      lines = JSON.parse(
+        (await pollEval(
+          cdp,
+          "(function(){var xs=document.querySelectorAll('.zcwv-bq-cin');if(!xs.length)return null;return JSON.stringify([].map.call(xs,function(x){return x.value}))})()",
+          8000
+        )) || '[]'
+      )
+    }
+    return { info, lines }
+  }
+  const whaleQ = await readDefaultQueueByRole('whale')
+  check(
+    '台词边界：大肥鱼保留三变体（含 rua）、有哦鲸鲸，且三条新台词进入池子',
+    !!whaleQ.info &&
+      whaleQ.info.badges === 3 &&
+      whaleQ.lines.some((t) => t.indexOf('哦鲸鲸') !== -1) &&
+      whaleQ.lines.some((t) => t.indexOf('dsv4.1-1017') !== -1) &&
+      whaleQ.lines.some((t) => t.indexOf('我要吃白饭') !== -1) &&
+      whaleQ.lines.some((t) => t.indexOf('斩杀线') !== -1),
+    JSON.stringify({ info: whaleQ.info, lines: whaleQ.lines.slice(-6) })
+  )
+  await cdp.send('Page.reload')
+  await new Promise((r) => setTimeout(r, 1500))
 
   // ⑬ 版本更新面板 + 新版本提醒（v1.11.0 引入）：用 fetch 桩喂「有新版本」状态，
   //    走真实交互（菜单在，点按钮开面板、点跳过、点返回）。桩随 reload 生效，
