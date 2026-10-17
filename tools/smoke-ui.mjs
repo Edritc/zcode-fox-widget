@@ -1744,6 +1744,18 @@ try {
     !!rankAmount && !!rankTokens && rankAmount.first !== rankTokens.first,
     JSON.stringify({ amount: rankAmount && rankAmount.first, tokens: rankTokens && rankTokens.first })
   )
+  const rankBtnGap = JSON.parse(
+    (await cdp.eval(
+      "(function(){var bs=document.querySelectorAll('.zcwv-panel .zcwv-panel-close');var a=null,b=null;" +
+        "for(var i=0;i<bs.length;i++){var t=bs[i].textContent;if(t==='按当天'||t==='按7天')a=bs[i];if(t==='按金额'||t==='按 Token')b=bs[i]}" +
+        'if(!a||!b)return null;var ra=a.getBoundingClientRect(),rb=b.getBoundingClientRect();return JSON.stringify({gap:Math.round(rb.left-ra.right)})})()'
+    )) || 'null'
+  )
+  check(
+    '用量记录：范围/口径两个按钮并排（不再被 space-between 拉到两端）',
+    !!rankBtnGap && rankBtnGap.gap >= 0 && rankBtnGap.gap <= 12,
+    JSON.stringify(rankBtnGap)
+  )
   // ⑮a 模型排名范围切换：按当天 ↔ 按 7 天。当前口径仍是「按 Token」，
   // 3 天前的 kimi-k3（9M tokens）应只在 7 天榜里出现并排第一；切回当天后
   // 又回到当天的 token 第一（GLM-4.7-Flash）。
