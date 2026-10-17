@@ -138,42 +138,43 @@
 
 ### 步骤
 
-1. **把仓库克隆到一个固定位置**（不要放在会被清理的临时目录）：
+1. **选安装来源（二选一）**：
 
-   ```bash
-   git clone https://github.com/pigeon189/zcode-fox-widget.git ~/.zcode/plugins/zcode-fox-widget
-   ```
+   **A. 直接填 GitHub 源（推荐，最省事）**
 
-   后面的命令都假设你在仓库根目录下执行。
+   设置 → 插件管理 → **发现** → 右上角 `+` → 在「市场源」里填 `pigeon189/zcode-fox-widget`。
+   宿主认 `owner/repo` 形态，会自己去拉仓库；拉的是**默认分支 `main`**，正是这条产品线，所以不用填分支。
+   之后有新版本时，对这个市场点「重新抓取」就等于升级。不需要先克隆。
 
-2. **注册为本地插件市场**，二选一：
+   **B. 克隆到本地目录**（想改代码、或想跟某个本地工作副本同步时用）
 
-   > **最省事的一条：直接填 GitHub 源**（不用先克隆）。设置 → 插件管理 → **发现** → 右上角 `+`
-   > → 在「市场源」里填 `pigeon189/zcode-fox-widget`（宿主认 `owner/repo` 形态，自己去拉仓库）
-   > —— 拉的是**默认分支 `main`**，正是这条产品线，所以不用填分支。之后有新版本时，对这个市场
-   > 点「重新抓取」就等于升级。
-   > 想改代码、或想跟某个本地工作副本同步时，再走下面的本地目录方式。
+   - 把仓库克隆到一个固定位置（不要放在会被清理的临时目录）：
 
-   **方式 A：客户端界面**
-   设置 → 插件管理 → **发现** → 右上角 `+` → 选择**本地目录**，指向仓库根目录（内含 `marketplace.json`）。
+     ```bash
+     git clone https://github.com/pigeon189/zcode-fox-widget.git ~/.zcode/plugins/zcode-fox-widget
+     ```
 
-   **方式 B：手工写配置**
-   在 `~/.zcode/cli/plugins/known_marketplaces.json` 的 `marketplaces` 数组里追加：
+     后面的命令都假设你在仓库根目录下执行。
 
-   ```json
-   {
-     "id": "zcode-fox-local",
-     "source": { "source": "directory", "path": "<仓库绝对路径>" },
-     "name": "zcode-fox-local",
-     "description": "Local marketplace for ZCode狐娘小挂件 (zcode-fox-widget).",
-     "pluginCount": 1
-   }
-   ```
+   - 注册为本地插件市场，二选一：
 
-   > 想把这份插件分享给别人从 GitHub 安装，把 `source` 换成仓库形式即可：
-   > `"source": { "source": "github", "repo": "pigeon189/zcode-fox-widget" }`
+     **客户端界面**
+     设置 → 插件管理 → **发现** → 右上角 `+` → 选择**本地目录**，指向仓库根目录（内含 `marketplace.json`）。
 
-3. **安装并启用插件**：在插件管理里安装 `zcode-fox-widget`。手工方式则在 `~/.zcode/cli/config.json` 里写：
+     **手工写配置**
+     在 `~/.zcode/cli/plugins/known_marketplaces.json` 的 `marketplaces` 数组里追加：
+
+     ```json
+     {
+       "id": "zcode-fox-local",
+       "source": { "source": "directory", "path": "<仓库绝对路径>" },
+       "name": "zcode-fox-local",
+       "description": "Local marketplace for ZCode狐娘小挂件 (zcode-fox-widget).",
+       "pluginCount": 1
+     }
+     ```
+
+2. **安装并启用插件**：在插件管理里安装 `zcode-fox-widget`。手工方式则在 `~/.zcode/cli/config.json` 里写：
 
    ```json
    {
@@ -185,9 +186,9 @@
    }
    ```
 
-4. **重启会话**（或重开 ZCode），让 MCP 服务与 hook 生效。
+3. **重启会话**（或重开 ZCode），让 MCP 服务与 hook 生效。
 
-5. **想用桌面浮层的话，再装一次它的运行时**（下载约 150MB，一次性；只装到数据目录，不进仓库，解压后占用约 370MB）：
+4. **想用桌面浮层的话，再装一次它的运行时**（下载约 150MB，一次性；只装到数据目录，不进仓库，解压后占用约 370MB）：
 
    ```bash
    node lib/cli.mjs desktop install
@@ -210,9 +211,9 @@
 
 不想被提醒可以点「跳过此版本」（记在 `widget-state.json` 的 `updateSkip`，出现更新的版本时自动失效）；完全不想有任何出站检查，把环境变量 `WHALE_DISABLE_UPDATE_CHECK=1` 传给服务进程即可。
 
-**方式二：手动拉取**
+**方式二：手动拉取（本地目录安装）**
 
-插件的安装来源就是这份克隆的仓库，更新 = 拉新代码 + 让客户端重抓一遍：
+如果安装时选的是本地目录，更新 = 拉新代码 + 让客户端重抓一遍；GitHub 源安装则直接在市场里点「重新抓取」，不需要 `git pull`。
 
 1. 在仓库目录里 `git pull` 拿到最新版（每次发版 `.zcode-plugin/plugin.json` 与 `marketplace.json` 的版本号都会同步递增，这是客户端判断「有新版本」的依据）。
 2. 设置 → 插件管理 → 对 `zcode-fox-local` 市场重新抓取（或移除后重新添加），新版本会装进独立的缓存目录（`cache/zcode-fox-local/zcode-fox-widget/<版本>/`）。
