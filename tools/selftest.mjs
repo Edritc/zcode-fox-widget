@@ -2575,7 +2575,28 @@ try {
     byId['zcode-plan'] ? 'available=' + byId['zcode-plan'].available : '缺失'
   )
 
-  // 用量记录：今日按模型聚合与逐条事件
+  // 用量记录：今天按模型聚合与逐条事件。先补一轮 2 天前的历史用量，用来区分
+  // 「按当天」与「按 7 天」两个模型榜：old-model 只在 7 天榜里出现，且 token
+  // 足够大，必然会占据 7 天 token 榜首位。
+  const atOld = Date.now() - 2 * 86400_000
+  insertTurn(
+    'sess_selftest',
+    'turn_week_old',
+    { input_tokens: 4_000_000, output_tokens: 1_000_000, computed_total_tokens: 5_000_000 },
+    atOld,
+    [
+      {
+        model: 'old-model',
+        providerId: 'deepseek-test',
+        usage: { input_tokens: 4_000_000, output_tokens: 1_000_000, computed_total_tokens: 5_000_000 },
+      },
+      {
+        model: 'deepseek-flash',
+        providerId: 'deepseek-test',
+        usage: { input_tokens: 100_000, output_tokens: 50_000, computed_total_tokens: 150_000 },
+      },
+    ]
+  )
   const usage = await getJson(port, '/whale/usage-records.json')
   const usageModels = usage && usage.ok ? usage.today.models.map((m) => m.model) : []
   check(
@@ -2616,6 +2637,45 @@ try {
       '用量记录：厂商金额不含套餐（byVendor.GLM 金额为 0、tokens 在）',
       usage.today.byVendor && usage.today.byVendor.GLM && usage.today.byVendor.GLM.amount === 0 && usage.today.byVendor.GLM.tokens > 0,
       JSON.stringify((usage.today.byVendor || {}).GLM || null)
+    )
+    // 7 天模型榜：服务端把 range × 口径 的四个榜都排好，页面只换数据源。
+    const weekModels = (usage.days7 && usage.days7.models) || []
+    const weekTokens = (usage.days7 && usage.days7.modelsByTokens) || []
+    const todayNames = (usage.today.models || []).map((m) => m.model)
+    const oldWeek = weekModels.find((m) => m.model === 'old-model')
+    check(
+      '用量记录：7 天模型榜包含更早的模型，当天榜不包含',
+      !!oldWeek && todayNames.indexOf('old-model') === -1,
+      JSON.stringify({ week: weekModels.map((m) => m.model), today: todayNames })
+    )
+    check(
+      '用量记录：7 天 token 榜把更早的大 token 模型排到首位',
+      weekTokens.length > 0 && weekTokens[0].model === 'old-model',
+      JSON.stringify(weekTokens.slice(0, 3).map((m) => ({ model: m.model, tokens: m.tokens })))
+    )
+    const todayDeep = (usage.today.models || []).find((m) => m.model === 'deepseek-flash')
+    const weekDeep = weekModels.find((m) => m.model === 'deepseek-flash')
+    check(
+      '用量记录：7 天同一模型的 token 大于当天（聚合了更早的用量）',
+      !!weekDeep && !!todayDeep && weekDeep.tokens > todayDeep.tokens,
+      JSON.stringify({ week: weekDeep && weekDeep.tokens, today: todayDeep && todayDeep.tokens })
+    )
+    const rankOfWeek = (m) => Number(m.market) || Number(m.amount) || 0
+    const descByAmount = weekModels.every((m, i) => i === 0 || rankOfWeek(weekModels[i - 1]) >= rankOfWeek(m))
+    const descByTokens = weekTokens.every((m, i) => i === 0 || Number(weekTokens[i - 1].tokens) >= Number(m.tokens))
+    check(
+      '用量记录：7 天两个榜各自降序，rankTotal 与模型榜同源（≥ 真金白银）',
+      weekModels.length > 0 &&
+        weekTokens.length > 0 &&
+        descByAmount &&
+        descByTokens &&
+        Number(usage.days7.rankTotal) >= Number(usage.days7.total),
+      JSON.stringify({
+        amt: weekModels.map(rankOfWeek),
+        tok: weekTokens.map((m) => m.tokens),
+        rankTotal: usage.days7.rankTotal,
+        total: usage.days7.total,
+      })
     )
   }
   // 明细按轮聚合：一轮 = session/turn 相同的全部模型行之和

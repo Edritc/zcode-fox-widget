@@ -120,8 +120,8 @@ db.exec(`
     cache_read_input_tokens integer not null default 0, computed_total_tokens integer not null default 0
   );
 `)
-function insertTurn(turnId, model, providerId, input, output) {
-  const now = Date.now()
+function insertTurn(turnId, model, providerId, input, output, at) {
+  const now = at || Date.now()
   db.prepare(
     `INSERT INTO turn_usage (session_id, turn_id, status, started_at, completed_at, input_tokens, output_tokens, computed_total_tokens)
      VALUES ('sess_smoke', ?, 'completed', ?, ?, ?, ?, ?)`
@@ -1685,6 +1685,9 @@ try {
   // 先补一轮「小而贵」的模型，让两个榜的头部必然不同：GLM-4.7-Flash 是套餐
   // （金额 0、token 很大）→ token 榜第一；deepseek-flash 按量计价（金额 > 0）
   // → 金额榜第一。
+  // 先补一轮 3 天前的历史用量（kimi-k3 9M tokens），用来区分「按当天 / 按 7 天」：
+  // 它只会在 7 天榜里出现，并占据 7 天 token 榜首位。
+  insertTurn('turn_week', 'kimi-k3', 'moonshot-kimi', 9_000_000, 1_000_000, Date.now() - 3 * 86400000)
   insertTurn('turn_rank', 'deepseek-flash', 'deepseek-test', 2000, 1000)
   await cdp.send('Page.reload')
   await new Promise((r) => setTimeout(r, 3000))
@@ -1727,6 +1730,43 @@ try {
     '用量记录：两个口径的第一名不同（说明真的换了排序）',
     !!rankAmount && !!rankTokens && rankAmount.first !== rankTokens.first,
     JSON.stringify({ amount: rankAmount && rankAmount.first, tokens: rankTokens && rankTokens.first })
+  )
+  // ⑮a 模型排名范围切换：按当天 ↔ 按 7 天。当前口径仍是「按 Token」，
+  // 3 天前的 kimi-k3（9M tokens）应只在 7 天榜里出现并排第一；切回当天后
+  // 又回到当天的 token 第一（GLM-4.7-Flash）。
+  await cdp.eval(
+    "(function(){var bs=document.querySelectorAll('.zcwv-panel .zcwv-panel-close');for(var i=0;i<bs.length;i++){" +
+      "var t=bs[i].textContent;if(t==='按当天'||t==='按7天'){bs[i].click();return true}}return false})()"
+  )
+  const SCOPE_PROBE =
+    "(function(){var bs=document.querySelectorAll('.zcwv-panel .zcwv-panel-close');var scope=null;" +
+    "for(var i=0;i<bs.length;i++){var t=bs[i].textContent;if(t==='按当天'||t==='按7天')scope=t}" +
+    "if(scope!=='按7天')return null;var rows=document.querySelectorAll('.zcwv-panel .zcwv-row'),first='';" +
+    "for(var j=0;j<rows.length;j++){var c=rows[j].firstChild,txt=c?c.textContent:'';" +
+    "if(/^\\d+\\. /.test(txt)){first=txt;break}}" +
+    'return JSON.stringify({scope:scope,first:first})})()'
+  const scopeWeek = JSON.parse((await pollEval(cdp, SCOPE_PROBE, 8000)) || 'null')
+  check(
+    '用量记录：切到按 7 天后，3 天前的 kimi-k3 进入 token 榜并排第一',
+    !!scopeWeek && scopeWeek.scope === '按7天' && scopeWeek.first.indexOf('kimi-k3') !== -1,
+    JSON.stringify(scopeWeek)
+  )
+  await cdp.eval(
+    "(function(){var bs=document.querySelectorAll('.zcwv-panel .zcwv-panel-close');for(var i=0;i<bs.length;i++){" +
+      "var t=bs[i].textContent;if(t==='按当天'||t==='按7天'){bs[i].click();return true}}return false})()"
+  )
+  const SCOPE_BACK_PROBE =
+    "(function(){var bs=document.querySelectorAll('.zcwv-panel .zcwv-panel-close');var scope=null;" +
+    "for(var i=0;i<bs.length;i++){var t=bs[i].textContent;if(t==='按当天'||t==='按7天')scope=t}" +
+    "if(scope!=='按当天')return null;var rows=document.querySelectorAll('.zcwv-panel .zcwv-row'),first='';" +
+    "for(var j=0;j<rows.length;j++){var c=rows[j].firstChild,txt=c?c.textContent:'';" +
+    "if(/^\\d+\\. /.test(txt)){first=txt;break}}" +
+    'return JSON.stringify({scope:scope,first:first})})()'
+  const scopeToday = JSON.parse((await pollEval(cdp, SCOPE_BACK_PROBE, 8000)) || 'null')
+  check(
+    '用量记录：切回按当天后，kimi-k3 消失、第一位回到当天的 GLM-4.7-Flash',
+    !!scopeToday && scopeToday.scope === '按当天' && scopeToday.first.indexOf('GLM-4.7-Flash') !== -1,
+    JSON.stringify(scopeToday)
   )
   // ⑮b 对账行（v1.7.0）：今日块里并排放「本机口径 ↔ 账号口径」，充值等调整
   // 用菜单里的余额校正记一笔后两套账就对得上。fixture 里有 deepseek-flash 行，
