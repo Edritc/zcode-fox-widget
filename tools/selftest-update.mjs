@@ -117,6 +117,23 @@ function streamRes(chunks, status = 200, headers = {}) {
       U.buildTarballUrls('1.10.0').some((e) => e.name === 'jsdelivr' && e.url === null) &&
       U.buildVersionEndpoints().some((e) => e.url.includes('ghproxy.net'))
   )
+
+  // 两条产品线共用仓库：github-api 那一源必须只认本线 v*。此前用 releases/latest，
+  // workbuddy 线的 wb-v* 后发就会顶掉标记，本线这一源恒失败（2026-10-18 实测
+  // latest = wb-v1.3.1）。用一份混排的假响应盯住判据。
+  {
+    const pick = U.buildVersionEndpoints().find((e) => e.name === 'github-api').pick
+    const mixed = JSON.stringify([
+      { tag_name: 'wb-v1.3.1' },
+      { tag_name: 'v1.15.1' },
+      { tag_name: 'v1.9.0-preview' },
+      { tag_name: 'v1.16.0', draft: true },
+      { tag_name: 'v1.15.0' },
+    ])
+    const got = pick(mixed)
+    check('版本探测：github-api 只认本线 v*，忽略 wb-v* 与 draft', got === '1.15.1', String(got))
+    check('版本探测：非数组响应返回 null（不抛异常）', pick('{"tag_name":"v1.2.3"}') === null)
+  }
 }
 
 // ---------- 3. tar.gz 解包 ----------

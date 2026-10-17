@@ -52,8 +52,8 @@
 - **tag 前缀即产品线**：`main` 用 `vX.Y.Z`，`workbuddy` 用 `wb-vX.Y.Z`。两条线的更新内核都按各自前缀做探测与下载，改动任一侧的前缀口径等于改发版契约。
 - **版本号提交必须先于 tag**：两线的更新内核都有「包内清单的版本号 == 目标版本」这道落盘前校验，tag 若打在版本号未改的提交上，之后所有下载包都会被判「版本不符」拒装。
 - **每个 tag 一份自己线的树**：客户端自动附的源码包天然是该 tag 对应提交的树，两线的更新内核下载的正是它。**不要做双端合并包**——更新内核的清理步骤是「删掉上一版清单里有、这一版没有的文件」，包里混入另一条线的文件，会让它在下一次更新时被当旧文件删掉。若另附人工安装包，按线各附一个、命名带线名与版本（如 `fox-widget-1.0.0.zip`），包内是插件根（含各自的清单目录）。
-- **`Latest` 徽章留给 `v*` 那条线**：WorkBuddy 线的 release 用 `gh release create … --latest=false`。它的探测本来就是「枚举 releases 再挑 `wb-v*`」，不依赖徽章；而 ZCode 线的探测走 `/releases/latest`，徽章被 `wb-v*` 抢走会让这条探测源失效。
-- **pre-release 的可见性两线不同**：ZCode 线的 `/releases/latest` 会被 GitHub 跳过（prerelease 与 draft 都不返回），所以 pre-release 不会自动送达 ZCode 用户；WorkBuddy 线是枚举 releases + 前缀过滤，**会**送达已装用户。发 pre-release 前先确认这是不是想要的。
+- **`Latest` 徽章留给 `v*` 那条线**：WorkBuddy 线的 release 用 `gh release create … --latest=false`，否则仓库首页与 `/releases/latest` 会指向 wb 版本（2026-10-18 发生过，徽章落到 `wb-v1.3.1`）。两条线的探测都**不依赖**徽章（各自枚举 releases 再按前缀取最高），错位只影响观感与外部工具，但会让人以为 WB 的版本是「最新」。
+- **pre-release 的可见性两线不同**：ZCode 线的 github-api 源显式跳过 prerelease 与 draft，所以 pre-release 不会自动送达；WorkBuddy 线只按前缀过滤，**会**送达已装用户。发 pre-release 前先确认这是不是想要的。
 
 ### 版本说明的写法（2026-10-18 统一）
 
