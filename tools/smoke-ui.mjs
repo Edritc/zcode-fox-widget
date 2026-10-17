@@ -380,7 +380,7 @@ try {
     (await pollEval(
       cdp,
       "(function(){var l=document.querySelector('.zcwv-label'),a=document.querySelector('.zcwv-amount');" +
-        "if(!l||!a||l.textContent!=='本轮 tokens:')return null;" +
+        "if(!l||!a||l.textContent!=='本轮 tokens：')return null;" +
         "return JSON.stringify({amount:a.textContent})})()",
       15000
     )) || 'null'
@@ -1635,9 +1635,9 @@ try {
     )
   )
   check(
-    'Kimi 余额主显示（v1.8.9 重构）：label「Kimi 余额」、amount ¥ 8.51、hint 今日已用 ¥ 0.28',
-    !!kimiView && kimiView.label === 'Kimi 余额' && kimiView.amount === '¥ 8.51' &&
-      typeof kimiView.hint === 'string' && kimiView.hint.indexOf('今日已用 ¥ 0.28') !== -1,
+    'Kimi 余额主显示（v1.8.9 重构）：label「Kimi 余额」、amount ¥ 8.51、hint 今日已用 ¥0.28',
+    !!kimiView && kimiView.label === 'Kimi 余额' && kimiView.amount === '¥8.51' &&
+      typeof kimiView.hint === 'string' && kimiView.hint.indexOf('今日已用 ¥0.28') !== -1,
     JSON.stringify(kimiView)
   )
   if (stubVendor && stubVendor.identifier) await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: stubVendor.identifier })
@@ -1990,7 +1990,7 @@ try {
     !!relayBalanceObj &&
       relayBalanceObj.qcard === false &&
       relayBalanceObj.label === 'PackyCode 余额' &&
-      relayBalanceObj.amount === '12.34 USD' &&
+      relayBalanceObj.amount === '$12.34' &&
       relayBalanceObj.hint.indexOf('已用 $3.21') !== -1 &&
       relayBalanceObj.hint.indexOf('总额 $15.55') !== -1,
     JSON.stringify(relayBalanceObj)
@@ -2412,7 +2412,7 @@ try {
   const pickedWhale = await pickRoleByName('大肥鱼')
   const darkWhale = await readRoleInk()
   check(
-    '深色档一律不跟角色（菜单 / 二级页面 / 文本框保持主题色，拖动条回到原生绘制）',
+    '深色档一律不跟角色，且控件与浅色档同构（自绘滑块/复选框，白勾由深色 token 兜底）',
     pickedWhale === 'ok' &&
       !!darkXiaoke &&
       darkXiaoke.dark === true &&
@@ -2426,9 +2426,11 @@ try {
       darkXiaoke.checkAccent === darkWhale.checkAccent &&
       darkXiaoke.dimColor === darkWhale.dimColor &&
       darkXiaoke.rangeAccent === darkWhale.rangeAccent &&
-      darkXiaoke.rangeAppearance === 'auto' &&
-      darkWhale.rangeAppearance === 'auto' &&
-      darkXiaoke.checkAppearance === 'auto',
+      darkXiaoke.rangeAppearance === 'none' &&
+      darkWhale.rangeAppearance === 'none' &&
+      darkXiaoke.checkAppearance === 'none' &&
+      darkXiaoke.checkMark === '#fff' &&
+      darkWhale.checkMark === '#fff',
     JSON.stringify({ xiaoke: darkXiaoke, whale: darkWhale })
   )
   await setThemeAndReload('light')
