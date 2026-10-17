@@ -106,7 +106,7 @@ function writeUsage(used, size) {
 }
 // 一轮 = 一条模型调用（同一 conversationRequestId）。credit 写进宿主 credit_json，
 // rawUsage 用 WorkBuddy 口径（prompt_tokens 含缓存命中、completion 含思考）。
-function appendTurn(turnId, model, input, output, credit) {
+function appendTurn(turnId, model, input, output, credit, at) {
   const rawUsage = {
     prompt_tokens: input,
     completion_tokens: output,
@@ -118,14 +118,14 @@ function appendTurn(turnId, model, input, output, credit) {
     credit,
   }
   const line = JSON.stringify({
-    timestamp: Date.now(),
+    timestamp: at || Date.now(),
     type: 'function_call',
     providerData: { conversationRequestId: turnId, model, requestModelId: model, requestModelName: model, rawUsage },
   })
   fs.appendFileSync(transcriptFile, line + '\n')
 }
-function insertTurn(turnId, model, input, output, credit) {
-  appendTurn(turnId, model, input, output, credit)
+function insertTurn(turnId, model, input, output, credit, at) {
+  appendTurn(turnId, model, input, output, credit, at)
   hostCredits[turnId] = credit
   writeUsage(50_000, 200_000)
 }
@@ -1676,6 +1676,9 @@ try {
   // 积分榜第一；kimi-k3 积分低、token 巨大 → token 榜第一。
   insertTurn('turn_rank_amt', 'qwen3-max', 900, 100, 200)
   insertTurn('turn_rank_tok', 'kimi-k3', 800_000, 100_000, 1)
+  // 3 天前的历史轮次：old-model 只在 7 天榜里出现，token 足够大，必然占据
+  // 7 天 token 榜首位（当天 token 第一仍是 kimi-k3）。
+  insertTurn('turn_week', 'old-model', 9_000_000, 1_000_000, 0, Date.now() - 3 * 86400000)
   await cdp.send('Page.reload')
   await new Promise((r) => setTimeout(r, 3000))
   await cdp.eval(
@@ -1717,6 +1720,43 @@ try {
     '用量记录：两个口径的第一名不同（说明真的换了排序）',
     !!rankAmount && !!rankTokens && rankAmount.first !== rankTokens.first,
     JSON.stringify({ amount: rankAmount && rankAmount.first, tokens: rankTokens && rankTokens.first })
+  )
+  // ⑮a 模型排名范围切换：按当天 ↔ 按 7 天。当前口径仍是「按 Token」，
+  // 3 天前的 old-model（10M tokens）应只在 7 天榜里出现并排第一；切回当天后
+  // 又回到当天的 token 第一（kimi-k3）。
+  await cdp.eval(
+    "(function(){var bs=document.querySelectorAll('.zcwv-panel .zcwv-panel-close');for(var i=0;i<bs.length;i++){" +
+      "var t=bs[i].textContent;if(t==='按当天'||t==='按7天'){bs[i].click();return true}}return false})()"
+  )
+  const SCOPE_PROBE =
+    "(function(){var bs=document.querySelectorAll('.zcwv-panel .zcwv-panel-close');var scope=null;" +
+    "for(var i=0;i<bs.length;i++){var t=bs[i].textContent;if(t==='按当天'||t==='按7天')scope=t}" +
+    "if(scope!=='按7天')return null;var rows=document.querySelectorAll('.zcwv-panel .zcwv-row'),first='';" +
+    "for(var j=0;j<rows.length;j++){var c=rows[j].firstChild,txt=c?c.textContent:'';" +
+    "if(/^\\d+\\. /.test(txt)){first=txt;break}}" +
+    'return JSON.stringify({scope:scope,first:first})})()'
+  const scopeWeek = JSON.parse((await pollEval(cdp, SCOPE_PROBE, 8000)) || 'null')
+  check(
+    '用量记录：切到按 7 天后，3 天前的 old-model 进入 token 榜并排第一',
+    !!scopeWeek && scopeWeek.scope === '按7天' && scopeWeek.first.indexOf('old-model') !== -1,
+    JSON.stringify(scopeWeek)
+  )
+  await cdp.eval(
+    "(function(){var bs=document.querySelectorAll('.zcwv-panel .zcwv-panel-close');for(var i=0;i<bs.length;i++){" +
+      "var t=bs[i].textContent;if(t==='按当天'||t==='按7天'){bs[i].click();return true}}return false})()"
+  )
+  const SCOPE_BACK_PROBE =
+    "(function(){var bs=document.querySelectorAll('.zcwv-panel .zcwv-panel-close');var scope=null;" +
+    "for(var i=0;i<bs.length;i++){var t=bs[i].textContent;if(t==='按当天'||t==='按7天')scope=t}" +
+    "if(scope!=='按当天')return null;var rows=document.querySelectorAll('.zcwv-panel .zcwv-row'),first='';" +
+    "for(var j=0;j<rows.length;j++){var c=rows[j].firstChild,txt=c?c.textContent:'';" +
+    "if(/^\\d+\\. /.test(txt)){first=txt;break}}" +
+    'return JSON.stringify({scope:scope,first:first})})()'
+  const scopeToday = JSON.parse((await pollEval(cdp, SCOPE_BACK_PROBE, 8000)) || 'null')
+  check(
+    '用量记录：切回按当天后，old-model 消失、第一位回到当天的 kimi-k3',
+    !!scopeToday && scopeToday.scope === '按当天' && scopeToday.first.indexOf('kimi-k3') !== -1,
+    JSON.stringify(scopeToday)
   )
   // ⑮b 用量记录主口径（WorkBuddy）：面板今日块标题为「今日积分」（订阅积分口径）。
   // ZCode 的「本机 ¥ ↔ 账号」对账行在 WorkBuddy 已不适用（余额卡对账只在配了厂商
