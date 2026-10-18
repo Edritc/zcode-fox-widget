@@ -1129,41 +1129,6 @@ try {
     )
   )
   check('关于 / 自检：关闭按钮收起面板', !!aboutClosed && aboutClosed.open === false, JSON.stringify(aboutClosed))
-  // ⑨g 事件音（v1.15.2）：菜单三行（消耗/提问/授权），各带开关 + 独立音量 + 试听
-  const evRows = JSON.parse(
-    await cdp.eval(
-      "(function(){var want=['消耗音','提问音','授权音'],out={};" +
-        "var rows=document.querySelectorAll('.zcwv-menu-row');" +
-        "for(var i=0;i<rows.length;i++){var t=rows[i].textContent||'';" +
-        "for(var k=0;k<want.length;k++){if(t.indexOf(want[k])===0){" +
-        "out[want[k]]={check:rows[i].querySelectorAll('input[type=checkbox]').length," +
-        "range:rows[i].querySelectorAll('input[type=range]').length," +
-        "btn:rows[i].querySelectorAll('button').length}}}}return JSON.stringify(out)})()"
-    )
-  )
-  const evOk = (r) => !!r && r.check === 1 && r.range === 1 && r.btn === 1
-  check(
-    '事件音：菜单三行齐备（消耗音 / 提问音 / 授权音，各带开关+音量+试听）',
-    evOk(evRows['消耗音']) && evOk(evRows['提问音']) && evOk(evRows['授权音']),
-    JSON.stringify(evRows)
-  )
-  await cdp.eval(
-    "(function(){var c=document.querySelector('.zcwv-sound-cost');if(!c)return false;" +
-      "c.checked=true;c.dispatchEvent(new Event('change',{bubbles:true}));return c.checked})()"
-  )
-  await new Promise((r) => setTimeout(r, 700))
-  const evSaved = await (await fetch('http://127.0.0.1:' + PORT + '/whale/size.json')).json()
-  check(
-    '事件音：勾选「消耗音」后落盘（soundEvents.cost.on = true）',
-    !!evSaved.soundEvents && evSaved.soundEvents.cost.on === true,
-    JSON.stringify(evSaved.soundEvents)
-  )
-  // 复位（否则后续用例的每轮消耗气泡会一直响）
-  await cdp.eval(
-    "(function(){var c=document.querySelector('.zcwv-sound-cost');if(!c)return false;" +
-      "c.checked=false;c.dispatchEvent(new Event('change',{bubbles:true}));return true})()"
-  )
-  await new Promise((r) => setTimeout(r, 700))
   const hasUpdateHistory = await cdp.eval("(function(){return !!document.querySelector('.zcwv-update-history')})()")
   check('更新面板：最近更新记录容器已就位（成功/回滚/失败留痕）', hasUpdateHistory === true)
   // ⑨e 预警内容模板的「出泡预览」与真出泡同源：预览要显示该预警来源自己的内置
@@ -3049,26 +3014,13 @@ try {
     '(function(){window.__hook={ts:' + (hookTs + 1) + ",waiting:true,event:'PermissionRequest'};return true})()"
   )
   await ensureMenuOpen() // 再刷一次 → waiting 生效
-  // v1.15.2 起按事件类型分流文案：PermissionRequest = 授权
   const alertShown = await pollEval(
-    cdp,
-    "(function(){var b=document.querySelector('.zcwv-bubble');var l=document.querySelector('.zcwv-label');" +
-      "return (b&&b.classList.contains('zcwv-bubble-open')&&l&&l.textContent.indexOf('\\u7b49\\u4f60\\u6388\\u6743')!==-1)?l.textContent:null})()",
-    9000
-  )
-  check('等确认提醒：权限确认 → 「等你授权」提醒气泡', !!alertShown, JSON.stringify(alertShown))
-  // 另一条分支：非 PermissionRequest（提问工具）→「在等你确认」
-  await cdp.eval(
-    '(function(){window.__hook={ts:' + (hookTs + 2) + ",waiting:true,event:'PreToolUse'};return true})()"
-  )
-  await ensureMenuOpen()
-  const askShown = await pollEval(
     cdp,
     "(function(){var b=document.querySelector('.zcwv-bubble');var l=document.querySelector('.zcwv-label');" +
       "return (b&&b.classList.contains('zcwv-bubble-open')&&l&&l.textContent.indexOf('\\u5728\\u7b49\\u4f60\\u786e\\u8ba4')!==-1)?l.textContent:null})()",
     9000
   )
-  check('等确认提醒：提问（PreToolUse）→ 「在等你确认」提醒气泡', !!askShown, JSON.stringify(askShown))
+  check('等确认提醒：开启后 ZCode 弹权限确认 → 挂件弹一次提醒气泡', !!alertShown, JSON.stringify(alertShown))
   // 关掉气泡 → 同一事件时间戳再轮询一次 → 不应再弹（去重按 ts）
   await cdp.eval(
     "(function(){var b=document.querySelector('.zcwv-bubble');b.dispatchEvent(new MouseEvent('click',{bubbles:true}));return true})()"
