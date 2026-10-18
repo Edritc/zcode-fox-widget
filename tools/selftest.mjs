@@ -805,7 +805,10 @@ function check(name, ok, detail) {
     const dbReady = '[2026-10-01 10:00:32.708] [info] [pid:1] [main] [database-startup] terminal {"attemptId":"x","status":"ready","durationMs":4967}\n'
     const taskList = '[2026-10-01 10:00:33.305] [info] [x] window-controller.listTaskList OK (20.8ms)\n'
     const s1 = evaluateBootState(boot + domReady)
-    check('启动就绪判定：主窗口刚建好 = 加载中', s1.state === 'loading' && s1.bootAt === 1790820026874, JSON.stringify(s1))
+    // 期望值必须按**本地时区**算：ui-ready 的 parseStamp 用的是本地时间分量，
+    // 写死 +08:00 的 epoch 在 UTC 的 CI 上必挂（2026-10-18 CI 实测）。
+    const bootAtLocal = new Date(2026, 9, 1, 10, 0, 26, 874).getTime()
+    check('启动就绪判定：主窗口刚建好 = 加载中', s1.state === 'loading' && s1.bootAt === bootAtLocal, JSON.stringify(s1))
     const s2 = evaluateBootState(boot + domReady + dbReady)
     check('启动就绪判定：数据库 ready 后放行', s2.state === 'ready', JSON.stringify(s2))
     const s3 = evaluateBootState(boot + domReady + taskList)
