@@ -147,6 +147,7 @@ echo 'sk-xxxxxxxx' | node lib/cli.mjs key
 |---|---|
 | 界面上看不到挂件 | ZCode 没有界面注入点，必须走桌面浮层：`desktop install` 后 `window start` |
 | 打开 ZCode 没自动出现 | 看 `~/.zcode/whale/autostart.log` 最后一行：无新行 = hook 没加载；`skip: autoStartWidget=false` = 配置关了自启；`overlay=skipped:no-runtime` = 运行时没装 |
+| 要反馈问题 | 菜单 →「关于 / 自检…」→「全选复制」，把那段 JSON 一起发出来（不含密钥，路径已脱敏） |
 | 和挂件互动后 ZCode 画面卡住 | 确认浮层是新版（`window status` / `/whale/health` 的 version）。浮层的 `focusable:false` 与 `type:'toolbar'` 都不能删，否则会抢宿主前台或触发停帧 |
 | 余额显示「未找到 DeepSeek API Key」 | 预期：三条来源都没命中。逐条看 `/whale/health` 的 `keyProbe` |
 | 今日已用一直是 0 | 本机库今天还没记录；`cli.mjs status` 看双口径与来源 |
