@@ -295,9 +295,12 @@ try {
   const booted = await pollEval(
     cdp,
     "(document.readyState === 'complete' && document.querySelector('.zcwv-hint')) ? true : false",
-    12000
+    // CI runner 冷启动 Edge + 首帧明显更慢：实测 12s 不够，但页面随后即正常
+    // （2026-10-18 WB 的 CI 就是这一条挂的，后续用例全过）。放宽到 30s，
+    // 本地仍是 <1s，只有真失败时才多等。
+    30000
   )
-  check('挂件前端完成初始化', !!booted)
+  check('挂件前端完成初始化', !!booted, booted ? '' : '等待 30s 仍无 .zcwv-hint')
 
   // ① 套餐轮次气泡（v1.4.0 余额口径）：GLM-4.7-Flash 免费（billable=false）+
   //    account:zai-start-plan（套餐行），120k/1M 配额 = 12%——主数字显示「消耗
