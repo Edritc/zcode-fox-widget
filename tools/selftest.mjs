@@ -22,7 +22,7 @@ import { shapeQuotaPayload, windowLabel, fetchGlmPlanQuota, GLM_PLAN_QUOTA_URL, 
 import { getPath, TEMPLATES, fetchFromTemplate, pickVendorBalance, listVendorStatus } from '../lib/vendors.mjs'
 import { isBlockedHost } from '../lib/blocked-host.mjs'
 import { matchTemplateId, buildProviderEntries, invalidateDiscoverCache } from '../lib/discover.mjs'
-import { computeTodayUsage, resolveTodayUsage, pickBalanceInfo, platformUsageUrl } from '../lib/balance.mjs'
+import { balanceSplit, computeTodayUsage, resolveTodayUsage, pickBalanceInfo, platformUsageUrl } from '../lib/balance.mjs'
 import { mapZcodeTheme, themeOfConfig, resolveZcodeTheme } from '../lib/zcode-theme.mjs'
 import { safeMirrorUrl, isOwnOverlayCommandLine, runtimePaths } from '../lib/overlay.mjs'
 import { MODEL_ROLE_RULES, roleIdForModel, BUILTIN_ROLES } from '../lib/paths.mjs'
@@ -2830,6 +2830,48 @@ try {
     sizeBack && sizeBack.alerts && sizeBack.alerts.quotaPct === 20 && sizeBack.alerts.moneyAlert === 5.5,
     JSON.stringify(sizeBack.alerts)
   )
+  // 今日预算（v1.15.2）：与其他预警并列保存；负数/非法归 0，超大值封顶 1e6
+  const budgetPut = await fetch('http://127.0.0.1:' + port + '/whale/size.json', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scale: 1.5, alerts: { budgetToday: 12.34 } }),
+  })
+  const budgetBody = await budgetPut.json()
+  check(
+    '今日预算：写入后与其他预警并存（12.34，不覆盖已有阈值）',
+    budgetPut.ok && budgetBody.alerts && budgetBody.alerts.budgetToday === 12.34 && budgetBody.alerts.quotaPct === 20 && budgetBody.alerts.moneyAlert === 5.5,
+    JSON.stringify(budgetBody.alerts)
+  )
+  const budgetNeg = await (
+    await fetch('http://127.0.0.1:' + port + '/whale/size.json', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scale: 1.5, alerts: { budgetToday: -5 } }),
+    })
+  ).json()
+  check('今日预算：负数归 0（等于关闭）', budgetNeg.alerts && budgetNeg.alerts.budgetToday === 0, JSON.stringify(budgetNeg.alerts))
+  const budgetHuge = await (
+    await fetch('http://127.0.0.1:' + port + '/whale/size.json', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scale: 1.5, alerts: { budgetToday: 9e9 } }),
+    })
+  ).json()
+  check('今日预算：超大值封顶 1e6（防手滑多打几个零）', budgetHuge.alerts && budgetHuge.alerts.budgetToday === 1000000, JSON.stringify(budgetHuge.alerts))
+  const budgetText = await (
+    await fetch('http://127.0.0.1:' + port + '/whale/size.json', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scale: 1.5, alerts: { budgetToday: 'abc' } }),
+    })
+  ).json()
+  check('今日预算：非数字归 0', budgetText.alerts && budgetText.alerts.budgetToday === 0, JSON.stringify(budgetText.alerts))
+  // 复位成 0，避免影响后续用例
+  await fetch('http://127.0.0.1:' + port + '/whale/size.json', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scale: 1.5, alerts: { budgetToday: 0 } }),
+  })
   // 旧配置迁移：模拟升级用户的文件（只有 DS¥/BM¥ 旧键、没有 moneyAlert），
   // 读出来应是 moneyAlert=deepseekBelow（先设过的那个），旧键不再保留
   const legacyState = JSON.parse(fs.readFileSync(path.join(dataDir, 'widget-state.json'), 'utf8'))
@@ -3412,6 +3454,21 @@ try {
         /interactive\) applyInteractive\(false, true\)/.test(mainSrc) &&
         /hideOverlay\('zcode-identity-changed'\)/.test(mainSrc),
       ''
+    )
+    // 两线各有一个「按宿主窗口算浮层边界」的函数，名字不同（ZCode 线是
+    // applyZCodeBounds，WorkBuddy 线是 applyHostBounds）。从 main cherry-pick 浮层
+    // 补丁时 hunk 能对上、函数名却可能对不上——2026-10-18 真机就弹过
+    // 「ReferenceError: applyZCodeBounds is not defined」，每次页面加载都抛。
+    // 这里按「调用了就必须定义」兜住这一类，不针对具体名字。
+    const boundCalls = new Set()
+    for (const m of mainSrc.matchAll(/\b(apply[A-Za-z0-9_]*Bounds)\s*\(/g)) boundCalls.add(m[1])
+    const boundMissing = [...boundCalls].filter(
+      (name) => !new RegExp('function\\s+' + name + '\\s*\\(').test(mainSrc)
+    )
+    check(
+      'desktop/main.cjs 调用的边界函数都在本文件有定义（' + ([...boundCalls].join(',') || '无') + '）',
+      boundMissing.length === 0,
+      boundMissing.join(',')
     )
   }
 
@@ -4683,6 +4740,27 @@ try {
       pb([{ currency: 'EUR', total_balance: 0 }, { currency: 'USD', total_balance: 0 }])
     )
     check('pickBalanceInfo：空/非数组返回 null', pickBalanceInfo([]) === null && pickBalanceInfo(null) === null, 'null')
+    // 余额构成（赠金 / 充值）：缺失与 0 必须区分开——0 是"真没有赠金"，null 是
+    // "接口没给这个字段"，前端据此决定显示 0.00 还是 --（甚至整行隐藏）
+    {
+      const full = balanceSplit({ total_balance: '12.30', granted_balance: '2.10', topped_up_balance: '10.20' })
+      check(
+        'balanceSplit：赠金 / 充值原样取出（字符串转数字）',
+        full.grantedBalance === 2.1 && full.toppedBalance === 10.2,
+        JSON.stringify(full)
+      )
+      const zero = balanceSplit({ total_balance: '0', granted_balance: '0', topped_up_balance: '0' })
+      check('balanceSplit：真的为 0 时给 0（不是 null）', zero.grantedBalance === 0 && zero.toppedBalance === 0, JSON.stringify(zero))
+      const missing = balanceSplit({ total_balance: '5' })
+      check(
+        'balanceSplit：字段缺失给 null（与 0 区分）',
+        missing.grantedBalance === null && missing.toppedBalance === null,
+        JSON.stringify(missing)
+      )
+      const junk = balanceSplit({ granted_balance: 'abc', topped_up_balance: null })
+      check('balanceSplit：非法值 / null 一律 null，不抛异常', junk.grantedBalance === null && junk.toppedBalance === null, JSON.stringify(junk))
+      check('balanceSplit：空入参不抛异常', JSON.stringify(balanceSplit(undefined)) === '{"grantedBalance":null,"toppedBalance":null}', '')
+    }
     check(
       'pickBalanceInfo：缺 total_balance 不当数（跳到下一项）',
       pb([{ currency: 'CNY' }, { currency: 'USD', total_balance: 1 }]) === 'USD:1',
