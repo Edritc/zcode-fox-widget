@@ -1922,6 +1922,23 @@ function check(name, ok, detail) {
       r('commandcode-goat-1-claude', 'claude-sonnet-5-5') === 'cmdgo' &&
       r('commandcode-goat-2', 'deepseek/deepseek-v4-pro') === 'cmdgo'
   )
+  // 火山方舟 Coding Plan：接入端点 ark.*.volces.com 必须先于模型名判定——方舟
+  // 托管的第三方模型名（deepseek-v3 / glm-4…）否则会被按名字抢认成对应按量厂商，
+  // 把订阅用量折算成虚构账单。providerId 关键词（volc*）作无 baseUrl 时的兜底。
+  check(
+    '计费源：火山方舟按 ark/volces 域名识别（托管模型名不按量抢认），providerId volc* 兜底',
+    r('new-provider', 'glm-5.3-flash', 'https://ark.cn-beijing.volces.com/api/coding') === 'volc' &&
+      r('804526c5-uuid', 'deepseek-v3', 'https://open.volcengineapi.com') === 'volc' &&
+      r('volc-ark-plan', 'deepseek-v3') === 'volc' &&
+      r('volcengine-p', 'kimi-k3') === 'volc'
+  )
+  check(
+    '计费源：火山口径字段（火山 Coding Plan / vendor volc / CNY / 无峰谷）',
+    (() => {
+      const d = resolveBillingSource('p', 'm', 'https://ark.cn-beijing.volces.com/api/coding')
+      return d.source === 'volc' && d.vendor === 'volc' && d.label === '火山 Coding Plan' && d.currency === 'CNY' && d.timeMode === 'none'
+    })()
+  )
   // GLM 订阅修正：大模型的 provider/host 名字区分不出「订阅」与「按量」（同一个
   // open.bigmodel.cn、同一把 key 形状），但账号事实分得出——有 GLM Coding Plan 套餐
   // 配额时按 Plan 口径（订阅持有者的 GLM 用量扣的是订阅额度，不是按量账单）
