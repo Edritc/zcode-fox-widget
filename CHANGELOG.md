@@ -10,7 +10,7 @@
 
 ---
 
-## 未发布
+## v1.16.0 新增：ZCode 启动即自启、桌宠模式持久化与单账号文案
 
 - **ZCode 启动即自启**：登录后常驻一个轻量看门进程，发现 `ZCode.exe` 出现就拉起挂件服务/浮层，不再等 SessionStart 或先选一个会话。默认在 Startup 文件夹放隐藏 VBS；`autoStartWithZcode=false` 关闭，`node lib/cli.mjs watch uninstall` 卸载。状态与日志：`node lib/cli.mjs watch status`、`~/.zcode/whale/zcode-watch.log`。
 - **CommandCode 官方单账号**：直连官方 API 只有一个账号时，气泡不再写「账号池 1/1 可用」；本地池（含只启用一个账号的池）仍显示池状态。
