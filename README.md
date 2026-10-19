@@ -135,6 +135,14 @@ echo 'sk-xxxxxxxx' | node lib/cli.mjs key
 | `followIntervalMs` | `40` | 跟随探测间隔（菜单选择会覆盖） |
 | `port` | 自动（39322） | 固定端口，占用时顺延 |
 
+**火山方舟 Coding Plan 配额卡（可选）**：菜单「显示」选「火山 Coding Plan」或厂商列表里的 `volc-plan` 模板。凭据必须用火山 **IAM Access Key（`AKLT…`）** 做 V4 签名——模型调用用的 Coding Plan Key（`ark-…`）不适用。接口只给 5 小时/周/月三个窗口的已用百分比，没有调用次数也没有金额；未订阅/无数据会如实显示，不会补 0%。凭据两个来源（现读、不落盘日志）：环境变量（支持 `VOLC_ACCESS_KEY_ID` / `VOLC_ACCESS_KEY_SECRET` 及 `VOLC_ARK_*`、`VOLC_ACCESS_KEY` / `VOLC_SECRET_KEY`、`ARK_ACCESS_KEY_*` 别名，与 dsh-volcark-quota 对齐），或 `config.json`：
+
+```json
+{ "vendorKeys": { "volc-access-key-id": "AKLT…", "volc-access-key-secret": "…" } }
+```
+
+本机时间偏差超过 15 分钟会返回 `InvalidTimestamp`（界面提示「时间偏差过大」），校准时钟即可。
+
 ---
 
 ## 数据与计价口径

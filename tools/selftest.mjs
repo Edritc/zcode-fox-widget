@@ -9,6 +9,7 @@
 import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import http from 'node:http'
+import https from 'node:https'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -1246,6 +1247,190 @@ function check(name, ok, detail) {
     } finally {
       globalThis.fetch = realFetch
     }
+  }
+}
+
+// 火山方舟 Coding Plan：V4 签名固定向量 + 双形状塑形 + 错误分类（纯函数，零出网）。
+// 签名算法与火山官方 V4 参考实现及 ZnonEn/dsh-volcark-quota（BSD-3）逐步对照；
+// 向量由实现生成后锁定（固定 AK/SK/时刻/请求体），防后续改动破坏签名。
+{
+  const {
+    formatXDate,
+    normQuery,
+    volcengineSign,
+    shapeVolcCoding,
+    shapeVolcAfp,
+    volcWindowMeta,
+    classifyVolcError,
+  } = await import('../lib/volc-plan.mjs')
+  check(
+    '火山 V4：X-Date 格式与查询串排序',
+    formatXDate(new Date(Date.UTC(2026, 9, 19, 8, 9, 5))) === '20261019T080905Z' &&
+      normQuery({ Version: '2024-01-01', Action: 'GetCodingPlanUsage' }) ===
+        'Action=GetCodingPlanUsage&Version=2024-01-01'
+  )
+  const vNow = Date.UTC(2026, 9, 19, 8, 9, 5)
+  const vQuery = { Action: 'GetCodingPlanUsage', Version: '2024-01-01' }
+  const vSigned = volcengineSign('AKLTdummy', 'SKdummy', 'POST', '/', vQuery, '{}', vNow)
+  check(
+    '火山 V4：固定向量签名（头集 + Authorization 结构 + 签名值锁定）',
+    vSigned['X-Date'] === '20261019T080905Z' &&
+      /^HMAC-SHA256 Credential=AKLTdummy\/20261019\/cn-beijing\/ark\/request, SignedHeaders=content-type;host;x-content-sha256;x-date, Signature=[0-9a-f]{64}$/.test(
+        vSigned.Authorization
+      ) &&
+      vSigned.Authorization.endsWith('Signature=3d02e41badd55e7b3a2102a4c0cd616286bb3ffd3b19003e73d8a400caea0f04'),
+    vSigned.Authorization
+  )
+  check(
+    '火山 V4：body / 时刻 / SK 任一变化签名都变',
+    volcengineSign('AKLTdummy', 'SKdummy', 'POST', '/', vQuery, '{"a":1}', vNow).Authorization !==
+      vSigned.Authorization &&
+      // X-Date 精度到秒：差 1 毫秒签名不变属正确行为，这里差 1 秒
+      volcengineSign('AKLTdummy', 'SKdummy', 'POST', '/', vQuery, '{}', vNow + 1000).Authorization !==
+        vSigned.Authorization &&
+      volcengineSign('AKLTdummy', 'SKother', 'POST', '/', vQuery, '{}', vNow).Authorization !==
+        vSigned.Authorization
+  )
+  const vShaped = shapeVolcCoding({
+    QuotaUsage: [
+      { Level: 'session', Percent: 42.35, ResetTimestamp: 1768000000 },
+      { Level: 'weekly', Percent: 18, ResetTimestamp: 1768500000 },
+      { Level: 'monthly', Percent: 9.4, ResetTimestamp: 0 },
+    ],
+  })
+  check(
+    '火山塑形：QuotaUsage 三窗口归一（Level→5h/week/month，秒→毫秒，超 100% 截断）',
+    vShaped &&
+      vShaped.planType === 'coding' &&
+      vShaped.windows.length === 3 &&
+      vShaped.windows[0].name === '5h' &&
+      vShaped.windows[0].label === '5小时' &&
+      Math.abs(vShaped.windows[0].usedPct - 42.35) < 1e-9 &&
+      Math.abs(vShaped.windows[0].remainingPct - 57.65) < 1e-9 &&
+      vShaped.windows[0].resetAt === 1768000000000 &&
+      vShaped.windows[2].name === 'month' &&
+      vShaped.windows[2].resetAt === null,
+    JSON.stringify(vShaped)
+  )
+  check(
+    '火山塑形：QuotaUsage 超 100% 视为已撞墙（exceeded，remaining 不出负数）',
+    (() => {
+      const s = shapeVolcCoding({ QuotaUsage: [{ Level: '5h', Percent: 137, ResetTimestamp: 1 }] })
+      return s.windows[0].usedPct === 100 && s.windows[0].exceeded === true && s.windows[0].remainingPct === 0
+    })()
+  )
+  check('火山塑形：主路径空 -> null（读取层判未订阅）', shapeVolcCoding({ QuotaUsage: [] }) === null)
+  const vAfp = shapeVolcAfp({
+    AFPFiveHour: { Quota: 100, Used: 42, ResetTime: 1768000000 },
+    AFPWeekly: { Quota: 100, Used: 5, ResetTime: 0 },
+  })
+  check(
+    '火山塑形：AFP 回退形状（Quota/Used 折百分比，窗口固定序）',
+    vAfp &&
+      vAfp.planType === 'agent' &&
+      vAfp.windows.length === 2 &&
+      vAfp.windows[0].name === '5h' &&
+      Math.abs(vAfp.windows[0].usedPct - 42) < 1e-9 &&
+      vAfp.windows[0].resetAt === 1768000000000 &&
+      vAfp.windows[1].name === 'week',
+    JSON.stringify(vAfp)
+  )
+  check(
+    '火山窗口名：未知 Level 原样保留（显示层 label 兜底）',
+    volcWindowMeta('session').name === '5h' && volcWindowMeta('mystery').name === 'mystery'
+  )
+  check(
+    '火山错误分类：401/签名类 -> invalid-credentials；InvalidTimestamp -> clock-skew；404 -> not-subscribed',
+    classifyVolcError({ status: 401, code: '', message: 'x' }).reason === 'invalid-credentials' &&
+      classifyVolcError({ status: 400, code: 'SignatureDoesNotMatch', message: 'x' }).reason ===
+        'invalid-credentials' &&
+      classifyVolcError({ status: 400, code: 'InvalidTimestamp', message: 'x' }).reason === 'clock-skew' &&
+      classifyVolcError({ status: 404, code: 'NotFound', message: 'x' }).reason === 'not-subscribed'
+  )
+}
+
+// 火山主入口 readVolcPlanQuota 的分支逻辑（mock https.request，零出网；结束时恢复
+// 全局 request 与凭据环境变量——后续块还有真实 HTTP 测试。callVolc 走
+// node:https.request 出网（undici fetch 会剥手动 Host 头导致签名不匹配），mock 拦 request）
+{
+  const volc = await import('../lib/volc-plan.mjs')
+  const realRequest = https.request
+  const prevAk = process.env.VOLC_ACCESS_KEY_ID
+  const prevSk = process.env.VOLC_ACCESS_KEY_SECRET
+  // 响应形状模拟 https.IncomingMessage（statusCode + 'data'/'end' 事件）
+  const volcJson = (body, status = 200) => ({ statusCode: status, bodyText: JSON.stringify(body) })
+  const codingBody = { Result: { QuotaUsage: [{ Level: 'weekly', Percent: 18, ResetTimestamp: 1768500000 }] } }
+  const afpBody = { Result: { AFPWeekly: { Quota: 100, Used: 5, ResetTime: 0 } } }
+  const notFound = volcJson({ ResponseMetadata: { Error: { Code: 'NotFound', Message: 'not found' } } }, 404)
+  const unauthorized = volcJson({ ResponseMetadata: { Error: { Code: 'SignatureDoesNotMatch', Message: 'x' } } }, 401)
+  let respond = () => notFound
+  let calls = 0
+  try {
+    process.env.VOLC_ACCESS_KEY_ID = 'AKLTtest'
+    process.env.VOLC_ACCESS_KEY_SECRET = 'SKtest'
+    https.request = (url, opts, cb) => {
+      const handlers = {}
+      const res = {
+        statusCode: 0,
+        on(ev, fn) {
+          handlers[ev] = fn
+          return res
+        },
+      }
+      const req = {
+        on(ev, fn) {
+          if (ev === 'error') handlers.reqError = fn
+          return req
+        },
+        setTimeout() {
+          return req
+        },
+        write() {},
+        end() {
+          // 异步回包，模拟真实网络时序：先 cb(res) 再 data -> end
+          queueMicrotask(() => {
+            const r = respond(String(url))
+            res.statusCode = r.statusCode
+            cb(res)
+            if (handlers.data) handlers.data(r.bodyText)
+            if (handlers.end) handlers.end()
+          })
+        },
+      }
+      calls += 1
+      return req
+    }
+    // P1-2 回归：主/回退双 404 的 reason 必须是稳定键，不能把中文 message
+    //（classifyVolcError 给的「未订阅/无数据」）塞进 reason——前端 volcCard
+    // 按稳定值分支，塞中文会渲染成「读取失败 · 未订阅/无数据」
+    respond = () => notFound
+    let p = await volc.readVolcPlanQuota(true)
+    check('火山主入口：双 404 -> not-subscribed（reason 稳定键，P1-2 回归）', p.ok === false && p.reason === 'not-subscribed', JSON.stringify(p))
+    // 主路径成功 -> coding 窗口
+    respond = () => volcJson(codingBody)
+    p = await volc.readVolcPlanQuota(true)
+    check('火山主入口：主路径成功 -> coding 窗口', p.ok === true && p.planType === 'coding' && p.windows.length === 1 && p.windows[0].name === 'week', JSON.stringify(p))
+    // 主路径空 -> 回退 AFP 成功
+    respond = (u) => (u.indexOf('GetCodingPlanUsage') !== -1 ? volcJson({ Result: { QuotaUsage: [] } }) : volcJson(afpBody))
+    p = await volc.readVolcPlanQuota(true)
+    check('火山主入口：主路径空 -> 回退 AFP 成功（agent 窗口）', p.ok === true && p.planType === 'agent' && p.windows.length === 1 && p.windows[0].name === 'week', JSON.stringify(p))
+    // 401 不回退（凭据问题再打一次也一样），且失败计入 TTL
+    calls = 0
+    respond = () => unauthorized
+    p = await volc.readVolcPlanQuota(true)
+    check('火山主入口：401 -> invalid-credentials 且不回退（只出网 1 次）', p.ok === false && p.reason === 'invalid-credentials' && calls === 1, JSON.stringify({ p, calls }))
+    // TTL：非 force 命中失败缓存，零出网；force 才真出网
+    const at = calls
+    p = await volc.readVolcPlanQuota(false)
+    check('火山主入口：失败计入 TTL（非 force 零出网），force 绕过', p.reason === 'invalid-credentials' && calls === at)
+    p = await volc.readVolcPlanQuota(true)
+    check('火山主入口：force 绕过失败缓存重出网', calls === at + 1)
+  } finally {
+    https.request = realRequest
+    if (prevAk === undefined) delete process.env.VOLC_ACCESS_KEY_ID
+    else process.env.VOLC_ACCESS_KEY_ID = prevAk
+    if (prevSk === undefined) delete process.env.VOLC_ACCESS_KEY_SECRET
+    else process.env.VOLC_ACCESS_KEY_SECRET = prevSk
   }
 }
 
