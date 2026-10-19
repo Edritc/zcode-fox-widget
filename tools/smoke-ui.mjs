@@ -1987,6 +1987,43 @@ try {
   )
   if (stubCmdgo && stubCmdgo.identifier) await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: stubCmdgo.identifier })
 
+  // ⑯a-2 官方 API 单账号：pool 1/1 不是「账号池」，不能显示池文案
+  {
+    const singleStub =
+      '(function(){var real=window.fetch;' +
+      'function json(o){return Promise.resolve(new Response(JSON.stringify(o),{status:200,headers:{"Content-Type":"application/json"}}))}' +
+      'var S={ok:true,source:"cmdgo",vendor:"commandcode",label:"CommandCode",timeMode:"none",modelId:"deepseek-v4.1-pro",currency:"USD",from:"selection"};' +
+      'var C={ok:true,ref:"COMMANDCODE_API_KEY_TEST",pool:{available:1,total:1},plan:"GOAT",userName:"paper189",limited:false,' +
+      'monthly:{remaining:39.8,total:70,percent:0.431},' +
+      'fiveHour:{used:0.77,cap:14,exceeded:false,percent:0.055},' +
+      'weekly:{used:5.95,cap:35,exceeded:false,percent:0.17},readAt:Date.now()};' +
+      'window.fetch=function(u,o){var s=String(u&&u.url?u.url:u);' +
+      'if(s.indexOf("/whale/session.json")!==-1)return json(S);' +
+      'if(s.indexOf("/whale/cmdgo.json")!==-1)return json(C);' +
+      'if(s.indexOf("/whale/plan.json")!==-1)return json({ok:false,reason:"no-plan-log"});' +
+      'return real.apply(this,arguments)}})()'
+    const stubSingle = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: singleStub })
+    await cdp.send('Page.reload')
+    const singleView = await pollEval(
+      cdp,
+      "(function(){var q=document.querySelector('.zcwv-qcard');" +
+        "if(!q||getComputedStyle(q).display==='none')return null;" +
+        'return JSON.stringify({subs:[].map.call(q.querySelectorAll(".zcwv-qsub"),function(s){return s.textContent})})})()',
+      15000
+    )
+    const singleObj = singleView ? JSON.parse(singleView) : null
+    check(
+      'CommandCode 单账号：pool 1/1 不显示「账号池」文案，只保留账号名',
+      !!singleObj &&
+        singleObj.subs[0].indexOf('账号池') === -1 &&
+        singleObj.subs[0].indexOf('paper189') !== -1,
+      JSON.stringify(singleObj)
+    )
+    if (stubSingle && stubSingle.identifier) {
+      await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: stubSingle.identifier })
+    }
+  }
+
   // ⑯a 中转站额度卡：服务端在 session.json 里给 quotaCard，前端按形状渲染。
   // 三种形状各验一次：多窗口（Sub2API）、纯余额（New API）、读取失败。
   await putSize({ scale: 1.5, theme: 'dark', displayMode: 'auto', alerts: { quotaPct: 0, moneyAlert: 0 } })
@@ -2186,7 +2223,7 @@ try {
     '(function(){var real=window.fetch;' +
     'function json(o){return Promise.resolve(new Response(JSON.stringify(o),{status:200,headers:{"Content-Type":"application/json"}}))}' +
     'var S={ok:true,source:"cmdgo",vendor:"commandcode",label:"CommandCode",timeMode:"none",modelId:"zai-org/GLM-5.3",currency:"USD",from:"selection"};' +
-    'var C={ok:true,ref:"K1",pool:{available:0,total:1},plan:"Go",userName:"pigeon189",limited:true,' +
+    'var C={ok:true,ref:"K1",pool:{available:0,total:1,kind:"pool"},plan:"Go",userName:"pigeon189",limited:true,' +
     'monthly:{remaining:0.0457,total:10,percent:0.9954,resetAt:' + nearReset + '},' +
     'fiveHour:{used:0.912,cap:3,exceeded:false,resetAt:' + (Date.now() + 5 * 3600000) + ',remaining:2.088,percent:0.3041},' +
     'weekly:{used:3.947,cap:6,exceeded:false,resetAt:' + (Date.now() + 6 * 86400000) + ',remaining:2.053,percent:0.6578},readAt:Date.now()};' +
