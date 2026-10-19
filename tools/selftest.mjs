@@ -28,6 +28,7 @@ import { safeMirrorUrl, isOwnOverlayCommandLine, runtimePaths } from '../lib/ove
 import { MODEL_ROLE_RULES, roleIdForModel, BUILTIN_ROLES } from '../lib/paths.mjs'
 import { assertSafeUpstream, findApiKey, readPluginConfig } from '../lib/credentials.mjs'
 import { resolveBillingSource, isNightOffpeak } from '../lib/source.mjs'
+import { buildWatchVbs, installWatch, uninstallWatch, watchStatus, loadRuntimeEnv } from '../lib/watch-install.mjs'
 
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // 浮层的 desktop/*.cjs 是 CommonJS（Electron 主进程），从 ESM 自检里 require 进来测
@@ -5143,6 +5144,56 @@ try {
       platformUsageUrl(1790000000.9, 1790086400.2, -18000.5).endsWith('?start=1790000000&end=1790086400&tz=-18001'),
       platformUsageUrl(1790000000.9, 1790086400.2, -18000.5)
     )
+  }
+
+  {
+    // ZCode 启动看门进程的纯逻辑 / 安装器：不碰真实 Startup 文件夹
+    const watchDir = fs.mkdtempSync(path.join(tmpHome, 'watch-startup-'))
+    try {
+      const vbs = buildWatchVbs('C:\\Program Files\\node.exe', 'C:\\A B\\zcode-watch.mjs')
+      check('watch VBS：路径含空格时引号正确双写', vbs.includes('""C:\\Program Files\\node.exe"" ""C:\\A B\\zcode-watch.mjs"" --daemon'), vbs)
+      const a = installWatch({ startupDir: watchDir, nodeExe: 'C:\\Program Files\\node.exe', script: 'C:\\A B\\zcode-watch.mjs' })
+      check('watch 安装：写 Startup VBS', !!(a.ok && a.changed && fs.existsSync(a.file)), JSON.stringify(a))
+      const b = installWatch({ startupDir: watchDir, nodeExe: 'C:\\Program Files\\node.exe', script: 'C:\\A B\\zcode-watch.mjs' })
+      check('watch 安装：内容相同时不重复写', !!(b.ok && !b.changed), JSON.stringify(b))
+      const st = watchStatus({ startupDir: watchDir })
+      check('watch 状态：识别到已安装', st.installed === true, JSON.stringify(st))
+      const u = uninstallWatch({ startupDir: watchDir, stopWatcher: false })
+      check('watch 卸载：删除 Startup VBS', !!(u.removed && !fs.existsSync(a.file)), JSON.stringify(u))
+
+      const envFile = path.join(watchDir, 'runtime-env.json')
+      fs.writeFileSync(envFile, JSON.stringify({ ZCODE_DATA_BASE_DIR: 'E:\\ZCodeData' }))
+      const env = {}
+      const loaded = loadRuntimeEnv(env, envFile)
+      check('watch 环境：登录时恢复 ZCODE_DATA_BASE_DIR', loaded.loaded && env.ZCODE_DATA_BASE_DIR === 'E:\\ZCodeData', JSON.stringify({ loaded, env }))
+      const keep = { ZCODE_DATA_BASE_DIR: 'X' }
+      loadRuntimeEnv(keep, envFile)
+      check('watch 环境：已有变量优先，不覆盖', keep.ZCODE_DATA_BASE_DIR === 'X', JSON.stringify(keep))
+
+      const { parseTasklistOutput } = await import(pathToFileURL(path.join(PLUGIN_ROOT, 'lib', 'zcode-watch.mjs')).href)
+      check('watch 探测：tasklist 无任务是 absent', parseTasklistOutput('INFO: No tasks are running which match the specified criteria.') === false)
+      check('watch 探测：tasklist 有 ZCode.exe 是 present', parseTasklistOutput('ZCode.exe 1234 Console 1 100,000 K') === true)
+
+      const dry = spawnSync(process.execPath, [path.join(PLUGIN_ROOT, 'lib', 'zcode-watch.mjs'), '--dry-run'], {
+        encoding: 'utf8',
+        timeout: 10000,
+        windowsHide: true,
+        env: { ...process.env, ZCODE_HOME: tmpHome, ZCODE_DATA_BASE_DIR: tmpHome },
+      })
+      let dryJson = null
+      try {
+        dryJson = JSON.parse(dry.stdout)
+      } catch (err) {}
+      check(
+        'watch --dry-run：只探测不启动，返回 JSON',
+        dry.status === 0 && dryJson && typeof dryJson.zcodeRunning === 'boolean',
+        JSON.stringify({ status: dry.status, stdout: String(dry.stdout || '').slice(0, 200), stderr: String(dry.stderr || '').slice(0, 200) })
+      )
+    } finally {
+      try {
+        fs.rmSync(watchDir, { recursive: true, force: true })
+      } catch (err) {}
+    }
   }
 
   await new Promise((r) => setTimeout(r, 200))

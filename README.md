@@ -87,7 +87,14 @@ node lib/cli.mjs mode ledger|token     # 对账口径
 node lib/cli.mjs json             # 结构化输出
 ```
 
-自动启动：插件带 SessionStart hook，每次会话启动幂等拉起；排查看 `~/.zcode/whale/autostart.log`。
+自动启动：插件带 SessionStart hook，每次会话启动幂等拉起；同时默认在 Windows 启动文件夹放一个隐藏的看门进程，**ZCode.exe 一出现就拉起挂件，不用先选会话**。排查看 `~/.zcode/whale/autostart.log` 与 `~/.zcode/whale/zcode-watch.log`。
+
+```bash
+node lib/cli.mjs watch status      # 看门进程与 Startup 项状态
+node lib/cli.mjs watch install     # 立即安装并启动（SessionStart 也会自动确保）
+node lib/cli.mjs watch uninstall   # 卸载 Startup 项并停掉看门进程
+node lib/cli.mjs watch once        # 只探测一次并拉起（排障）
+```
 
 ### 在对话里用
 
@@ -124,6 +131,7 @@ echo 'sk-xxxxxxxx' | node lib/cli.mjs key
 |---|---|---|
 | `autoStartWidget` | `true` | 会话启动时拉起服务 |
 | `autoStartOverlay` | `true` | 顺便拉起浮层 |
+| `autoStartWithZcode` | `true` | 登录后看门进程随 ZCode 启动拉起（不等 SessionStart） |
 | `followIntervalMs` | `40` | 跟随探测间隔（菜单选择会覆盖） |
 | `port` | 自动（39322） | 固定端口，占用时顺延 |
 
@@ -147,6 +155,8 @@ echo 'sk-xxxxxxxx' | node lib/cli.mjs key
 |---|---|
 | 界面上看不到挂件 | ZCode 没有界面注入点，必须走桌面浮层：`desktop install` 后 `window start` |
 | 打开 ZCode 没自动出现 | 看 `~/.zcode/whale/autostart.log` 最后一行：无新行 = hook 没加载；`skip: autoStartWidget=false` = 配置关了自启；`overlay=skipped:no-runtime` = 运行时没装 |
+| 打开 ZCode 停在首页、挂件要等选会话才出现 | 看门进程没在跑：`node lib/cli.mjs watch status`；`watch install` 后重开 ZCode，日志在 `~/.zcode/whale/zcode-watch.log` |
+| 点桌面 / 任务栏后挂件消失 | 普通模式在 ZCode 失焦时按设计隐身；菜单开「桌宠模式」后会一直悬浮（实测可压在浏览器/桌面上）。开了桌宠模式仍消失，再发版本号与 `overlay-debug.log` |
 | 要反馈问题 | 菜单 →「关于 / 自检…」→「全选复制」，把那段 JSON 一起发出来（不含密钥，路径已脱敏） |
 | 和挂件互动后 ZCode 画面卡住 | 确认浮层是新版（`window status` / `/whale/health` 的 version）。浮层的 `focusable:false` 与 `type:'toolbar'` 都不能删，否则会抢宿主前台或触发停帧 |
 | 余额显示「未找到 DeepSeek API Key」 | 预期：三条来源都没命中。逐条看 `/whale/health` 的 `keyProbe` |
