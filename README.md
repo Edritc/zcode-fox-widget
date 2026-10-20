@@ -135,6 +135,36 @@ echo 'sk-xxxxxxxx' | node lib/cli.mjs key
 | `followIntervalMs` | `40` | 跟随探测间隔（菜单选择会覆盖） |
 | `port` | 自动（39322） | 固定端口，占用时顺延 |
 
+**火山方舟 Coding Plan 配额卡（可选）**：菜单「显示」选「火山 Coding Plan」或厂商列表里的 `volc-plan` 模板。凭据必须用火山 **IAM Access Key（`AKLT…`）** 做 V4 签名——模型调用用的 Coding Plan Key（`ark-…`）不适用。IAM AK/SK 在火山控制台 → 右上角头像 → 访问控制 → 新建用户（通过用户名创建，访问方式选**编程访问**），授权时搜索并勾选系统策略 `ArkReadOnlyAccess` + `BillingCenterReadOnlyAccess`，创建后生成 AK/SK；它与 `ark-` key 是两套体系，互不通用（追求最小授权也可只授自定义策略 `ark:GetCodingPlanUsage`）。接口只给 5 小时/周/月三个窗口的已用百分比，没有调用次数也没有金额；未订阅/无数据会如实显示，不会补 0%。凭据两个来源（现读、不落盘日志）：环境变量（支持 `VOLC_ACCESS_KEY_ID` / `VOLC_ACCESS_KEY_SECRET` 及 `VOLC_ARK_*`、`VOLC_ACCESS_KEY` / `VOLC_SECRET_KEY`、`ARK_ACCESS_KEY_*` 别名，与 dsh-volcark-quota 对齐），或 `config.json`：
+
+```json
+{ "vendorKeys": { "volc-access-key-id": "AKLT…", "volc-access-key-secret": "…" } }
+```
+
+（AK/SK 是成对的两个键，不走其它厂商 `vendorKeys.<模板 id>` 的单键模式；未配置时火山卡会显示「未配置火山 IAM 凭据（AK/SK）」提示。）
+
+**自动识别接入类型**：先按当前模型的 providerId 查找有效 Base URL，再根据官方域名与完整路径区分 API、Coding Plan 和 Agent Plan。providerId 可以是 UUID，不要求包含厂商名称。
+
+官方直连域名为 `ark.cn-beijing.volces.com`，使用 HTTPS、默认端口，无查询参数或片段：
+
+| Base URL 路径（兼容末尾 `/`） | 统计与显示 |
+| --- | --- |
+| `/api/v3` | 火山 API 本地按量估算 |
+| `/api/coding`、`/api/coding/v3` | Coding Plan 订阅配额 |
+| `/api/plan`、`/api/plan/v3` | Agent Plan 订阅配额 |
+
+菜单「显示」统一提供 **火山方舟**：按当前火山接入选择金额或对应套餐卡；切到其它厂商时保留最近的火山接入，重开页面仍保留该接入 ID。尚未识别过火山接入时提示先在 ZCode 选择；已删除的接入也会提示重新选择。API 金额为所有火山按量记录的今日合计，不是单个 provider 的金额。自动跟随模式继续跟随当前厂商。
+
+显示选择不修改计费分类。配额查询失败也不改变分类；Coding 与 Agent 各自查询、缓存，不跨套餐回退。API 估算无需 IAM 凭据，个人版配额查询仍需 IAM AK/SK。请确认配置的 IAM 凭据与模型接入属于同一账号；插件不自动验证账号绑定。企业版席位配额暂不支持。
+
+旧的 `volcBillingByProvider` 声明不再参与判断，可从配置中移除；旧的 `displayMode: "volc"` 自动沿用为「火山方舟」。未知火山路径不自动判为订阅，统计保留估算，固定视图提示路径未识别；自定义代理不通过名称或 key 形态猜套餐。缺模型价目时沿用 tokens 兜底，不虚构金额。
+
+分类按当前 provider 配置解释本机历史记录；改变同一个 provider 的 Base URL 可能重新归类其历史用量，建议按量与订阅使用不同 provider。金额是本地估算，不是官方账单。
+
+排查时可运行 `node lib/cli.mjs providers` 查看接入 ID 与来源（不输出密钥）；或请求 `/whale/volc.json?providerId=<经过 URL 编码的 ID>&refresh=1` 查看该接入的模式和查询结果。
+
+本机时间偏差超过 15 分钟会返回 `InvalidTimestamp`（界面提示「时间偏差过大」），校准时钟即可。
+
 ---
 
 ## 数据与计价口径
@@ -211,3 +241,4 @@ echo 'sk-xxxxxxxx' | node lib/cli.mjs key
 | 给 ZCode 内助手读的使用说明 | [skills/zcode-fox-widget/SKILL.md](./skills/zcode-fox-widget/SKILL.md) |
 | 贡献规范 | [CONTRIBUTING.md](./CONTRIBUTING.md) |
 | 一次性调查 / 交接档案 | [docs/INDEX.md](./docs/INDEX.md) |
+

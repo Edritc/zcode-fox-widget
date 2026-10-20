@@ -10,6 +10,15 @@
 
 ---
 
+## 未发布
+
+- 新增火山 Coding Plan 配额卡，显示订阅窗口与重置时间。
+- 火山接入按官方 Base URL 自动区分 API、Coding Plan 和 Agent Plan，混用时按量估算不再被订阅清零。
+- 显示菜单统一为「火山方舟」，按接入显示对应套餐配额或 API 今日估算；固定模式保留最近查看的火山接入。
+- Coding 与 Agent 配额独立查询，Agent 支持近一天窗口，查询失败不再替换成另一套餐。
+- 修复火山显示模式重开后丢失，以及订阅名称被误认成 GLM Plan 的问题。
+- 火山配额字段缺失时不再显示虚假的满额，查询失败也不再误报为未订阅。
+
 ## v1.16.0 新增：ZCode 启动即自启、桌宠模式持久化与单账号文案
 
 - **ZCode 启动即自启（由b站@不将就的情初 反馈）**：登录后常驻一个轻量看门进程，发现 `ZCode.exe` 出现就拉起挂件服务与浮层，不再等 SessionStart 或先选一个会话；默认在 Startup 文件夹放隐藏 VBS，`autoStartWithZcode=false` 或 `node lib/cli.mjs watch uninstall` 可关闭。

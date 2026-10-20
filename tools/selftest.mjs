@@ -9,6 +9,7 @@
 import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import http from 'node:http'
+import https from 'node:https'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -153,6 +154,9 @@ fs.writeFileSync(
     config: {
       providerConfigRules: {
         providerRules: [
+          ... [['volcengine-ark', '/api/v3'], ['volc-plan-test', '/api/coding/v3'], ['9de0b0cd-43cc-4b9d-867c-32030235e990', '/api/plan/v3']].map(([providerId, pathname]) => ({
+            providerId, config: { api: { baseUrl: 'https://ark.cn-beijing.volces.com' + pathname } },
+          })),
           {
             providerId: 'bigmodel-standard-api',
             templateId: 'bigmodel-standard-api',
@@ -1249,6 +1253,219 @@ function check(name, ok, detail) {
   }
 }
 
+// 火山方舟 Coding Plan：V4 签名固定向量 + 双形状塑形 + 错误分类（纯函数，零出网）。
+// 签名算法与火山官方 V4 参考实现及 ZnonEn/dsh-volcark-quota（BSD-3）逐步对照；
+// 向量由实现生成后锁定（固定 AK/SK/时刻/请求体），防后续改动破坏签名。
+{
+  const {
+    formatXDate,
+    normQuery,
+    volcengineSign,
+    shapeVolcCoding,
+    shapeVolcAfp,
+    volcWindowMeta,
+    classifyVolcError,
+  } = await import('../lib/volc-plan.mjs')
+  check(
+    '火山 V4：X-Date 格式与查询串排序',
+    formatXDate(new Date(Date.UTC(2026, 9, 19, 8, 9, 5))) === '20261019T080905Z' &&
+      normQuery({ Version: '2024-01-01', Action: 'GetCodingPlanUsage' }) ===
+        'Action=GetCodingPlanUsage&Version=2024-01-01'
+  )
+  const vNow = Date.UTC(2026, 9, 19, 8, 9, 5)
+  const vQuery = { Action: 'GetCodingPlanUsage', Version: '2024-01-01' }
+  const vSigned = volcengineSign('AKLTdummy', 'SKdummy', 'POST', '/', vQuery, '{}', vNow)
+  check(
+    '火山 V4：固定向量签名（头集 + Authorization 结构 + 签名值锁定）',
+    vSigned['X-Date'] === '20261019T080905Z' &&
+      /^HMAC-SHA256 Credential=AKLTdummy\/20261019\/cn-beijing\/ark\/request, SignedHeaders=content-type;host;x-content-sha256;x-date, Signature=[0-9a-f]{64}$/.test(
+        vSigned.Authorization
+      ) &&
+      vSigned.Authorization.endsWith('Signature=3d02e41badd55e7b3a2102a4c0cd616286bb3ffd3b19003e73d8a400caea0f04'),
+    vSigned.Authorization
+  )
+  check(
+    '火山 V4：body / 时刻 / SK 任一变化签名都变',
+    volcengineSign('AKLTdummy', 'SKdummy', 'POST', '/', vQuery, '{"a":1}', vNow).Authorization !==
+      vSigned.Authorization &&
+      // X-Date 精度到秒：差 1 毫秒签名不变属正确行为，这里差 1 秒
+      volcengineSign('AKLTdummy', 'SKdummy', 'POST', '/', vQuery, '{}', vNow + 1000).Authorization !==
+        vSigned.Authorization &&
+      volcengineSign('AKLTdummy', 'SKother', 'POST', '/', vQuery, '{}', vNow).Authorization !==
+        vSigned.Authorization
+  )
+  const vShaped = shapeVolcCoding({
+    QuotaUsage: [
+      { Level: 'session', Percent: 42.35, ResetTimestamp: 1768000000 },
+      { Level: 'weekly', Percent: 18, ResetTimestamp: 1768500000 },
+      { Level: 'monthly', Percent: 9.4, ResetTimestamp: 0 },
+    ],
+  })
+  check(
+    '火山塑形：QuotaUsage 三窗口归一（Level→5h/week/month，秒→毫秒，超 100% 截断）',
+    vShaped &&
+      vShaped.planType === 'coding' &&
+      vShaped.windows.length === 3 &&
+      vShaped.windows[0].name === '5h' &&
+      vShaped.windows[0].label === '5小时' &&
+      Math.abs(vShaped.windows[0].usedPct - 42.35) < 1e-9 &&
+      Math.abs(vShaped.windows[0].remainingPct - 57.65) < 1e-9 &&
+      vShaped.windows[0].resetAt === 1768000000000 &&
+      vShaped.windows[2].name === 'month' &&
+      vShaped.windows[2].resetAt === null,
+    JSON.stringify(vShaped)
+  )
+  check(
+    '火山塑形：QuotaUsage 超 100% 视为已撞墙（exceeded，remaining 不出负数）',
+    (() => {
+      const s = shapeVolcCoding({ QuotaUsage: [{ Level: '5h', Percent: 137, ResetTimestamp: 1 }] })
+      return s.windows[0].usedPct === 100 && s.windows[0].exceeded === true && s.windows[0].remainingPct === 0
+    })()
+  )
+  check('火山塑形：空数据 -> null（不推断订阅状态）', shapeVolcCoding({ QuotaUsage: [] }) === null)
+  const vAfp = shapeVolcAfp({
+    AFPFiveHour: { Quota: 100, Used: 42, ResetTime: 1768000000 },
+    AFPWeekly: { Quota: 100, Used: 5, ResetTime: 0 },
+  })
+  check(
+    '火山塑形：AFP 回退形状（Quota/Used 折百分比，窗口固定序）',
+    vAfp &&
+      vAfp.planType === 'agent' &&
+      vAfp.windows.length === 2 &&
+      vAfp.windows[0].name === '5h' &&
+      Math.abs(vAfp.windows[0].usedPct - 42) < 1e-9 &&
+      vAfp.windows[0].resetAt === 1768000000000 &&
+      vAfp.windows[1].name === 'week',
+    JSON.stringify(vAfp)
+  )
+  check('火山 Agent 保留近一天窗口', shapeVolcAfp({ AFPDaily: { Quota: '100', Used: '25', ResetTime: 1768000000000 } }).windows[0].name === 'daily')
+  const badNumbers = [undefined, null, '', '  ', false, true, {}, [], 'bad']
+  check('火山塑形：无效 Used/Percent 不伪造零用量', badNumbers.every((v) =>
+    shapeVolcAfp({ AFPWeekly: { Quota: 100, Used: v } }) === null &&
+    shapeVolcCoding({ QuotaUsage: [{ Level: 'weekly', Percent: v }] }) === null))
+  const partial = shapeVolcAfp({ AFPFiveHour: { Quota: 100 }, AFPWeekly: { Quota: '100', Used: '0' } })
+  check('火山塑形：保留真实零值和其它有效窗口（兼容数字字符串）',
+    partial.windows.length === 1 && partial.windows[0].usedPct === 0 && partial.windows[0].remainingPct === 100)
+  const { readVolcCredentials } = await import('../lib/volc-plan.mjs')
+  const fakeConfig = () => ({ vendorKeys: { 'volc-access-key-id': 'AKLTfake-config', 'volc-access-key-secret': 'fake-config-secret' } })
+  check('火山凭据：完整环境变量对优先于配置',
+    readVolcCredentials({ VOLC_ACCESS_KEY_ID: 'AKLTfake-env', VOLC_ACCESS_KEY_SECRET: 'fake-env-secret' }, fakeConfig).source === 'env:VOLC_ACCESS_KEY_ID')
+  check('火山凭据：半套别名不拼接，回退完整配置对',
+    readVolcCredentials({ VOLC_ACCESS_KEY_ID: 'AKLTfake-env', VOLC_ARK_ACCESS_KEY_SECRET: 'fake-other-secret' }, fakeConfig).ak === 'AKLTfake-config')
+  check('火山凭据：半套首选之后仍可选择其它完整环境变量对',
+    readVolcCredentials({ VOLC_ACCESS_KEY_ID: 'AKLTfake-env', ARK_ACCESS_KEY_ID: 'AKLTfake-pair', ARK_ACCESS_KEY_SECRET: 'fake-pair-secret' }, fakeConfig).ak === 'AKLTfake-pair')
+  check('火山凭据：双键缺一则无凭据', readVolcCredentials({}, () => ({ vendorKeys: { 'volc-access-key-id': 'AKLTfake' } })) === null)
+  check(
+    '火山窗口名：未知 Level 原样保留（显示层 label 兜底）',
+    volcWindowMeta('session').name === '5h' && volcWindowMeta('mystery').name === 'mystery'
+  )
+  check(
+    '火山错误分类：401/签名类 -> invalid-credentials；InvalidTimestamp -> clock-skew；404 -> not-subscribed',
+    classifyVolcError({ status: 401, code: '', message: 'x' }).reason === 'invalid-credentials' &&
+      classifyVolcError({ status: 400, code: 'SignatureDoesNotMatch', message: 'x' }).reason ===
+        'invalid-credentials' &&
+      classifyVolcError({ status: 400, code: 'InvalidTimestamp', message: 'x' }).reason === 'clock-skew' &&
+      classifyVolcError({ status: 404, code: 'NotFound', message: 'x' }).reason === 'not-subscribed'
+  )
+}
+
+// 火山主入口 readVolcPlanQuota 的分支逻辑（mock https.request，零出网；结束时恢复
+// 全局 request 与凭据环境变量——后续块还有真实 HTTP 测试。callVolc 走
+// node:https.request 出网（undici fetch 会剥手动 Host 头导致签名不匹配），mock 拦 request）
+{
+  const volc = await import('../lib/volc-plan.mjs')
+  const realRequest = https.request
+  const prevAk = process.env.VOLC_ACCESS_KEY_ID
+  const prevSk = process.env.VOLC_ACCESS_KEY_SECRET
+  // 响应形状模拟 https.IncomingMessage（statusCode + 'data'/'end' 事件）
+  const volcJson = (body, status = 200) => ({ statusCode: status, bodyText: JSON.stringify(body) })
+  const codingBody = { Result: { QuotaUsage: [{ Level: 'weekly', Percent: 18, ResetTimestamp: 1768500000 }] } }
+  const afpBody = { Result: { AFPWeekly: { Quota: 100, Used: 5, ResetTime: 0 } } }
+  const notFound = volcJson({ ResponseMetadata: { Error: { Code: 'NotFound', Message: 'not found' } } }, 404)
+  const unauthorized = volcJson({ ResponseMetadata: { Error: { Code: 'SignatureDoesNotMatch', Message: 'x' } } }, 401)
+  let respond = () => notFound
+  let calls = 0
+  try {
+    process.env.VOLC_ACCESS_KEY_ID = 'AKLTtest'
+    process.env.VOLC_ACCESS_KEY_SECRET = 'SKtest'
+    https.request = (url, opts, cb) => {
+      const handlers = {}
+      const res = {
+        statusCode: 0,
+        on(ev, fn) {
+          handlers[ev] = fn
+          return res
+        },
+      }
+      const req = {
+        on(ev, fn) {
+          if (ev === 'error') handlers.reqError = fn
+          return req
+        },
+        setTimeout() {
+          return req
+        },
+        write() {},
+        end() {
+          // 异步回包，模拟真实网络时序：先 cb(res) 再 data -> end
+          queueMicrotask(() => {
+            const r = respond(String(url))
+            if (r.error) { handlers.reqError(r.error); return }
+            res.statusCode = r.statusCode
+            cb(res)
+            if (handlers.data) handlers.data(r.bodyText)
+            if (handlers.end) handlers.end()
+          })
+        },
+      }
+      calls += 1
+      return req
+    }
+    respond = () => notFound
+    let p = await volc.readVolcPlanQuota(true, 'coding')
+    check('火山：404 返回稳定错误，不查询另一套餐', !p.ok && p.reason === 'not-subscribed' && calls === 1)
+    const actions = []
+    respond = (u) => { actions.push(new URL(u).searchParams.get('Action')); return volcJson(u.includes('GetCodingPlanUsage') ? codingBody : afpBody) }
+    const [coding, agent] = await Promise.all([volc.readVolcPlanQuota(true, 'coding'), volc.readVolcPlanQuota(true, 'agent')])
+    check('火山：两种套餐独立查询官方 Action', coding.ok && agent.ok && coding.planType === 'coding' && agent.planType === 'agent' &&
+      actions.sort().join(',') === 'GetAFPUsage,GetCodingPlanUsage')
+    const cachedCalls = calls
+    await Promise.all([volc.readVolcPlanQuota(false, 'coding'), volc.readVolcPlanQuota(false, 'agent')])
+    check('火山：两种套餐缓存互不覆盖', calls === cachedCalls)
+    const concurrentCalls = calls
+    await Promise.all([volc.readVolcPlanQuota(true, 'coding'), volc.readVolcPlanQuota(true, 'coding')])
+    check('火山：强制刷新也合并同套餐在途请求', calls === concurrentCalls + 1)
+    respond = () => ({ error: new Error('offline') })
+    const beforeFailure = calls
+    p = await volc.readVolcPlanQuota(true, 'coding')
+    check('火山：网络失败返回稳定结构且不跨套餐回退', p && !p.ok && p.reason === 'request-failed' && calls === beforeFailure + 1)
+    const failedCalls = calls
+    await volc.readVolcPlanQuota(false, 'coding')
+    const stillAgent = await volc.readVolcPlanQuota(false, 'agent')
+    check('火山：失败计入 TTL，另一套餐成功缓存保留', calls === failedCalls && stillAgent.ok && stillAgent.planType === 'agent')
+    respond = () => volcJson({ Result: {} })
+    p = await volc.readVolcPlanQuota(true, 'agent')
+    check('火山：成功空数据不推断未订阅', !p.ok && p.reason === 'no-data' && p.planType === 'agent')
+    respond = () => unauthorized
+    p = await volc.readVolcPlanQuota(true, 'coding')
+    check('火山：凭据错误保持分类与稳定错误', !p.ok && p.reason === 'invalid-credentials' && p.planType === 'coding')
+    const oldKeyCalls = calls
+    process.env.VOLC_ACCESS_KEY_SECRET = 'fake-rotated-secret'
+    respond = () => volcJson(codingBody)
+    p = await volc.readVolcPlanQuota(false, 'coding')
+    check('火山：凭据变更不复用旧缓存', p.ok && calls === oldKeyCalls + 1)
+    const invalidCalls = calls
+    p = await volc.readVolcPlanQuota(true, 'other')
+    check('火山：未知套餐不出网', !p.ok && p.reason === 'unknown-plan' && calls === invalidCalls)
+  } finally {
+    https.request = realRequest
+    if (prevAk === undefined) delete process.env.VOLC_ACCESS_KEY_ID
+    else process.env.VOLC_ACCESS_KEY_ID = prevAk
+    if (prevSk === undefined) delete process.env.VOLC_ACCESS_KEY_SECRET
+    else process.env.VOLC_ACCESS_KEY_SECRET = prevSk
+  }
+}
+
 // 中转站额度：站点识别 + 三类平台响应塑形 + 余额/窗口卡 + HTTP 兜底链
 //（纯函数用 fixture；HTTP 用 mock fetch，不出网）
 {
@@ -1707,6 +1924,12 @@ function check(name, ok, detail) {
     r('account:zai-start-plan', 'GLM-5.3') === 'plan' && r('x:coding-plan', 'any') === 'plan'
   )
   check(
+    '计费源：非火山 coding-plan 保持 GLM 套餐（含 individual-coding-plan），volc 名称不冒充',
+    ['individual-coding-plan', 'account:individual-coding-plan', 'account:coding-plan']
+      .every((pid) => resolveBillingSource(pid, 'GLM-5.3', undefined, { glmSubscription: false }).source === 'plan') &&
+      resolveBillingSource('volc-coding-plan', 'GLM-5.3', undefined, { glmSubscription: false }).source !== 'plan'
+  )
+  check(
     '计费源：MiMo 双端点按 URL 区分（token-plan vs api）',
     r('xiaomi-mimo', 'mimo-v2.6-pro', 'https://token-plan-cn.xiaomimimo.com') === 'mimo-plan' &&
       r('xiaomi-mimo', 'mimo-v2.6-pro', 'https://api.xiaomimimo.com/anthropic') === 'mimo-api'
@@ -1737,6 +1960,29 @@ function check(name, ok, detail) {
       r('commandcode-goat-1-claude', 'claude-sonnet-5-5') === 'cmdgo' &&
       r('commandcode-goat-2', 'deepseek/deepseek-v4-pro') === 'cmdgo'
   )
+  const ark = 'https://ark.cn-beijing.volces.com'
+  const vr = (url, pid = '9de0b0cd-43cc-4b9d-867c-32030235e990', config = {}) =>
+    resolveBillingSource(pid, 'deepseek-v3', url, { config, glmSubscription: false })
+  check('火山：不含厂商关键词的 provider 按官方路径区分三种模式',
+    vr(ark + '/api/v3').source === 'volc-api' && vr(ark + '/api/v3').volcMode === 'api' &&
+    vr(ark + '/api/coding').source === 'volc' && vr(ark + '/api/coding').planType === 'coding' &&
+    vr(ark + '/api/plan/v3').source === 'volc' && vr(ark + '/api/plan/v3').planType === 'agent')
+  check('火山：支持两种协议、末尾斜杠和域名大小写',
+    [ark + '/api/coding/v3/', 'https://ARK.CN-BEIJING.VOLCES.COM/api/coding'].every(u => vr(u).planType === 'coding') &&
+    [ark + '/api/plan/', ark + '/api/plan/v3'].every(u => vr(u).planType === 'agent'))
+  check('火山：未知路径与非标准入口不能自动清零',
+    ['/api/coding-extra', '/api/plan/v3/chat/completions', '/API/coding', '/api/coding?x=1', '/api/coding#x', '/api/%63oding', '/'].every(p => vr(ark + p).source === 'volc-api') &&
+    ['http://ark.cn-beijing.volces.com/api/coding', 'https://ark.cn-beijing.volces.com:8443/api/coding',
+      'https://user@ark.cn-beijing.volces.com/api/coding', 'https://other.volces.com/api/coding',
+      'https://open.volcengineapi.com/api/coding'].every(u => vr(u).source === 'volc-api'))
+  check('火山：伪域名不能进入火山分类',
+    ['evilvolces.com', 'volcengine.example.com', 'ark.cn-beijing.volces.com.evil.example'].every(h => vr('https://' + h + '/api/coding').vendor !== 'volc'))
+  check('火山：provider 名称与旧声明不覆盖 URL',
+    vr(ark + '/api/v3', 'volc-coding-plan', { volcBillingByProvider: { 'volc-coding-plan': 'plan' }, displayMode: 'volc' }).source === 'volc-api' &&
+    vr(ark + '/api/plan', 'uuid', { volcBillingByProvider: { uuid: 'api' } }).planType === 'agent' &&
+    vr('', 'volc-coding-plan').vendor !== 'volc')
+  check('火山：平台标签与套餐类型一致', vr(ark + '/api/v3').label === '火山方舟' &&
+    vr(ark + '/api/coding').label === '火山 Coding Plan' && vr(ark + '/api/plan').label === '火山 Agent Plan')
   // GLM 订阅修正：大模型的 provider/host 名字区分不出「订阅」与「按量」（同一个
   // open.bigmodel.cn、同一把 key 形状），但账号事实分得出——有 GLM Coding Plan 套餐
   // 配额时按 Plan 口径（订阅持有者的 GLM 用量扣的是订阅额度，不是按量账单）
@@ -4327,6 +4573,39 @@ try {
   const adjBadBody = await adjBad.json()
   check('负数金额被拒绝', adjBad.ok && adjBadBody.ok === false, JSON.stringify(adjBadBody))
 
+  // 同一平台混用：真实数据库 → 服务轮次 → 汇总，订阅声明不能吞掉按量行。
+  for (const [providerId, plan] of [['volcengine-ark', false], ['volc-plan-test', true], ['9de0b0cd-43cc-4b9d-867c-32030235e990', true]]) {
+    const before = await getJson(port, '/whale/last-turn.json')
+    insertTurn('sess_selftest', 'turn_' + providerId, USAGE_B, Date.now(), [{ model: MODEL, providerId, usage: USAGE_B }])
+    let turn
+    const deadline = Date.now() + 6000
+    do {
+      await new Promise((r) => setTimeout(r, 400))
+      turn = await getJson(port, '/whale/last-turn.json')
+    } while (turn.seq <= before.seq && Date.now() < deadline)
+    check('火山逐轮计费：' + providerId, turn.seq > before.seq && turn.tokens > 0 &&
+      (plan ? turn.amount === 0 && turn.billable === false : turn.amount > 0 && turn.billable === true), JSON.stringify(turn))
+  }
+  const volcRec = await getJson(port, '/whale/usage-records.json')
+  const apiRow = volcRec.today.models.find((m) => m.providerId === 'volcengine-ark')
+  const planRow = volcRec.today.models.find((m) => m.providerId === 'volc-plan-test')
+  check('火山混用汇总：按量金额保留，订阅为零，平台标签独立',
+    apiRow && apiRow.amount > 0 && !apiRow.plan && apiRow.vendorLabel === '火山方舟' &&
+    planRow && planRow.amount === 0 && planRow.plan && planRow.tokens > 0 && planRow.vendorLabel === '火山 Coding Plan',
+    JSON.stringify({ apiRow, planRow }))
+  const volcRoute = await getJson(port, '/whale/volc.json?providerId=volc-plan-test')
+  check('火山路由：未配置 IAM 仍返回稳定错误且不泄露凭据', volcRoute.ok === false &&
+    volcRoute.reason === 'no-credentials' && !('ak' in volcRoute) && !('sk' in volcRoute))
+  const agentRow = volcRec.today.models.find(m => m.providerId === '9de0b0cd-43cc-4b9d-867c-32030235e990')
+  check('火山 Agent 汇总：按专用路径归零且标明套餐', agentRow && agentRow.amount === 0 && agentRow.tokens > 0 && agentRow.vendorLabel === '火山 Agent Plan')
+  const apiView = await getJson(port, '/whale/volc.json?providerId=volcengine-ark')
+  check('火山 API 视图无需 IAM 凭据', apiView.ok && apiView.volcMode === 'api' && !apiView.windows)
+  const agentView = await getJson(port, '/whale/volc.json?providerId=9de0b0cd-43cc-4b9d-867c-32030235e990')
+  check('火山 Agent 查询失败仍保持接入分类', !agentView.ok && agentView.reason === 'no-credentials' && agentView.volcMode === 'agent' && agentView.source === 'volc')
+  const missingView = await getJson(port, '/whale/volc.json?providerId=missing')
+  check('火山未知 provider 不猜测套餐', !missingView.ok && missingView.reason === 'no-volc-provider')
+
+
   // 挂件配置：displayMode（智能切换的手动覆盖）写读往返；非法值回落 auto
   const dmPut = await fetch('http://127.0.0.1:' + port + '/whale/size.json', {
     method: 'PUT',
@@ -4342,6 +4621,12 @@ try {
   })
   const dmBad = await getJson(port, '/whale/size.json')
   check('displayMode 非法值被丢弃（保留原值）', dmBad.displayMode === 'plan', 'displayMode=' + dmBad.displayMode)
+
+  await fetch('http://127.0.0.1:' + port + '/whale/size.json', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scale: 1.5, displayMode: 'volc' }),
+  })
+  const volcMode = await getJson(port, '/whale/size.json')
+  check('displayMode 火山写入并持久化回读', volcMode.displayMode === 'volc')
 
   // 安全路由：Host 校验（防 DNS rebinding）/ Origin 校验（防跨站写）/ 关闭令牌
   function rawRequest(method, requestPath, headers, body) {
@@ -4505,6 +4790,17 @@ try {
     sel1 && sel1.ok && sel1.from === 'selection' && sel1.source === 'glm' && sel1.label === 'GLM 按量',
     JSON.stringify(sel1).slice(0, 160)
   )
+  for (const [providerId, expected] of [['volcengine-ark', 'volc-api'], ['volc-plan-test', 'volc'], ['9de0b0cd-43cc-4b9d-867c-32030235e990', 'volc']]) {
+    db.prepare('UPDATE session_entry SET data = ?, time_updated = ? WHERE type = ?').run(
+      JSON.stringify({ modelSelection: { providerId, modelId: 'GLM-5.3-Flash' } }), Date.now(), 'runtime/model_selection')
+    const selected = await getJson(port, '/whale/session.json')
+    check('火山自动跟随与消费链同源：' + providerId, selected.source === expected && selected.volcMode === (providerId === 'volcengine-ark' ? 'api' : providerId === 'volc-plan-test' ? 'coding' : 'agent'), JSON.stringify(selected))
+  }
+  const providersCli = spawnSync(process.execPath, [path.join(PLUGIN_ROOT, 'lib/cli.mjs'), 'providers'], { env: serverEnv, encoding: 'utf8' })
+  const providersList = JSON.parse(providersCli.stdout || '[]')
+  check('providers 命令只输出 ID 与来源，不泄露发现凭据', providersCli.status === 0 &&
+    providersList.some((p) => p.providerId === 'volc-plan-test' && p.source === 'volc') &&
+    providersList.every((p) => Object.keys(p).sort().join(',') === 'providerId,source'))
   db.prepare('UPDATE session_entry SET data = ?, time_updated = ? WHERE type = ?').run(
     JSON.stringify({ modelSelection: { providerId: 'xiaomi-mimo', modelId: 'mimo-v2.6-pro' } }),
     Date.now() + 1,
@@ -5093,8 +5389,8 @@ try {
       !isOwnOverlayCommandLine('') && !isOwnOverlayCommandLine(null) && !isOwnOverlayCommandLine('electron.exe --type=gpu-process')
     )
     check(
-      '浮层亲缘判定：Windows 路径大小写与斜杠等价（C:/x 与 c:\\x 视为同一目录）',
-      isOwnOverlayCommandLine(exe.replace(/\\/g, '/').toUpperCase()),
+      '浮层亲缘判定：Windows 忽略路径大小写，POSIX 保持大小写敏感',
+      isOwnOverlayCommandLine(exe.replace(/\\/g, '/').toUpperCase()) === (process.platform === 'win32'),
       process.platform
     )
   }
@@ -5232,3 +5528,4 @@ try {
 const failed = results.filter((r) => !r.ok)
 console.log('\n' + (failed.length === 0 ? '全部通过（' + results.length + '/' + results.length + '）' : '失败 ' + failed.length + ' 项'))
 process.exit(failed.length === 0 ? 0 : 1)
+
