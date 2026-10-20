@@ -455,6 +455,51 @@ try {
   const volcReloaded = await cdp.eval("Array.from(document.querySelectorAll('select')).find(function(s){return Array.from(s.options).some(function(o){return o.value==='volc'})}).value")
   check('页面重载后保持火山显示模式', volcReloaded === 'volc')
 
+  // 火山平台单入口：fixture 仅替换服务返回，仍执行实际菜单、轮询、DOM 渲染。
+  const arkStub = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `
+    (function () {
+      var real = window.fetch;
+      window.__arkMode = 'coding'; window.__arkForeign = false; window.__arkFail = false;
+      function json(d) { return Promise.resolve(new Response(JSON.stringify(d), {status:200, headers:{'Content-Type':'application/json'}})); }
+      window.fetch = function (url, options) {
+        var u = String(url), mode = window.__arkMode, id = 'opaque-' + mode;
+        if (u.indexOf('/whale/session.json') !== -1 && window.__arkForeign) window.__arkForeignSeen = true;
+        if (u.indexOf('/whale/session.json') !== -1) return json(window.__arkForeign
+          ? {ok:true,providerId:'other',source:'ds',modelId:'deepseek-v3'}
+          : {ok:true,providerId:id,source:mode==='api'?'volc-api':'volc',volcMode:mode,modelId:'ark-code-latest'});
+        if (u.indexOf('/whale/volc.json') !== -1) return json({
+          ok:!window.__arkFail, reason:window.__arkFail?'invalid-credentials':undefined,
+          providerId:id, source:mode==='api'?'volc-api':'volc', volcMode:mode, planType:mode,
+          windows:mode==='api'?undefined:(mode==='agent'?['5小时','近一天','近一周','近一月']:['5小时','本周','本月']).map(function(label){return {label:label,usedPct:25,resetAt:Date.now()+3600000};})
+        });
+        if (u.indexOf('/whale/usage-records.json') !== -1) return json({ok:true,today:{total:12,tokens:100,models:[],byVendor:{'火山方舟':{amount:12,tokens:100,currency:'CNY'}}}});
+        return real.apply(this, arguments);
+      };
+    })();` })
+  const selectArkMode = value => cdp.eval(`(function(){var s=Array.from(document.querySelectorAll('select')).find(s=>Array.from(s.options).some(o=>o.value==='volc'));s.value=${JSON.stringify(value)};s.dispatchEvent(new Event('change'));})()`)
+  const arkHead = title => `(function(){var q=document.querySelector('.zcwv-qcard');return !!q&&getComputedStyle(q).display!=='none'&&q.querySelector('.zcwv-qhead')&&q.querySelector('.zcwv-qhead').textContent===${JSON.stringify(title)}})()`
+  await cdp.send('Page.reload')
+  await pollEval(cdp, "!!document.querySelector('.zcwv-qcard')", 15000)
+  check('火山菜单只有一个平台入口', await cdp.eval("Array.from(document.querySelectorAll('select option')).filter(o=>o.textContent.indexOf('火山')!==-1).map(o=>o.textContent).join(',')==='火山方舟'"))
+  await selectArkMode('auto')
+  check('火山自动跟随 Coding 专用路径', !!await pollEval(cdp, arkHead('火山 Coding Plan'), 15000))
+  await cdp.eval("window.__arkMode='agent'")
+  check('火山自动跟随 Agent 专用路径并显示四窗口', !!await pollEval(cdp,
+    `(${arkHead('火山 Agent Plan')})&&document.querySelectorAll('.zcwv-qcard .zcwv-qrow').length===4`, 15000))
+  check('火山 Agent 四窗口使用紧凑卡片', await cdp.eval("document.querySelector('.zcwv-qcard').classList.contains('zcwv-qcompact')"))
+  await cdp.eval("window.__arkMode='api'")
+  const arkApiView = "(function(){var l=document.querySelector('.zcwv-label'),q=document.querySelector('.zcwv-qcard');return l&&getComputedStyle(l).display!=='none'&&l.textContent==='火山 API 今日估算'&&getComputedStyle(q).display==='none'})()"
+  check('火山自动跟随 API 显示本地估算', !!await pollEval(cdp, arkApiView, 15000))
+  await selectArkMode('volc')
+  await cdp.eval("window.__arkForeign=true")
+  check('固定火山时切到其他厂商仍显示最近火山 API', !!await pollEval(cdp, 'window.__arkForeignSeen && (' + arkApiView + ')', 15000))
+  await cdp.eval("window.__arkForeign=false;window.__arkMode='agent';window.__arkFail=true")
+  check('火山配额失败不回退另一套餐或 API', !!await pollEval(cdp,
+    `(${arkHead('火山 Agent Plan')})&&document.querySelector('.zcwv-qcard').textContent.indexOf('IAM 凭据无效')!==-1`, 15000))
+  if (arkStub && arkStub.identifier) await cdp.send('Page.removeScriptToEvaluateOnNewDocument', {identifier:arkStub.identifier})
+  await cdp.send('Page.reload')
+  await pollEval(cdp, "!!document.querySelector('.zcwv-qcard')", 15000)
+
   // ⑤ 手动切 DeepSeek 源：无 key 时错误文案必须完整换行显示
   // ——回归 slice(0,14) 把「未找到 DeepSeek API Key…」截成「未找到DeepSeek A」的缺陷
   await cdp.eval(

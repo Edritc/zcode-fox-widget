@@ -143,26 +143,25 @@ echo 'sk-xxxxxxxx' | node lib/cli.mjs key
 
 （AK/SK 是成对的两个键，不走其它厂商 `vendorKeys.<模板 id>` 的单键模式；未配置时火山卡会显示「未配置火山 IAM 凭据（AK/SK）」提示。）
 
-**计费声明按 provider 区分**：火山域名只证明平台，默认保留本地按量估算，不是官方账单。配额查询成功、配置 IAM 凭据或手动选择火山卡都不会把按量调用归零。先在插件根目录运行以下只读命令，复制实际 providerId（不输出密钥）：
+**自动识别接入类型**：先按当前模型的 providerId 查找有效 Base URL，再根据官方域名与完整路径区分 API、Coding Plan 和 Agent Plan。providerId 可以是 UUID，不要求包含厂商名称。
 
-```bash
-node lib/cli.mjs providers
-```
+官方直连域名为 `ark.cn-beijing.volces.com`，使用 HTTPS、默认端口，无查询参数或片段：
 
-在 `config.json` 顶层合并如下字段，将占位 ID 替换为上一步的实际值（大小写须一致）：
+| Base URL 路径（兼容末尾 `/`） | 统计与显示 |
+| --- | --- |
+| `/api/v3` | 火山 API 本地按量估算 |
+| `/api/coding`、`/api/coding/v3` | Coding Plan 订阅配额 |
+| `/api/plan`、`/api/plan/v3` | Agent Plan 订阅配额 |
 
-```json
-{
-  "volcBillingByProvider": {
-    "实际订阅-providerId": "plan",
-    "实际按量-providerId": "api"
-  }
-}
-```
+菜单「显示」统一提供 **火山方舟**：按当前火山接入选择金额或对应套餐卡；切到其它厂商时保留最近的火山接入，重开页面仍保留该接入 ID。尚未识别过火山接入时提示先在 ZCode 选择；已删除的接入也会提示重新选择。API 金额为所有火山按量记录的今日合计，不是单个 provider 的金额。自动跟随模式继续跟随当前厂商。
 
-只有火山来源且精确声明为 `plan` 的 provider 才不累加按量金额；其它 provider 不受影响，未声明或无效值仍保留按量估算。订阅配额查询暂时失败不会改变该分类。代理地址无法识别为火山时不自动推断订阅。本轮不根据未经验证的 URL 路径或 key 前缀猜测计费方式。
+显示选择不修改计费分类。配额查询失败也不改变分类；Coding 与 Agent 各自查询、缓存，不跨套餐回退。API 估算无需 IAM 凭据，个人版配额查询仍需 IAM AK/SK。请确认配置的 IAM 凭据与模型接入属于同一账号；插件不自动验证账号绑定。企业版席位配额暂不支持。
 
-声明按当前 provider 配置应用于本机统计；若同一个 providerId 以后改用于不同计费方式，历史统计也会按当前配置重新归类，建议为按量和订阅保留不同 providerId。火山按量模型缺价目时沿用 tokens 兜底，不虚构金额。
+旧的 `volcBillingByProvider` 声明不再参与判断，可从配置中移除；旧的 `displayMode: "volc"` 自动沿用为「火山方舟」。未知火山路径不自动判为订阅，统计保留估算，固定视图提示路径未识别；自定义代理不通过名称或 key 形态猜套餐。缺模型价目时沿用 tokens 兜底，不虚构金额。
+
+分类按当前 provider 配置解释本机历史记录；改变同一个 provider 的 Base URL 可能重新归类其历史用量，建议按量与订阅使用不同 provider。金额是本地估算，不是官方账单。
+
+排查时可运行 `node lib/cli.mjs providers` 查看接入 ID 与来源（不输出密钥）；或请求 `/whale/volc.json?providerId=<经过 URL 编码的 ID>&refresh=1` 查看该接入的模式和查询结果。
 
 本机时间偏差超过 15 分钟会返回 `InvalidTimestamp`（界面提示「时间偏差过大」），校准时钟即可。
 

@@ -16,7 +16,7 @@ description: 操作与排查 ZCode狐娘小挂件（zcode-fox-widget）。适用
 | 桌面浮层 | `desktop/main.cjs`、`desktop/preload.cjs` | 透明置顶无边框窗口承载挂件页面，默认鼠标穿透，只加载本机 127.0.0.1 |
 | 浮层管理 | `lib/overlay.mjs` | 浮层单例检查、启停，以及 Electron 运行时的按需安装 |
 | 余额与账本 | `lib/balance.mjs` | 拉余额、记账模式累计、平台用量换算、25 秒缓存与瞬时失败回退 |
-| 厂商配额 | `lib/vendors.mjs`、`lib/volc-plan.mjs` | 厂商余额/配额模板框架（46 个模板）；火山方舟 Coding Plan 订阅窗口（V4 签名，45s TTL + in-flight 单飞） |
+| 厂商配额 | `lib/vendors.mjs`、`lib/volc-plan.mjs` | 厂商余额/配额模板框架（46 个模板）；火山方舟 Coding / Agent Plan 订阅窗口（V4 签名，45s TTL + in-flight 单飞） |
 | 定价 | `lib/pricing.mjs` | 峰谷时段判定与 token→金额换算（改价目只改这里） |
 | 每轮消耗 | `lib/turn-cost.mjs` | 读 ZCode 的 `turn_usage` 表，换算每轮金额 |
 | 凭据与出站校验 | `lib/credentials.mjs` | 找 API Key、出站主机白名单校验 |
@@ -37,7 +37,7 @@ description: 操作与排查 ZCode狐娘小挂件（zcode-fox-widget）。适用
 - **今日已用（主口径 = 本机库，v1.7.0 起）**：读 ZCode 落库的模型用量按价目折算（`lib/usage-records.mjs` 的 `todayVendorUsage()`，与用量面板同一次聚合），按模型看得见、不受充值干扰；套餐/网关行按配额或 tokens 表达。**大肥鱼记账**（每次观测余额，余额下降的差值累加进 `~/.zcode/whale/usage-ledger.json`，跨天归档保留 30 天，免令牌但 ZCode 关闭期间会漏记）与**实时·令牌**退居「对账 + 兜底」：两口径数字不一致时并排展示（气泡小字 / 面板「对账（DeepSeek）」行），本机库当天无记录时兜底为主显示并标注来源。
 - **实时·令牌（对账 + 兜底口径之一）**：需要 `DEEPSEEK_PLATFORM_TOKEN`，调平台用量接口拿 token 分桶，按峰谷定价自行换算（该接口不返回金额）。令牌缺失或失效会自动回落记账口径并在界面上标注。
 - **每轮对话消耗**：读 ZCode 自己的会话库 `~/.zcode/cli/db/db.sqlite` 的 `turn_usage` 表（上游监听进程内 `session/event`，ZCode 拿不到该事件流，但落库数据语义等价）。数据库读不到时回退解析 `~/.zcode/cli/rollout/model-io-*.jsonl`。
-- **火山方舟 Coding Plan 配额**：`POST https://ark.cn-beijing.volcengineapi.com/` 的 `GetCodingPlanUsage`（`lib/volc-plan.mjs`，接口 `/whale/volc.json`），只给 5 小时/周/月三个**已用百分比**窗口（没有次数与金额），未订阅/无数据如实显示、绝不补 0。主路径空时回退 `GetAgentPlanAFPUsage`，双空才判「未订阅」。只有在 `volcBillingByProvider` 中明确标为 `plan` 的火山 provider 才在「今日已用/每轮消耗」里按预付池处理（金额记 0、按 tokens 表达），普通 Ark 保留本地按量估算。
+- **火山方舟**：按 provider 的有效 Base URL 区分 API、Coding Plan 与 Agent Plan；菜单只保留“火山方舟”。两种 Plan 分别查询并缓存，API 保留本机用量估算；显示偏好和配额查询结果不参与计费分类。
 
   **计价口径的坑（改这段代码前务必读）**：ZCode 记录的 `input_tokens` 是**含缓存的总输入**——实测 `computed_total_tokens = input + output` 且 `input ≥ cache_read`（DeepSeek/OpenAI 风格）。计价前必须用 `splitInputTokens()` 减掉命中部分，否则缓存那 99% 会被按未命中价重复计费，实测单轮会从 ¥3.05 虚高到 ¥76.95（约 25 倍）。该函数同时用总量字段自动识别 Anthropic 风格（`input` 不含缓存、`total = input + cacheRead + cacheCreation + output`）。`tools/selftest.mjs` 里有针对这两种口径的回归断言，改动计价逻辑后必须跑一遍。
 
@@ -49,7 +49,7 @@ description: 操作与排查 ZCode狐娘小挂件（zcode-fox-widget）。适用
 
 第 3 条是 ZCode 版的关键适配：上游从 DSH 凭据服务读 key，ZCode 没有等价服务，但用户通常已经配好了 DeepSeek 接入点，因此可以零配置直接可用。密钥只在内存中使用、只发往白名单主机，不落盘日志、不打印明文（对外只给 `sk-04…994` 这类掩码）。
 
-火山 Coding Plan 是**另一套凭据**：查配额必须用 IAM AK/SK（`AKLT…`），模型调用的 `ark-` key 不适用，两套互不通用。读取顺序 = 环境变量（`VOLC_ACCESS_KEY_ID`/`SECRET` 及 `VOLC_ARK_*`、`VOLC_ACCESS_KEY`/`VOLC_SECRET_KEY`、`ARK_ACCESS_KEY_*` 别名，四套各按整套配对，避免 AK/SK 拼错对）> `config.json` 的 `vendorKeys.volc-access-key-id` / `volc-access-key-secret` **双键**（不走其它厂商 `vendorKeys.<模板 id>` 单键模式）。创建路径见 README「首次配置」的火山段。
+火山 Plan 配额查询使用**另一套凭据**：查配额必须用 IAM AK/SK（`AKLT…`），模型调用的 `ark-` key 不适用，两套互不通用。读取顺序 = 环境变量（`VOLC_ACCESS_KEY_ID`/`SECRET` 及 `VOLC_ARK_*`、`VOLC_ACCESS_KEY`/`VOLC_SECRET_KEY`、`ARK_ACCESS_KEY_*` 别名，四套各按整套配对，避免 AK/SK 拼错对）> `config.json` 的 `vendorKeys.volc-access-key-id` / `volc-access-key-secret` **双键**（不走其它厂商 `vendorKeys.<模板 id>` 单键模式）。创建路径见 README「首次配置」的火山段。
 
 ## 常用操作
 
@@ -69,7 +69,7 @@ node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" window stop     # 关闭浮层
 node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" desktop install # 安装 Electron 运行时（浮层前置，一次性）
 ```
 
-服务接口（排查时可直接 curl）：`/whale/health`、`/whale/balance.json`、`/whale/last-turn.json`、`/whale/size.json`（GET/PUT）、`/whale/session.json`、`/whale/plan.json`（GLM Plan 配额：`source` = `plan-log` / `glm-plan-api`）、`/whale/cmdgo.json`（CommandCode 三重额度，`?refresh=1` 强制绕缓存）、`/whale/volc.json`（火山 Coding Plan 三窗口，45s TTL，`?refresh=1` 同款）、`/whale/vendors.json`、`/whale/usage-records.json`、`/whale/hook.json`（等确认标记与最近事件，**菜单里已不再显示这行诊断**）、`/whale/update.json`（GET 看状态，POST `action=check|update|skip|unskip|restart|close`）、`/whale/roles.json`、`/whale/role-upload.json`、`/whale/role-rename.json`（POST）、`/whale/role-delete.json`（POST）、`/whale/bubble-content.json`（GET/POST）、`/whale/balance-adjustments.json`（GET/POST）、`/whale/sounds.json`、`/whale/sound-upload.json`（POST）、`/whale/sound-delete.json`（POST）、`/whale/zcode-theme.json`、`/whale/image.png`、`/whale/rua.gif`、`/whale/sound/press.mp3` 与 `/whale/sound/release.mp3`（`?set=<音效集 id>`）、`/whale/widget.js`、`/whale/shutdown`（POST，需 `server.json` 令牌）。
+服务接口（排查时可直接 curl）：`/whale/health`、`/whale/balance.json`、`/whale/last-turn.json`、`/whale/size.json`（GET/PUT）、`/whale/session.json`、`/whale/plan.json`（GLM Plan 配额：`source` = `plan-log` / `glm-plan-api`）、`/whale/cmdgo.json`（CommandCode 三重额度，`?refresh=1` 强制绕缓存）、`/whale/volc.json`（火山按 `providerId` 对应 Base URL 选择 API / Coding / Agent，45s TTL，`?refresh=1` 强制刷新）、`/whale/vendors.json`、`/whale/usage-records.json`、`/whale/hook.json`（等确认标记与最近事件，**菜单里已不再显示这行诊断**）、`/whale/update.json`（GET 看状态，POST `action=check|update|skip|unskip|restart|close`）、`/whale/roles.json`、`/whale/role-upload.json`、`/whale/role-rename.json`（POST）、`/whale/role-delete.json`（POST）、`/whale/bubble-content.json`（GET/POST）、`/whale/balance-adjustments.json`（GET/POST）、`/whale/sounds.json`、`/whale/sound-upload.json`（POST）、`/whale/sound-delete.json`（POST）、`/whale/zcode-theme.json`、`/whale/image.png`、`/whale/rua.gif`、`/whale/sound/press.mp3` 与 `/whale/sound/release.mp3`（`?set=<音效集 id>`）、`/whale/widget.js`、`/whale/shutdown`（POST，需 `server.json` 令牌）。
 
 ## 挂件内自动更新（v1.11.0 起）
 
@@ -152,10 +152,10 @@ node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" desktop install # 安装 Electron 运行
 | 挂件服务打不开 | `node lib/cli.mjs status` 看是否运行；未运行则 `start`。端口被占用会自动顺延，以 `status` 输出的地址为准 |
 | Plan 配额不显示 / 提示「Plan 日志未找到」 | GLM Plan 配额有**两个**源（`plan-balance.mjs` 的取源链）：新鲜日志 > 直连套餐用量接口（`glm-plan-api.mjs`，要一把 GLM key）> 过期日志。`no-plan-log` = 两个源都没数据且**没配 GLM 凭据**（数据目录迁移后的机器在普通终端跑 `node lib/cli.mjs status/vendors` 时没有 `ZCODE_DATA_BASE_DIR`，只会探 `~/.zcode/v2/logs`，可能只剩迁移前残留；终端调试先 `set ZCODE_DATA_BASE_DIR=<数据盘根目录>`）；`no-plan-source` = 两源都没数据但**凭据配了**。两者都看 `/whale/plan.json` 的 `probedDirs` + `apiReason` + `keySource` |
 | 火山卡显示「未配置火山 IAM 凭据（AK/SK）」 | 最常见原因：用户把模型调用的 `ark-` key 当凭据配了——查配额必须用 IAM AK/SK（`AKLT…`），两套不通用。创建路径见 README「首次配置」；配好后 45s TTL 过后自动刷新，或 `curl '/whale/volc.json?refresh=1'` |
-| 火山卡显示「未订阅/无数据」 | 服务端判定链（`volc-plan.mjs`）：主路径空 → AFP 回退 → 双空 = `not-subscribed`；网络错误返回读取失败，不当作未订阅。确认账号在火山控制台订阅了 Coding Plan；已订阅仍出现则 `curl '/whale/volc.json?refresh=1'` 看 `reason`，接口偶发窗口空数据时 45s 后重试 |
+| 火山卡显示无数据或查询失败 | `/whale/volc.json?providerId=<URL 编码的 ID>&refresh=1` 返回接入模式与对应套餐结果。Coding 用 GetCodingPlanUsage，Agent 用 GetAFPUsage，各自查询且不跨套餐回退；成功空窗口为 no-data，网络失败为 request-failed。确认 IAM 与模型接入同账号，企业版席位配额暂不支持。 |
 | 火山卡显示「时间偏差过大」 | 网关 `InvalidTimestamp`：本机时间偏差超 15 分钟，校准系统时钟即可，无需改配置 |
 | 火山卡显示「IAM 凭据无效或无权限」 | `invalid-credentials`：AK/SK 输错、已禁用，或 IAM 用户没勾 `ArkReadOnlyAccess` 策略。核对 `config.json` 的 vendorKeys 双键是否成对、无多余空格（接口报 `InvalidAccessKey` / `SignatureDoesNotMatch` 都归这一类） |
-| 会话用火山但计费分类不对 | `node lib/cli.mjs providers` 查看精确 providerId；`config.json` 顶层 `volcBillingByProvider` 将订阅 provider 标为 `plan`，按量标为 `api` 或不声明。统一解析返回 `volc`（订阅）或 `volc-api`（平台按量），域名/IAM 凭据/显示菜单均不证明订阅；配额查询失败不改变计费分类。 |
+| 会话用火山但计费分类不对 | 用 `node lib/cli.mjs providers` 查精确 providerId，再核对有效 Base URL：官方 HTTPS `ark.cn-beijing.volces.com` 下 `/api/v3` 为 API、`/api/coding[/v3]` 为 Coding、`/api/plan[/v3]` 为 Agent。旧 `volcBillingByProvider` 已停用；显示偏好和配额查询结果不参与分类。 |
 | 峰谷判定不对 | 检查 `lib/pricing.mjs` 的 `PEAK_HOURS` / `BASE_PRICE` / `PRO_PRICE`；北京时间工作日上午 9–12、下午 14–18 为高峰，2026-08-23 起周末全天谷价 |
 | 换了图片/音效不生效 | 资产路由每次读盘且 `no-store`，浏览器强刷即可；同时确认替换的是 `assets/` 下的同名文件 |
 | **更新失败 / 镜像全不可达** | 面板的错误详情里有逐源失败原因。全部源失败多为网络问题：稍后重试，或设 `WHALE_DISABLE_UPDATE_CHECK=1` 关掉后台自动检查（不再出站）。也可从 `~/.zcode/whale/update-state.json` 的 `error` / `source` 看最后一次结果，`update/backup/` 看备份 |

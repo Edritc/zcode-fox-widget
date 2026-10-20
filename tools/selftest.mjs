@@ -154,8 +154,8 @@ fs.writeFileSync(
     config: {
       providerConfigRules: {
         providerRules: [
-          ...['volcengine-ark', 'volc-plan-test'].map((providerId) => ({
-            providerId, config: { api: { baseUrl: 'https://ark.cn-beijing.volces.com/api/v3' } },
+          ... [['volcengine-ark', '/api/v3'], ['volc-plan-test', '/api/coding/v3'], ['9de0b0cd-43cc-4b9d-867c-32030235e990', '/api/plan/v3']].map(([providerId, pathname]) => ({
+            providerId, config: { api: { baseUrl: 'https://ark.cn-beijing.volces.com' + pathname } },
           })),
           {
             providerId: 'bigmodel-standard-api',
@@ -241,7 +241,7 @@ async function pickFreePort(min, max) {
 }
 
 const PORT = await pickFreePort(39100, 39600)
-fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({ port: PORT, volcBillingByProvider: { 'volc-plan-test': 'plan' } }), 'utf8')
+fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({ port: PORT }), 'utf8')
 
 // ZCode 自己的用户配置（<ZCODE_HOME>/cli/config.json）：挂件「跟随 ZCode 主题」
 // 读它的 ui.theme。这里放 zai-dark，验证 zai-* 皮肤 → 挂件浅/深的映射。
@@ -1322,7 +1322,7 @@ function check(name, ok, detail) {
       return s.windows[0].usedPct === 100 && s.windows[0].exceeded === true && s.windows[0].remainingPct === 0
     })()
   )
-  check('火山塑形：主路径空 -> null（读取层判未订阅）', shapeVolcCoding({ QuotaUsage: [] }) === null)
+  check('火山塑形：空数据 -> null（不推断订阅状态）', shapeVolcCoding({ QuotaUsage: [] }) === null)
   const vAfp = shapeVolcAfp({
     AFPFiveHour: { Quota: 100, Used: 42, ResetTime: 1768000000 },
     AFPWeekly: { Quota: 100, Used: 5, ResetTime: 0 },
@@ -1338,6 +1338,7 @@ function check(name, ok, detail) {
       vAfp.windows[1].name === 'week',
     JSON.stringify(vAfp)
   )
+  check('火山 Agent 保留近一天窗口', shapeVolcAfp({ AFPDaily: { Quota: '100', Used: '25', ResetTime: 1768000000000 } }).windows[0].name === 'daily')
   const badNumbers = [undefined, null, '', '  ', false, true, {}, [], 'bad']
   check('火山塑形：无效 Used/Percent 不伪造零用量', badNumbers.every((v) =>
     shapeVolcAfp({ AFPWeekly: { Quota: 100, Used: v } }) === null &&
@@ -1420,40 +1421,42 @@ function check(name, ok, detail) {
       calls += 1
       return req
     }
-    // P1-2 回归：主/回退双 404 的 reason 必须是稳定键，不能把中文 message
-    //（classifyVolcError 给的「未订阅/无数据」）塞进 reason——前端 volcCard
-    // 按稳定值分支，塞中文会渲染成「读取失败 · 未订阅/无数据」
     respond = () => notFound
-    let p = await volc.readVolcPlanQuota(true)
-    check('火山主入口：双 404 -> not-subscribed（reason 稳定键，P1-2 回归）', p.ok === false && p.reason === 'not-subscribed', JSON.stringify(p))
-    // 主路径成功 -> coding 窗口
-    respond = () => volcJson(codingBody)
-    p = await volc.readVolcPlanQuota(true)
-    check('火山主入口：主路径成功 -> coding 窗口', p.ok === true && p.planType === 'coding' && p.windows.length === 1 && p.windows[0].name === 'week', JSON.stringify(p))
-    // 主路径空 -> 回退 AFP 成功
-    respond = (u) => (u.indexOf('GetCodingPlanUsage') !== -1 ? volcJson({ Result: { QuotaUsage: [] } }) : volcJson(afpBody))
-    p = await volc.readVolcPlanQuota(true)
-    check('火山主入口：主路径空 -> 回退 AFP 成功（agent 窗口）', p.ok === true && p.planType === 'agent' && p.windows.length === 1 && p.windows[0].name === 'week', JSON.stringify(p))
-    respond = (u) => u.includes('GetCodingPlanUsage') ? { error: new Error('offline') } : volcJson({ Result: {} })
-    p = await volc.readVolcPlanQuota(true)
-    check('火山主入口：主请求失败加回退空数据返回稳定错误，不返回 undefined', p && p.ok === false && p.reason === 'request-failed')
+    let p = await volc.readVolcPlanQuota(true, 'coding')
+    check('火山：404 返回稳定错误，不查询另一套餐', !p.ok && p.reason === 'not-subscribed' && calls === 1)
+    const actions = []
+    respond = (u) => { actions.push(new URL(u).searchParams.get('Action')); return volcJson(u.includes('GetCodingPlanUsage') ? codingBody : afpBody) }
+    const [coding, agent] = await Promise.all([volc.readVolcPlanQuota(true, 'coding'), volc.readVolcPlanQuota(true, 'agent')])
+    check('火山：两种套餐独立查询官方 Action', coding.ok && agent.ok && coding.planType === 'coding' && agent.planType === 'agent' &&
+      actions.sort().join(',') === 'GetAFPUsage,GetCodingPlanUsage')
+    const cachedCalls = calls
+    await Promise.all([volc.readVolcPlanQuota(false, 'coding'), volc.readVolcPlanQuota(false, 'agent')])
+    check('火山：两种套餐缓存互不覆盖', calls === cachedCalls)
+    const concurrentCalls = calls
+    await Promise.all([volc.readVolcPlanQuota(true, 'coding'), volc.readVolcPlanQuota(true, 'coding')])
+    check('火山：强制刷新也合并同套餐在途请求', calls === concurrentCalls + 1)
+    respond = () => ({ error: new Error('offline') })
+    const beforeFailure = calls
+    p = await volc.readVolcPlanQuota(true, 'coding')
+    check('火山：网络失败返回稳定结构且不跨套餐回退', p && !p.ok && p.reason === 'request-failed' && calls === beforeFailure + 1)
     const failedCalls = calls
-    await volc.readVolcPlanQuota(false)
-    check('火山主入口：网络失败也计入 TTL', calls === failedCalls)
-    respond = (u) => u.includes('GetCodingPlanUsage') ? volcJson({ Result: {} }) : { error: new Error('offline') }
-    p = await volc.readVolcPlanQuota(true)
-    check('火山主入口：主路径空加回退失败不误报未订阅', p.ok === false && p.reason === 'request-failed')
-    // 401 不回退（凭据问题再打一次也一样），且失败计入 TTL
-    calls = 0
+    await volc.readVolcPlanQuota(false, 'coding')
+    const stillAgent = await volc.readVolcPlanQuota(false, 'agent')
+    check('火山：失败计入 TTL，另一套餐成功缓存保留', calls === failedCalls && stillAgent.ok && stillAgent.planType === 'agent')
+    respond = () => volcJson({ Result: {} })
+    p = await volc.readVolcPlanQuota(true, 'agent')
+    check('火山：成功空数据不推断未订阅', !p.ok && p.reason === 'no-data' && p.planType === 'agent')
     respond = () => unauthorized
-    p = await volc.readVolcPlanQuota(true)
-    check('火山主入口：401 -> invalid-credentials 且不回退（只出网 1 次）', p.ok === false && p.reason === 'invalid-credentials' && calls === 1, JSON.stringify({ p, calls }))
-    // TTL：非 force 命中失败缓存，零出网；force 才真出网
-    const at = calls
-    p = await volc.readVolcPlanQuota(false)
-    check('火山主入口：失败计入 TTL（非 force 零出网），force 绕过', p.reason === 'invalid-credentials' && calls === at)
-    p = await volc.readVolcPlanQuota(true)
-    check('火山主入口：force 绕过失败缓存重出网', calls === at + 1)
+    p = await volc.readVolcPlanQuota(true, 'coding')
+    check('火山：凭据错误保持分类与稳定错误', !p.ok && p.reason === 'invalid-credentials' && p.planType === 'coding')
+    const oldKeyCalls = calls
+    process.env.VOLC_ACCESS_KEY_SECRET = 'fake-rotated-secret'
+    respond = () => volcJson(codingBody)
+    p = await volc.readVolcPlanQuota(false, 'coding')
+    check('火山：凭据变更不复用旧缓存', p.ok && calls === oldKeyCalls + 1)
+    const invalidCalls = calls
+    p = await volc.readVolcPlanQuota(true, 'other')
+    check('火山：未知套餐不出网', !p.ok && p.reason === 'unknown-plan' && calls === invalidCalls)
   } finally {
     https.request = realRequest
     if (prevAk === undefined) delete process.env.VOLC_ACCESS_KEY_ID
@@ -1951,24 +1954,29 @@ function check(name, ok, detail) {
       r('commandcode-goat-1-claude', 'claude-sonnet-5-5') === 'cmdgo' &&
       r('commandcode-goat-2', 'deepseek/deepseek-v4-pro') === 'cmdgo'
   )
-  const ark = 'https://ark.cn-beijing.volces.com/api/coding'
-  const config = { volcBillingByProvider: { 'Plan-UUID': 'plan', 'api-uuid': 'api' } }
-  const vr = (pid, url = ark) => resolveBillingSource(pid, 'deepseek-v3', url, { config })
-  check('火山平台默认按量：域名、volc 名字、coding-plan 名字均不证明订阅',
-    vr('volcengine-ark').source === 'volc-api' && vr('volc-coding-plan').source === 'volc-api' &&
-    vr('uuid', 'https://open.volcengineapi.com').source === 'volc-api')
-  check('火山订阅声明只绑定精确 provider：同账号按量与订阅互不影响',
-    vr('Plan-UUID').source === 'volc' && vr('api-uuid').source === 'volc-api' &&
-    vr('plan-uuid').source === 'volc-api' && vr('other').source === 'volc-api')
-  check('火山按量标签独立于托管模型与订阅卡',
-    vr('api-uuid').label === '火山方舟' && vr('api-uuid').vendor === 'volc' &&
-    vr('Plan-UUID').label === '火山 Coding Plan')
-  check('火山域名边界拒绝伪域名',
-    ['evilvolces.com', 'volcengine.example.com', 'ark.cn-beijing.volces.com.evil.example']
-      .every((host) => vr('uuid', 'https://' + host).source !== 'volc-api'))
-  check('账号订阅开关与手动显示不能改变火山计费',
-    resolveBillingSource('uuid', 'm', ark, { config: { volcPlanSubscribed: true, displayMode: 'volc' } }).source === 'volc-api')
-  check('火山声明不覆盖其它已知平台', vr('Plan-UUID', 'https://api.deepseek.com').source === 'ds')
+  const ark = 'https://ark.cn-beijing.volces.com'
+  const vr = (url, pid = '9de0b0cd-43cc-4b9d-867c-32030235e990', config = {}) =>
+    resolveBillingSource(pid, 'deepseek-v3', url, { config, glmSubscription: false })
+  check('火山：不含厂商关键词的 provider 按官方路径区分三种模式',
+    vr(ark + '/api/v3').source === 'volc-api' && vr(ark + '/api/v3').volcMode === 'api' &&
+    vr(ark + '/api/coding').source === 'volc' && vr(ark + '/api/coding').planType === 'coding' &&
+    vr(ark + '/api/plan/v3').source === 'volc' && vr(ark + '/api/plan/v3').planType === 'agent')
+  check('火山：支持两种协议、末尾斜杠和域名大小写',
+    [ark + '/api/coding/v3/', 'https://ARK.CN-BEIJING.VOLCES.COM/api/coding'].every(u => vr(u).planType === 'coding') &&
+    [ark + '/api/plan/', ark + '/api/plan/v3'].every(u => vr(u).planType === 'agent'))
+  check('火山：未知路径与非标准入口不能自动清零',
+    ['/api/coding-extra', '/api/plan/v3/chat/completions', '/API/coding', '/api/coding?x=1', '/api/coding#x', '/api/%63oding', '/'].every(p => vr(ark + p).source === 'volc-api') &&
+    ['http://ark.cn-beijing.volces.com/api/coding', 'https://ark.cn-beijing.volces.com:8443/api/coding',
+      'https://user@ark.cn-beijing.volces.com/api/coding', 'https://other.volces.com/api/coding',
+      'https://open.volcengineapi.com/api/coding'].every(u => vr(u).source === 'volc-api'))
+  check('火山：伪域名不能进入火山分类',
+    ['evilvolces.com', 'volcengine.example.com', 'ark.cn-beijing.volces.com.evil.example'].every(h => vr('https://' + h + '/api/coding').vendor !== 'volc'))
+  check('火山：provider 名称与旧声明不覆盖 URL',
+    vr(ark + '/api/v3', 'volc-coding-plan', { volcBillingByProvider: { 'volc-coding-plan': 'plan' }, displayMode: 'volc' }).source === 'volc-api' &&
+    vr(ark + '/api/plan', 'uuid', { volcBillingByProvider: { uuid: 'api' } }).planType === 'agent' &&
+    vr('', 'volc-coding-plan').vendor !== 'volc')
+  check('火山：平台标签与套餐类型一致', vr(ark + '/api/v3').label === '火山方舟' &&
+    vr(ark + '/api/coding').label === '火山 Coding Plan' && vr(ark + '/api/plan').label === '火山 Agent Plan')
   // GLM 订阅修正：大模型的 provider/host 名字区分不出「订阅」与「按量」（同一个
   // open.bigmodel.cn、同一把 key 形状），但账号事实分得出——有 GLM Coding Plan 套餐
   // 配额时按 Plan 口径（订阅持有者的 GLM 用量扣的是订阅额度，不是按量账单）
@@ -4560,7 +4568,7 @@ try {
   check('负数金额被拒绝', adjBad.ok && adjBadBody.ok === false, JSON.stringify(adjBadBody))
 
   // 同一平台混用：真实数据库 → 服务轮次 → 汇总，订阅声明不能吞掉按量行。
-  for (const [providerId, plan] of [['volcengine-ark', false], ['volc-plan-test', true]]) {
+  for (const [providerId, plan] of [['volcengine-ark', false], ['volc-plan-test', true], ['9de0b0cd-43cc-4b9d-867c-32030235e990', true]]) {
     const before = await getJson(port, '/whale/last-turn.json')
     insertTurn('sess_selftest', 'turn_' + providerId, USAGE_B, Date.now(), [{ model: MODEL, providerId, usage: USAGE_B }])
     let turn
@@ -4579,9 +4587,18 @@ try {
     apiRow && apiRow.amount > 0 && !apiRow.plan && apiRow.vendorLabel === '火山方舟' &&
     planRow && planRow.amount === 0 && planRow.plan && planRow.tokens > 0 && planRow.vendorLabel === '火山 Coding Plan',
     JSON.stringify({ apiRow, planRow }))
-  const volcRoute = await getJson(port, '/whale/volc.json')
+  const volcRoute = await getJson(port, '/whale/volc.json?providerId=volc-plan-test')
   check('火山路由：未配置 IAM 仍返回稳定错误且不泄露凭据', volcRoute.ok === false &&
     volcRoute.reason === 'no-credentials' && !('ak' in volcRoute) && !('sk' in volcRoute))
+  const agentRow = volcRec.today.models.find(m => m.providerId === '9de0b0cd-43cc-4b9d-867c-32030235e990')
+  check('火山 Agent 汇总：按专用路径归零且标明套餐', agentRow && agentRow.amount === 0 && agentRow.tokens > 0 && agentRow.vendorLabel === '火山 Agent Plan')
+  const apiView = await getJson(port, '/whale/volc.json?providerId=volcengine-ark')
+  check('火山 API 视图无需 IAM 凭据', apiView.ok && apiView.volcMode === 'api' && !apiView.windows)
+  const agentView = await getJson(port, '/whale/volc.json?providerId=9de0b0cd-43cc-4b9d-867c-32030235e990')
+  check('火山 Agent 查询失败仍保持接入分类', !agentView.ok && agentView.reason === 'no-credentials' && agentView.volcMode === 'agent' && agentView.source === 'volc')
+  const missingView = await getJson(port, '/whale/volc.json?providerId=missing')
+  check('火山未知 provider 不猜测套餐', !missingView.ok && missingView.reason === 'no-volc-provider')
+
 
   // 挂件配置：displayMode（智能切换的手动覆盖）写读往返；非法值回落 auto
   const dmPut = await fetch('http://127.0.0.1:' + port + '/whale/size.json', {
@@ -4767,11 +4784,11 @@ try {
     sel1 && sel1.ok && sel1.from === 'selection' && sel1.source === 'glm' && sel1.label === 'GLM 按量',
     JSON.stringify(sel1).slice(0, 160)
   )
-  for (const [providerId, expected] of [['volcengine-ark', 'volc-api'], ['volc-plan-test', 'volc']]) {
+  for (const [providerId, expected] of [['volcengine-ark', 'volc-api'], ['volc-plan-test', 'volc'], ['9de0b0cd-43cc-4b9d-867c-32030235e990', 'volc']]) {
     db.prepare('UPDATE session_entry SET data = ?, time_updated = ? WHERE type = ?').run(
       JSON.stringify({ modelSelection: { providerId, modelId: 'GLM-5.3-Flash' } }), Date.now(), 'runtime/model_selection')
     const selected = await getJson(port, '/whale/session.json')
-    check('火山自动跟随与消费链同源：' + providerId, selected.source === expected, JSON.stringify(selected))
+    check('火山自动跟随与消费链同源：' + providerId, selected.source === expected && selected.volcMode === (providerId === 'volcengine-ark' ? 'api' : providerId === 'volc-plan-test' ? 'coding' : 'agent'), JSON.stringify(selected))
   }
   const providersCli = spawnSync(process.execPath, [path.join(PLUGIN_ROOT, 'lib/cli.mjs'), 'providers'], { env: serverEnv, encoding: 'utf8' })
   const providersList = JSON.parse(providersCli.stdout || '[]')
