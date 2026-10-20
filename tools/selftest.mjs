@@ -254,6 +254,9 @@ fs.writeFileSync(
 
 const dbFile = path.join(dbDir, 'db.sqlite')
 const db = new DatabaseSync(dbFile)
+// 服务端只读轮询与测试写入并发；WAL + busy_timeout 避免偶发 SQLITE_BUSY。
+db.exec('PRAGMA journal_mode = WAL')
+db.exec('PRAGMA busy_timeout = 10000')
 db.exec(`
   CREATE TABLE turn_usage (
     session_id text not null,

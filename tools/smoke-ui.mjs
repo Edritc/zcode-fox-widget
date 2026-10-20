@@ -102,6 +102,10 @@ fs.writeFileSync(
 )
 
 const db = new DatabaseSync(path.join(dbDir, 'db.sqlite'))
+// 服务端会持续只读轮询同一个库；WAL + busy_timeout 避免测试写入与读取轮询
+// 撞出 SQLITE_BUSY，导致冒烟偶发「database is locked」。
+db.exec('PRAGMA journal_mode = WAL')
+db.exec('PRAGMA busy_timeout = 10000')
 db.exec(`
   CREATE TABLE turn_usage (
     session_id text not null, turn_id text not null, status text not null,
@@ -477,8 +481,17 @@ try {
       };
     })();` })
   const selectArkMode = value => cdp.eval(`(function(){var s=Array.from(document.querySelectorAll('select')).find(s=>Array.from(s.options).some(o=>o.value==='volc'));s.value=${JSON.stringify(value)};s.dispatchEvent(new Event('change'));})()`)
+  // 页面重载后先等首屏配置真正落地（保存的显示模式是 volc）。qcard 可能由
+  // session/volc 轮询先画出来，不能作为 applyConfig 完成的信号；否则用户在
+  // 配置到达前改的显示模式会被迟到的 size 响应覆盖。
+  const waitDisplaySaved = () => pollEval(
+    cdp,
+    "(function(){var s=Array.from(document.querySelectorAll('select')).find(s=>Array.from(s.options).some(o=>o.value==='volc'));return !!s&&s.value==='volc'})()",
+    20000
+  )
   const arkHead = title => `(function(){var q=document.querySelector('.zcwv-qcard');return !!q&&getComputedStyle(q).display!=='none'&&q.querySelector('.zcwv-qhead')&&q.querySelector('.zcwv-qhead').textContent===${JSON.stringify(title)}})()`
   await cdp.send('Page.reload')
+  await waitDisplaySaved()
   await pollEval(cdp, "!!document.querySelector('.zcwv-qcard')", 15000)
   check('火山菜单只有一个平台入口', await cdp.eval("Array.from(document.querySelectorAll('select option')).filter(o=>o.textContent.indexOf('火山')!==-1).map(o=>o.textContent).join(',')==='火山方舟'"))
   await selectArkMode('auto')
@@ -498,10 +511,18 @@ try {
     `(${arkHead('火山 Agent Plan')})&&document.querySelector('.zcwv-qcard').textContent.indexOf('IAM 凭据无效')!==-1`, 15000))
   if (arkStub && arkStub.identifier) await cdp.send('Page.removeScriptToEvaluateOnNewDocument', {identifier:arkStub.identifier})
   await cdp.send('Page.reload')
+  await waitDisplaySaved()
   await pollEval(cdp, "!!document.querySelector('.zcwv-qcard')", 15000)
 
   // ⑤ 手动切 DeepSeek 源：无 key 时错误文案必须完整换行显示
   // ——回归 slice(0,14) 把「未找到 DeepSeek API Key…」截成「未找到DeepSeek A」的缺陷
+  // 先等消耗/提示气泡收起：bubble 活跃时 render() 会主动跳过，切换显示后
+  // 不会重绘，曾经偶发把「加载中…」当成最终态。
+  await pollEval(
+    cdp,
+    "(function(){var b=document.querySelector('.zcwv-bubble');return !b||!b.classList.contains('zcwv-bubble-open')})()",
+    15000
+  )
   await cdp.eval(
     "(function(){var ss=document.querySelectorAll('select');for(var i=0;i<ss.length;i++){var s=ss[i],vals=[];" +
       'for(var j=0;j<s.options.length;j++)vals.push(s.options[j].value);' +
@@ -512,13 +533,19 @@ try {
     cdp,
     "(function(){var l=document.querySelector('.zcwv-label'),h=document.querySelector('.zcwv-hint');" +
       "if(!l||!h||l.textContent!=='DeepSeek 余额')return null;" +
-      "return {hint:h.textContent,wrap:h.className.indexOf('zcwv-wrap')!==-1}})()",
-    12000
+      "var hint=h.textContent||'';if(hint.indexOf('未找到 DeepSeek API Key')===-1)return null;" +
+      "return {hint:hint,wrap:h.className.indexOf('zcwv-wrap')!==-1}})()",
+    20000
+  )
+  const dsDebug = dsView ? null : await cdp.eval(
+    "(function(){var l=document.querySelector('.zcwv-label'),h=document.querySelector('.zcwv-hint'),b=document.querySelector('.zcwv-bubble');" +
+      "var ss=document.querySelectorAll('select'),sv=null;for(var i=0;i<ss.length;i++){var vals=[];for(var j=0;j<ss[i].options.length;j++)vals.push(ss[i].options[j].value);if(vals.indexOf('plan')!==-1&&vals.indexOf('ds')!==-1){sv=ss[i].value;break}}" +
+      "return JSON.stringify({label:l&&l.textContent,hint:h&&h.textContent,wrap:h&&h.className,display:sv,bubble:!!b&&b.classList.contains('zcwv-bubble-open')})})()"
   )
   check(
     'DeepSeek 源错误文案完整显示（不截断 + 换行样式）',
     dsView && typeof dsView.hint === 'string' && dsView.hint.indexOf('未找到 DeepSeek API Key') !== -1 && dsView.wrap === true,
-    JSON.stringify(dsView).slice(0, 160)
+    JSON.stringify(dsView || dsDebug).slice(0, 240)
   )
 
   // ⑥ 手动切 GLM 按量：主显示标题换成 GLM 今日已用（不再是 DeepSeek 余额）
