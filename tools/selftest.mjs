@@ -1921,7 +1921,13 @@ function check(name, ok, detail) {
   const r = (pid, model, url) => resolveBillingSource(pid, model, url).source
   check(
     '计费源：订阅套餐 provider → Plan 配额',
-    r('account:zai-start-plan', 'GLM-5.3') === 'plan' && r('x:coding-plan', 'any') === 'tokens'
+    r('account:zai-start-plan', 'GLM-5.3') === 'plan' && r('x:coding-plan', 'any') === 'plan'
+  )
+  check(
+    '计费源：非火山 coding-plan 保持 GLM 套餐（含 individual-coding-plan），volc 名称不冒充',
+    ['individual-coding-plan', 'account:individual-coding-plan', 'account:coding-plan']
+      .every((pid) => resolveBillingSource(pid, 'GLM-5.3', undefined, { glmSubscription: false }).source === 'plan') &&
+      resolveBillingSource('volc-coding-plan', 'GLM-5.3', undefined, { glmSubscription: false }).source !== 'plan'
   )
   check(
     '计费源：MiMo 双端点按 URL 区分（token-plan vs api）',
