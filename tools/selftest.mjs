@@ -3766,6 +3766,38 @@ try {
     )
   }
 
+  // issue #8：任务栏自动隐藏时 workArea 等于整屏，浮层必须留出不可见边距，
+  // 不能与屏幕严格重合，否则 Windows 会把它当全屏窗口压住任务栏滑出热区。
+  {
+    const { TASKBAR_REVEAL_INSET, overlayWorkAreaBounds } = requireCjs(
+      path.join(PLUGIN_ROOT, 'desktop', 'window-bounds.cjs')
+    )
+    const full = { x: 0, y: 0, width: 1920, height: 1080 }
+    const b = overlayWorkAreaBounds(full)
+    check(
+      'issue#8：浮层窗口四周留安全边距，不会与整屏严格重合',
+      TASKBAR_REVEAL_INSET === 4 &&
+        b.x === 4 &&
+        b.y === 4 &&
+        b.width === full.width - 8 &&
+        b.height === full.height - 8 &&
+        b.width < full.width &&
+        b.height < full.height,
+      JSON.stringify(b)
+    )
+    const tiny = overlayWorkAreaBounds({ x: 0, y: 0, width: 3, height: 3 })
+    check('issue#8：极小工作区不会算出 0/负尺寸', tiny.width >= 1 && tiny.height >= 1, JSON.stringify(tiny))
+    const mainSrc = fs.readFileSync(path.join(PLUGIN_ROOT, 'desktop', 'main.cjs'), 'utf8')
+    check(
+      'issue#8：主进程创建窗口和兜底矩形都走同一个安全边距函数',
+      mainSrc.indexOf("require('./window-bounds.cjs')") !== -1 &&
+        /const bounds = overlayWorkAreaBounds\(workArea\)/.test(mainSrc) &&
+        /win\.setBounds\(overlayWorkAreaBounds\(wa\)\)/.test(mainSrc) &&
+        /win\.setBounds\(overlayWorkAreaBounds\(workArea\)\)/.test(mainSrc),
+      ''
+    )
+  }
+
   // ---------- 宿主更新时的让路（issue #2 后半段：更新 ZCode 时提示「无法关闭 ZCode」） ----------
   // 判定与探测抽在 desktop/update-guard.cjs（纯函数 + 一次「可执行映像是否被占用」探测）。
   // 这里测三层：纯函数三态、真机占用语义、以及**端到端**——用「跟随一个不存在的进程」模拟

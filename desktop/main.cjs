@@ -8,7 +8,7 @@
 //   - 透明、无边框、不进任务栏、始终置顶
 //   - **默认鼠标穿透**：不在鲸鱼/气泡/菜单上时点击落到下面的 ZCode，不挡操作
 //
-// 非 Windows 平台拿不到窗口信息，退回「覆盖整个工作区」的静态浮层。
+// 非 Windows 平台拿不到窗口信息，退回「覆盖整个工作区（四周留安全边距）」的静态浮层。
 const { app, BrowserWindow, ipcMain, screen, shell } = require('electron')
 const { spawn } = require('node:child_process')
 const path = require('node:path')
@@ -16,6 +16,7 @@ const fs = require('node:fs')
 const os = require('node:os')
 const { evaluateBootState, readNewestLogTail } = require('./ui-ready.cjs')
 const { isUpdaterRunning, yieldPlan } = require('./update-guard.cjs')
+const { overlayWorkAreaBounds } = require('./window-bounds.cjs')
 
 const PORT = Number(process.env.WHALE_PORT) || 39321
 const TARGET_URL = 'http://127.0.0.1:' + PORT + '/'
@@ -194,14 +195,15 @@ async function probePage() {
 }
 
 function createWindow() {
-  // 先在主显示器工作区里把窗口建出来（尺寸马上会被 ZCode 窗口矩形覆盖），
+  // 先在主显示器工作区里把窗口建出来（跟随脚本只改页面视口，窗口矩形基本不变），
   // 但不显示——等拿到 ZCode 窗口位置后再 show，避免鲸鱼先在别处闪一下。
+  // 工作区四周留 4 DIP：任务栏自动隐藏时 workArea 等于整屏，精确铺满会被
+  // Windows 当成全屏窗口，压制任务栏滑出热区（issue #8）。
   const { workArea } = screen.getPrimaryDisplay()
+  const bounds = overlayWorkAreaBounds(workArea)
+  log('window-bounds', JSON.stringify(bounds))
   win = new BrowserWindow({
-    x: workArea.x,
-    y: workArea.y,
-    width: workArea.width,
-    height: workArea.height,
+    ...bounds,
     transparent: true,
     frame: false,
     // 保持 resizable:true：Electron 对 resizable:false 的窗口会把 min/max 尺寸
@@ -217,7 +219,7 @@ function createWindow() {
     // Windows 上用 toolbar 型窗口：创建即带 WS_EX_TOOLWINDOW 且全程保留。
     // 关键在「宿主冻结」问题（issue #2 症状一，2026-10-14 真机 A/B 实锤）：
     // 点击角色时页面会让本窗口 setIgnoreMouseEvents(false) 接管鼠标，那一瞬
-    // 间 Electron 会摘掉 WS_EX_TRANSPARENT|WS_EX_LAYERED——铺满工作区的置顶
+    // 间 Electron 会摘掉 WS_EX_TRANSPARENT|WS_EX_LAYERED——覆盖工作区的置顶
     // 窗口于是被宿主 ZCode 自己的 Chromium 遮挡判定（IsWindowVisibleAndFullyOpaque）
     // 计为「完全不透明遮挡源」，宿主判定自己被完全遮挡后停止出帧（画面停在
     // 旧帧）。带 WS_EX_TOOLWINDOW 的窗口被该判定直接排除。Electron 44 的
@@ -245,6 +247,11 @@ function createWindow() {
   win.setAlwaysOnTop(true, 'screen-saver')
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   win.setIgnoreMouseEvents(true, { forward: true })
+  try {
+    // DPI 缩放下 Electron 会对无边框 toolbar 窗口做约 4 物理像素的尺寸取整；
+    // 留档实际矩形，issue #8 这类「是否仍与整屏重合」的排查不用再猜。
+    log('window-bounds-actual', JSON.stringify(win.getBounds()))
+  } catch (err) {}
 
   win.loadURL(TARGET_URL)
 
@@ -332,13 +339,13 @@ function createWindow() {
   if (process.platform === 'win32') {
     startFollower()
   } else {
-    // 其它平台没有窗口跟随，铺满**指针所在显示器**的工作区（按主显示器铺会被
+    // 其它平台没有窗口跟随，覆盖**指针所在显示器**的工作区（按主显示器铺会被
     // 多显示器用户看成「挂件跑到另一块屏去了」，审查 C1），并且用
     // showInactive 避免把宿主的前台抢过来
     win.once('ready-to-show', () => {
       try {
         const wa = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea
-        win.setBounds({ x: wa.x, y: wa.y, width: wa.width, height: wa.height })
+        win.setBounds(overlayWorkAreaBounds(wa))
       } catch (err) {}
       win.showInactive()
       overlayShown = true
@@ -410,7 +417,7 @@ function startFollower() {
   child.stderr.on('data', (chunk) => log('follower-stderr', chunk.toString('utf8').slice(0, 200)))
   // spawn 失败（PowerShell 被组策略禁用 / PATH 里没有）只会异步 emit 'error'：
   // 不监听就是未捕获异常，浮层主进程当场崩掉（审查 I1/C3）。降级为「静态浮层」：
-  // 铺满主显示器工作区但不跟随，总比桌面上什么都没有好。
+  // 覆盖主显示器工作区（四周留安全边距）但不跟随，总比桌面上什么都没有好。
   child.on('error', (err) => {
     if (follower !== child) return
     follower = null
@@ -418,7 +425,7 @@ function startFollower() {
     try {
       if (!win || win.isDestroyed()) return
       const { workArea } = screen.getPrimaryDisplay()
-      win.setBounds({ x: workArea.x, y: workArea.y, width: workArea.width, height: workArea.height })
+      win.setBounds(overlayWorkAreaBounds(workArea))
       if (!win.isVisible()) {
         win.showInactive()
         overlayShown = true
@@ -471,7 +478,7 @@ function followerCommand(cmd) {
 // 页面把它当作自己的「视口」：吸附边界、位置记忆、菜单定位全部以它为准，
 // 于是鲸鱼看起来就待在 ZCode 窗口里，并跟着窗口移动、缩放。
 //
-// 这里刻意不改浮层窗口自己的位置与尺寸（它始终铺满工作区）：Windows 上
+// 这里刻意不改浮层窗口自己的位置与尺寸（它始终覆盖工作区，四周留安全边距）：Windows 上
 // 透明窗口一旦 setBounds 改变尺寸/位置，合成层不会跟着重排，页面内容会被
 // 画到偏离窗口的地方（实测页面 (0,0) 的方块跑到窗口外的屏幕左上角）。
 let lastViewport = null
@@ -702,7 +709,7 @@ function applyZCodeBounds(msg) {
   }
   const winBounds = win.getBounds()
 
-  // 桌宠模式：视口 = 整个浮层窗口（= 主显示器工作区，自动排除任务栏——任务栏在
+  // 桌宠模式：视口 = 整个浮层窗口（= 主显示器工作区减去安全边距，自动排除任务栏——任务栏在
   // 哪条边都成立，workArea 已按其位置收缩）。鲸鱼在其中自由漫游，与 ZCode 窗口
   // 的位置/大小解耦：失焦、被盖住、最小化、启动加载中都不影响桌宠显示，唯一
   // 关心的是 ZCode 进程存活（msg.gone → 一起退出）。
@@ -741,7 +748,7 @@ function applyZCodeBounds(msg) {
   } catch (err) {}
 
   // 视口 = ZCode 矩形 ∩ 浮层窗口（窗口相对坐标）。ZCode 最大化时会向四周各越界
-  // 7px（边框过扫），窗口本身只覆盖工作区——不裁交集的话，页面可以把鲸鱼摆进
+  // 7px（边框过扫），窗口本身只覆盖工作区（减去安全边距）——不裁交集的话，页面可以把鲸鱼摆进
   // 窗口外的那 7px 里，位置记忆/吸附按溢出矩形计算会把角色锚在「窗口外」。
   // 历史背景：这里曾因冻结检测活性点落在窗外引发「每 5 秒消失再出现」的自愈
   // 循环（真机 2026-10-03 实锤，v1.8.1 修复）；该检测已于 v1.8.6 移除，但交集
