@@ -4963,11 +4963,11 @@ try {
     JSON.stringify(ztBack)
   )
 
-  // 接口：音效库（内置两套 + 导入 + 回放 + 删除）
+  // 接口：音效库（内置三套 + 导入 + 回放 + 删除）
   const snd0 = await getJson(port, '/whale/sounds.json')
   check(
-    '音效库：内置两套在列、默认选中小黄鸭',
-    snd0 && snd0.ok === true && snd0.sets.filter((s) => s.builtin).map((s) => s.id).join(',') === 'duck,fx1' && snd0.selected === 'duck',
+    '音效库：内置三套在列、默认选中小黄鸭',
+    snd0 && snd0.ok === true && snd0.sets.filter((s) => s.builtin).map((s) => s.id).join(',') === 'duck,fx1,nya' && snd0.selected === 'duck',
     JSON.stringify(snd0 && snd0.sets)
   )
   const wavBytes = Buffer.from('RIFF0000WAVEfmt ', 'latin1')
@@ -5018,6 +5018,16 @@ try {
     '音效回放：内置集照旧可用（audio/mpeg）',
     duckRes.ok && duckBytes.length > 100 && duckRes.headers.get('content-type') === 'audio/mpeg',
     'bytes=' + duckBytes.length
+  )
+  const nyaRes = await fetch('http://127.0.0.1:' + port + '/whale/sound/press.mp3?set=nya')
+  const nyaBytes = Buffer.from(await nyaRes.arrayBuffer())
+  check(
+    '音效回放：内置猫娘 WAV 使用 audio/wav（不能沿用 mp3 的 Content-Type）',
+    nyaRes.ok &&
+      nyaRes.headers.get('content-type') === 'audio/wav' &&
+      nyaBytes.subarray(0, 4).toString('latin1') === 'RIFF' &&
+      nyaBytes.subarray(8, 12).toString('latin1') === 'WAVE',
+    'HTTP ' + nyaRes.status + ' ct=' + nyaRes.headers.get('content-type') + ' bytes=' + nyaBytes.length
   )
   // 非法输入被拒
   const badSound = await postSound('/whale/sound-upload.json', { press: { dataUrl: 'data:text/plain;base64,aGk=' } })

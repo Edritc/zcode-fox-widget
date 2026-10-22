@@ -109,3 +109,14 @@ CHANGELOG.md 与各版本 tag。2026-10-05 起以「ZCode狐娘小挂件（zcode
 
     Copyright (c) 2026 pigeon189（ZCode狐娘小挂件 / zcode-fox-widget）
     MIT License（见本目录 LICENSE）
+
+2026-10-22 起的素材来源（猫娘音效集）
+--------------------------------------
+
+内置可选音效集「猫娘」（nya，lib/paths.mjs SOUND_SETS）的两段音频来自
+Cici Fyre / Free Catgirl Fighting Voice Pack
+（https://cicifyre.itch.io/free-catgirl-fighting-voice-pack ，作者页面标注
+CC0 1.0 Universal）：assets/Nya1.wav 为该包 Meow/002_meow.wav 加工谱系
+（test8/03_playful_fall.wav）0–0.810s 的起音段；assets/Nya2.wav 为 100ms
+数字静音，作为「一声制」（松手无声）定稿的松手占位。CC0 不要求署名，
+本节与 docs/CATGIRL-SOUND-NOTES.md 留档出处与加工/实机选择过程。
