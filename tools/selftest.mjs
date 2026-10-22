@@ -4940,11 +4940,11 @@ try {
     JSON.stringify(ztBack)
   )
 
-  // 接口：音效库（内置两套 + 导入 + 回放 + 删除）
+  // 接口：音效库（内置三套 + 导入 + 回放 + 删除）
   const snd0 = await getJson(port, '/whale/sounds.json')
   check(
-    '音效库：内置两套在列、默认选中小黄鸭',
-    snd0 && snd0.ok === true && snd0.sets.filter((s) => s.builtin).map((s) => s.id).join(',') === 'duck,fx1' && snd0.selected === 'duck',
+    '音效库：内置三套在列、默认选中小黄鸭',
+    snd0 && snd0.ok === true && snd0.sets.filter((s) => s.builtin).map((s) => s.id).join(',') === 'duck,fx1,nya' && snd0.selected === 'duck',
     JSON.stringify(snd0 && snd0.sets)
   )
   const wavBytes = Buffer.from('RIFF0000WAVEfmt ', 'latin1')
