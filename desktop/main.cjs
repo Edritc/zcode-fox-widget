@@ -142,8 +142,14 @@ function setPetMode(value) {
   // 那就是普通模式的正确行为）；还没有跟随消息时等下一拍即可。
   if (win && !win.isDestroyed()) {
     if (petMode) {
-      const b = win.getBounds()
-      applyFrame({ x: 0, y: 0, width: b.width, height: b.height, pet: 1 })
+      // 进入桌宠模式时也消费最近一次 fs：follower 只在状态变化时发消息，
+      // 全屏应用已经在前台时不会再补一条，直接 applyFrame 会把鲸鱼盖回去。
+      if (lastFollowerMsg && lastFollowerMsg.fs) {
+        hideOverlay('fullscreen-foreground')
+      } else {
+        const b = win.getBounds()
+        applyFrame({ x: 0, y: 0, width: b.width, height: b.height, pet: 1 })
+      }
     } else if (lastFollowerMsg) {
       applyZCodeBounds(lastFollowerMsg)
     }

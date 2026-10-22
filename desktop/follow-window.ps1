@@ -65,6 +65,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 
 public static class WhaleFollow
@@ -80,6 +81,7 @@ public static class WhaleFollow
     [DllImport("user32.dll")] static extern bool IsZoomed(IntPtr hWnd);
     [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
     [DllImport("user32.dll")] static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO mi);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
     [DllImport("user32.dll")] static extern bool IsWindow(IntPtr hWnd);
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hWnd);
     [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr l);
@@ -439,21 +441,31 @@ public static class WhaleFollow
                 // apps): the foreground window covers its monitor's full rect AND
                 // is not maximized (maximized apps like an editor only cover the
                 // work area, even when the taskbar auto-hides) AND is not a
-                // cloaked UWP ghost. Exclusive-fullscreen games bypass the
-                // compositor entirely, so only borderless cases matter here.
+                // cloaked UWP ghost. The foreground monitor must be the overlay's
+                // monitor (a video on another display must not hide the pet), and
+                // the target ZCode / desktop shell windows are never treated as
+                // fullscreen apps. Exclusive-fullscreen games bypass the compositor
+                // entirely, so only borderless cases matter here.
                 bool fgFullscreen = false;
-                if (fg != IntPtr.Zero && fg != _overlayHwnd && IsWindowVisible(fg) && !IsZoomed(fg))
+                if (fg != IntPtr.Zero && fg != _overlayHwnd && !fgIsTarget && !fgIsOverlay && IsWindowVisible(fg) && !IsZoomed(fg))
                 {
+                    StringBuilder fgClass = new StringBuilder(64);
+                    GetClassName(fg, fgClass, fgClass.Capacity);
+                    string cls = fgClass.ToString();
+                    bool shellWindow = cls == "Progman" || cls == "WorkerW" ||
+                                       cls == "Shell_TrayWnd" || cls == "Shell_SecondaryTrayWnd";
                     int cloaked = 0;
-                    if (DwmGetWindowAttribute(fg, 14 /* DWMWA_CLOAKED */, out cloaked, 4) != 0 || cloaked == 0)
+                    if (!shellWindow &&
+                        (DwmGetWindowAttribute(fg, 14 /* DWMWA_CLOAKED */, out cloaked, 4) != 0 || cloaked == 0))
                     {
                         RECT fr;
                         if (GetWindowRect(fg, out fr))
                         {
                             IntPtr mon = MonitorFromWindow(fg, 1 /* MONITOR_DEFAULTTONEAREST */);
+                            IntPtr overlayMon = MonitorFromWindow(_overlayHwnd, 1 /* MONITOR_DEFAULTTONEAREST */);
                             MONITORINFO mi = new MONITORINFO();
                             mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
-                            if (mon != IntPtr.Zero && GetMonitorInfo(mon, ref mi))
+                            if (mon != IntPtr.Zero && mon == overlayMon && GetMonitorInfo(mon, ref mi))
                             {
                                 fgFullscreen = fr.Left <= mi.rcMonitor.Left && fr.Right >= mi.rcMonitor.Right &&
                                                fr.Top <= mi.rcMonitor.Top && fr.Bottom >= mi.rcMonitor.Bottom;
