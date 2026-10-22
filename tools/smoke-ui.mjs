@@ -1181,9 +1181,25 @@ try {
     )
   )
   check('记账二级页：返回按钮收起面板', !!bookClosed && bookClosed.open === false, JSON.stringify(bookClosed))
-  // ⑨f 关于 / 自检（v1.15.2）：菜单入口打开面板，textarea 里是脱敏后的诊断 JSON
+  // ⑨f 关于 / 自检（v1.15.2）：入口已收进版本更新面板，textarea 里是脱敏后的诊断 JSON
+  const aboutInMenu = await cdp.eval(
+    "(function(){var bs=document.querySelectorAll('.zcwv-menu-row button');" +
+      "for(var i=0;i<bs.length;i++)if(bs[i].textContent==='关于 / 自检…')return true;return false})()"
+  )
+  check('关于 / 自检：设置菜单不再单独占一行', aboutInMenu === false, JSON.stringify(aboutInMenu))
   await cdp.eval(
     "(function(){var bs=document.querySelectorAll('.zcwv-menu-row button');" +
+      "for(var i=0;i<bs.length;i++){if(bs[i].textContent==='检查更新…'){bs[i].click();return true}}return false})()"
+  )
+  const aboutEntry = await pollEval(
+    cdp,
+    "(function(){var p=document.querySelector('.zcwv-update.zcwv-panel-open');if(!p)return false;" +
+      "var bs=p.querySelectorAll('button');for(var i=0;i<bs.length;i++)if(bs[i].textContent==='关于 / 自检…')return true;return false})()",
+    6000
+  )
+  check('关于 / 自检：入口已放进检查更新面板', aboutEntry === true, JSON.stringify(aboutEntry))
+  await cdp.eval(
+    "(function(){var p=document.querySelector('.zcwv-update');if(!p)return false;var bs=p.querySelectorAll('button');" +
       "for(var i=0;i<bs.length;i++){if(bs[i].textContent==='关于 / 自检…'){bs[i].click();return true}}return false})()"
   )
   const ABOUT_PROBE =
@@ -2869,9 +2885,10 @@ try {
   )
   const upCloseArmed = JSON.parse(
     await cdp.eval(
-      "(function(){var p=document.querySelector('.zcwv-update');var bs=p.querySelectorAll('button');" +
+      "(function(){var p=document.querySelector('.zcwv-update');var bs=p.querySelectorAll('button');var label='';" +
         "for(var i=0;i<bs.length;i++){if(bs[i].textContent==='\\u5173\\u95ed\\u63d2\\u4ef6'){bs[i].click();break}}" +
-        "return JSON.stringify({armed:window.__upClose===true,label:bs[bs.length-1].textContent})})()"
+        "for(var j=0;j<bs.length;j++)if(bs[j].textContent==='\\u786e\\u8ba4\\u5173\\u95ed\\uff1f')label=bs[j].textContent;" +
+        "return JSON.stringify({armed:window.__upClose===true,label:label})})()"
     )
   )
   check(
