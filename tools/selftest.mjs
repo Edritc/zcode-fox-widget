@@ -4996,6 +4996,16 @@ try {
     duckRes.ok && duckBytes.length > 100 && duckRes.headers.get('content-type') === 'audio/mpeg',
     'bytes=' + duckBytes.length
   )
+  const nyaRes = await fetch('http://127.0.0.1:' + port + '/whale/sound/press.mp3?set=nya')
+  const nyaBytes = Buffer.from(await nyaRes.arrayBuffer())
+  check(
+    '音效回放：内置猫娘 WAV 使用 audio/wav（不能沿用 mp3 的 Content-Type）',
+    nyaRes.ok &&
+      nyaRes.headers.get('content-type') === 'audio/wav' &&
+      nyaBytes.subarray(0, 4).toString('latin1') === 'RIFF' &&
+      nyaBytes.subarray(8, 12).toString('latin1') === 'WAVE',
+    'HTTP ' + nyaRes.status + ' ct=' + nyaRes.headers.get('content-type') + ' bytes=' + nyaBytes.length
+  )
   // 非法输入被拒
   const badSound = await postSound('/whale/sound-upload.json', { press: { dataUrl: 'data:text/plain;base64,aGk=' } })
   const badSoundBody = await badSound.json()
