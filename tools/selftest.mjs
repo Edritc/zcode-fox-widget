@@ -3766,6 +3766,29 @@ try {
     )
   }
 
+  // 桌宠全屏让路：fs 只在状态变化时下发，所以开启桌宠时必须消费最近一条；
+  // 判定还必须排除 ZCode/浮层自身、桌面 shell，并且只认同浮层所在显示器。
+  {
+    const mainSrc = fs.readFileSync(path.join(PLUGIN_ROOT, 'desktop', 'main.cjs'), 'utf8')
+    const followSrc = fs.readFileSync(path.join(PLUGIN_ROOT, 'desktop', 'follow-window.ps1'), 'utf8')
+    check(
+      '全屏让路：进入桌宠模式时消费 lastFollowerMsg.fs',
+      /lastFollowerMsg && lastFollowerMsg\.fs/.test(mainSrc) &&
+        /hideOverlay\('fullscreen-foreground'\)/.test(mainSrc),
+      ''
+    )
+    check(
+      '全屏让路：排除 ZCode/浮层自身与桌面 shell，且只认同一显示器',
+      /!fgIsTarget && !fgIsOverlay/.test(followSrc) &&
+        /Progman/.test(followSrc) &&
+        /WorkerW/.test(followSrc) &&
+        /Shell_TrayWnd/.test(followSrc) &&
+        /MonitorFromWindow\(_overlayHwnd/.test(followSrc) &&
+        /mon == overlayMon/.test(followSrc),
+      ''
+    )
+  }
+
   // issue #8：任务栏自动隐藏时 workArea 等于整屏，浮层必须留出不可见边距，
   // 不能与屏幕严格重合，否则 Windows 会把它当全屏窗口压住任务栏滑出热区。
   {
