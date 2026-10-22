@@ -714,6 +714,13 @@ function applyZCodeBounds(msg) {
   // 的位置/大小解耦：失焦、被盖住、最小化、启动加载中都不影响桌宠显示，唯一
   // 关心的是 ZCode 进程存活（msg.gone → 一起退出）。
   if (petMode) {
+    // 全屏应用前台（borderless 游戏/视频/演示，follower 按「矩形覆盖整屏且非
+    // 最大化且非 cloaked」判定）：桌宠让路，透明度隐身；退出全屏时 follower 的
+    // 状态变化消息走回本函数，applyFrame 自带重现过渡。
+    if (msg.fs) {
+      hideOverlay('fullscreen-foreground')
+      return
+    }
     applyFrame({ x: 0, y: 0, width: winBounds.width, height: winBounds.height, pet: 1 })
     return
   }
