@@ -6,6 +6,7 @@
 
 - 出处：Cici Fyre / *Free Catgirl Fighting Voice Pack*，`Meow/002_meow.wav`（GPT 加工线 `test8/03_playful_fall.wav` 切分）。
 - 授权：作者页面标注 **CC0 1.0 Universal**（https://cicifyre.itch.io/free-catgirl-fighting-voice-pack ），商业/非商业可用，署名非强制；出处留档即为本文件。
+- **授权二次核实（2026-10-22）**：对作者发布页做过一轮独立逐项核对，明确允许个人/商业使用、**随 GitHub 仓库公开发布**、剪辑变调格式转换等加工，署名非强制（作者欢迎）；无需另行联系作者取得许可。本文件与 NOTICE 的出处段是主动保留的署名。
 - NOTICE 文本（正式内置化时采用）：
 
 > Catgirl sound effects derived from `Meow/002_meow.wav` in *Free Catgirl Fighting Voice Pack* by Cici Fyre. Original asset: https://cicifyre.itch.io/free-catgirl-fighting-voice-pack . License: CC0 1.0 Universal. `Nya1` is the 0–0.810s onset segment (test9 `press_nya`, unchanged); `Nya2` is 100ms of digital silence used as a silent release.
