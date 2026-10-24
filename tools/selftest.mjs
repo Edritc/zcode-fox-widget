@@ -4686,6 +4686,29 @@ try {
   const volcMode = await getJson(port, '/whale/size.json')
   check('displayMode 火山写入并持久化回读', volcMode.displayMode === 'volc')
 
+  // 默认位置（issue #11）：四个角写入 / 回读，非法值丢弃；默认仍是右下
+  const cornerInitial = await getJson(port, '/whale/size.json')
+  check('默认位置默认值：右下（br）', cornerInitial.defaultCorner === 'br', 'corner=' + cornerInitial.defaultCorner)
+  const cornerPut = await fetch('http://127.0.0.1:' + port + '/whale/size.json', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scale: 1.5, defaultCorner: 'tl' }),
+  })
+  const cornerGet = await getJson(port, '/whale/size.json')
+  check('默认位置写入并持久化回读（左上）', cornerPut.ok && cornerGet.defaultCorner === 'tl', 'corner=' + cornerGet.defaultCorner)
+  await fetch('http://127.0.0.1:' + port + '/whale/size.json', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scale: 1.5, defaultCorner: 'center' }),
+  })
+  const cornerBad = await getJson(port, '/whale/size.json')
+  check('默认位置非法值被丢弃（保留原值）', cornerBad.defaultCorner === 'tl', 'corner=' + cornerBad.defaultCorner)
+  await fetch('http://127.0.0.1:' + port + '/whale/size.json', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scale: 1.5, defaultCorner: 'br' }),
+  })
+
   // 安全路由：Host 校验（防 DNS rebinding）/ Origin 校验（防跨站写）/ 关闭令牌
   function rawRequest(method, requestPath, headers, body) {
     return new Promise((resolve, reject) => {

@@ -106,8 +106,9 @@ node "${ZCODE_PLUGIN_ROOT}/lib/cli.mjs" desktop install # 安装 Electron 运行
 | `autoStartOverlay` | 默认 `true`，会话启动时是否顺带拉起桌面浮层（Electron 运行时未安装时静默跳过） |
 | `followIntervalMs` | 跟随探测间隔（毫秒），默认 40；**越小**跟得越紧（16ms 已到系统定时器粒度的实际下限）。挂件菜单里的「跟随延迟」会覆盖它 |
 
-挂件自身的外观与开关（大小、音效、音量、角色、主题、气泡、每轮消耗提示与自动关闭秒数、避让滚动条、桌宠模式、跟随延迟、预警阈值、显示跟随）在 `~/.zcode/whale/widget-state.json`，由挂件菜单直接写入：
+挂件自身的外观与开关（大小、音效、音量、角色、主题、气泡、默认位置、每轮消耗提示与自动关闭秒数、避让滚动条、隐藏菜单按钮、桌宠模式、跟随延迟、预警阈值、显示跟随）在 `~/.zcode/whale/widget-state.json`，由挂件菜单直接写入：
 - `theme`：`light` / `dark` / `system`——`system` 即「跟随 ZCode」（三层判定：浮层观测 ZCode 窗口的 DWM 暗色标志 > 用户级配置 `ui.theme` > 操作系统深浅色，实现见 `lib/zcode-theme.mjs`）。（v1.8.0 曾有第四态 `whale` 蓝白主题，v1.8.1 回滚；旧值读取时归一为 `light`。）
+- `defaultCorner`：没有上次拖动位置时的启动角落（`br` 右下 / `bl` 左下 / `tr` 右上 / `tl` 左上，默认 `br`）。菜单「位置与行为…」里选择后立即搬过去，并把该位置记为下次起点；拖动过之后仍以拖动位置为准。
 - `petMode`：桌宠模式（浮层专属，默认 false）。开着时**视口 = 整个浮层窗口（主显示器工作区，自动排除任务栏）**——鲸鱼可以拖出 ZCode 窗口放到屏幕任何角落，且失焦/被盖住/最小化都不隐身，每 3 秒检查一次置顶（丢了才重申）；关掉即回到「视口 = ZCode 窗口 ∩ 浮层窗口、随 ZCode 前台隐身」的原有行为。
 - `alerts`：v1.8.0 泛化后**两条阈值**——`quotaPct`（额度不足提醒，对 GLM Plan 剩余% 与 CommandCode 三重窗口同时生效：各来源用自己的单位表达「剩余比例低于阈值」，CommandCode 卡片画的是已用进度，折算 `剩余 = 100 − 已用` 再比，于是「阈值 20%」在它那边表现为「进度涨过 80% 才提醒」）/ `moneyAlert`（DeepSeek 余额低于提醒；旧键 `deepseekBelow` / `bigmodelDaily` 读取时自动迁移）。旧键 `planPct` / `cmdgoPct` 读取时折入 `quotaPct`（只设过其中一条的用户设置不会丢）。阈值单位是人民币。消费型厂商（GLM / MiMo / Kimi / OpenAI / Claude / Qwen / MiniMax，无公开余额接口）的「今日已用达到」预警 v1.7.7 起取消。每个来源每天只提醒一次，去重键含阈值与窗口名。
 - `roleId`：当前形象（内置 `fox` 嘎啦嘛 / `whale` 大肥鱼，或导入件 id；导入件的索引与图片在 `roles.json` + `roles/`），未指定即嘎啦嘛。`fox` 在 v1.7.3 及之前叫 `xiaohuniang`，持久化里的旧值读取时自动归一。
