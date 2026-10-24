@@ -3785,6 +3785,30 @@ try {
         /hideOverlay\('zcode-identity-changed'\)/.test(mainSrc),
       ''
     )
+    check(
+      'issue#13：页面心跳带功能探针，命中未接管连续两拍重建窗口（输入链路断流自愈）',
+      mainSrc.indexOf('window.__zcwProbe') !== -1 &&
+        mainSrc.indexOf("log('page-probe-stuck'") !== -1 &&
+        mainSrc.indexOf("recreateWindow('page-interactive-stuck')") !== -1 &&
+        mainSrc.indexOf('if (!overlayShown)') !== -1,
+      JSON.stringify({
+        probe: mainSrc.indexOf('window.__zcwProbe') !== -1,
+        stuckLog: mainSrc.indexOf("log('page-probe-stuck'") !== -1,
+        recreate: mainSrc.indexOf("recreateWindow('page-interactive-stuck')") !== -1,
+        shownGate: mainSrc.indexOf('if (!overlayShown)') !== -1,
+      })
+    )
+    check(
+      'issue#13：浮层页面暴露 __zcwProbe 功能探针（命中测试 + 接管状态）',
+      (() => {
+        const widgetSrc = fs.readFileSync(path.join(PLUGIN_ROOT, 'lib', 'widget.js'), 'utf8')
+        return {
+          expose: /window\.__zcwProbe = function \(x, y\)/.test(widgetSrc),
+          hit: widgetSrc.indexOf('hit: isWhaleHit({ clientX: x, clientY: y }) || inChrome(node)') !== -1,
+        }
+      })(),
+      ''
+    )
     // 两线各有一个「按宿主窗口算浮层边界」的函数，名字不同（ZCode 线是
     // applyZCodeBounds，WorkBuddy 线是 applyHostBounds）。从 main cherry-pick 浮层
     // 补丁时 hunk 能对上、函数名却可能对不上——2026-10-18 真机就弹过
