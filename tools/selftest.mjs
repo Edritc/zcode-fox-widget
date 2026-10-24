@@ -2790,9 +2790,9 @@ try {
     costOfUsage('deepseek-flash', USAGE_B, atB, 'deepseek-test').amount +
     dsPart
   check(
-    '多模型轮次按行加总并带逐模型明细',
-    third && third.seq === 2 && Array.isArray(third.models) && third.models.length === 2 && Math.abs(third.amount - (glmPart + dsPart)) < 1e-9,
-    '期望 ¥' + (glmPart + dsPart).toFixed(6) + '，实际 ¥' + Number(third && third.amount).toFixed(6) + '，models=' + (third && third.models ? third.models.length : '无')
+    '多模型轮次按行加总并带逐模型明细（套餐行按配额扣、金额记 0 不进轮级金额）',
+    third && third.seq === 2 && Array.isArray(third.models) && third.models.length === 2 && Math.abs(third.amount - dsPart) < 1e-9,
+    '期望 ¥' + dsPart.toFixed(6) + '，实际 ¥' + Number(third && third.amount).toFixed(6) + '，models=' + (third && third.models ? third.models.length : '无')
   )
   check('混合轮次的金额构成两种厂商', glmPart > 0 && dsPart > 0, 'GLM ¥' + glmPart.toFixed(4) + ' + DeepSeek ¥' + dsPart.toFixed(4))
 
@@ -5571,6 +5571,15 @@ try {
       JSON.stringify({
         afterFollow: src.indexOf('else rows.push(rPet, r10, rMore)') !== -1,
         beforeUsage: src.indexOf('rows.push(rUsage, sep2, rBook)') !== -1,
+      })
+    )
+    check(
+      '默认位置：配置角落与本域记忆不同时按跨域变更处理（issue #11 回归绊线）',
+      src.indexOf('cornerChangedFromConfig = incomingCorner !== defaultCorner') !== -1 &&
+        src.indexOf('if (cornerChangedFromConfig && !layoutTouched)') !== -1,
+      JSON.stringify({
+        detect: src.indexOf('cornerChangedFromConfig = incomingCorner !== defaultCorner') !== -1,
+        apply: src.indexOf('if (cornerChangedFromConfig && !layoutTouched)') !== -1,
       })
     )
     check(
