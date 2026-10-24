@@ -5529,6 +5529,15 @@ try {
       })
     )
     check(
+      '菜单顺序：浮层里「位置与行为」排在跟随延迟下方、用量记录上方',
+      src.indexOf('else rows.push(rPet, r10, rMore)') !== -1 &&
+        src.indexOf('rows.push(rUsage, sep2, rBook)') !== -1,
+      JSON.stringify({
+        afterFollow: src.indexOf('else rows.push(rPet, r10, rMore)') !== -1,
+        beforeUsage: src.indexOf('rows.push(rUsage, sep2, rBook)') !== -1,
+      })
+    )
+    check(
       'rua：角色门控只留大肥鱼/小克，出厂队列按角色增删 C 变体',
       /roleId === 'whale' \|\| roleId === 'xiaoke'/.test(src) &&
         /if \(allowRua\) variants\.push\(\{ w: 5, modules: \[\{ type: 'img', img: 'rua', size: 'A' \}\] \}\)/.test(src) &&
