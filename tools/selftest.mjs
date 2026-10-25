@@ -3978,6 +3978,86 @@ try {
     )
   }
 
+  // PR #15：跨显示器跟随。换屏算术与阈值抽在 desktop/display-follow.cjs（双屏硬件
+  // 上不了 CI，这里用合成矩形覆盖负坐标副屏、不等宽屏、窄缝与退化矩形），主进程侧
+  // 锁住判定顺序、重建前清理、早退分支清理与「没上屏就别等防抖」。
+  {
+    const { MIN_PENDING_VISIBLE, MIN_PENDING_OVERLAP_RATIO, overlapOf, shouldHideBeforeSwitch } = requireCjs(
+      path.join(PLUGIN_ROOT, 'desktop', 'display-follow.cjs')
+    )
+    const win = { x: 0, y: 0, width: 2560, height: 1440 }
+    const rect = (x, y, width, height) => ({ x, y, width, height })
+    check(
+      'PR#15：副屏在主屏左侧（负坐标）完全移出 → 先隐身',
+      shouldHideBeforeSwitch(rect(-2560, 0, 2560, 1440), win) === true &&
+        overlapOf(rect(-2560, 0, 2560, 1440), win).ratio === 0
+    )
+    check(
+      'PR#15：还剩 45% 时不隐身，32% 时隐身',
+      shouldHideBeforeSwitch(rect(-1408, 0, 2560, 1440), win) === false &&
+        shouldHideBeforeSwitch(rect(-1741, 0, 2560, 1440), win) === true
+    )
+    check(
+      'PR#15：只剩 4px 窄缝时隐身（不把鲸鱼钳在缝里）',
+      shouldHideBeforeSwitch(rect(-2556, 0, 2560, 1440), win) === true
+    )
+    check(
+      'PR#15：上下堆叠时按高度判窄缝',
+      shouldHideBeforeSwitch(rect(0, -1340, 2560, 1440), win) === true
+    )
+    check(
+      'PR#15：退化/零面积矩形不产生 NaN',
+      shouldHideBeforeSwitch(rect(0, 0, 0, 0), win) === true &&
+        Number.isFinite(overlapOf(rect(0, 0, 0, 0), win).ratio)
+    )
+    check(
+      'PR#15：等待期阈值保持 120 DIP / 35%',
+      MIN_PENDING_VISIBLE === 120 && MIN_PENDING_OVERLAP_RATIO === 0.35
+    )
+    const mainSrc = fs.readFileSync(path.join(PLUGIN_ROOT, 'desktop', 'main.cjs'), 'utf8')
+    check(
+      'PR#15：换屏判定在视口计算之前，阈值不再写死在主进程',
+      mainSrc.indexOf('if (maybeSwitchDisplay(rect)) return') !== -1 &&
+        mainSrc.indexOf('if (maybeSwitchDisplay(rect)) return') <
+          mainSrc.indexOf('const vx0 = Math.round(rect.x - winBounds.x)') &&
+        mainSrc.indexOf('MIN_PENDING_OVERLAP_RATIO') === -1,
+      ''
+    )
+    check(
+      'PR#15：没上屏时不等 700ms 防抖，直接换屏',
+      /const wasShown = overlayShown/.test(mainSrc) &&
+        /const switchDelay = wasShown \? DISPLAY_SWITCH_MS : 0/.test(mainSrc) &&
+        /setTimeout\(\(\) => \{[\s\S]*?\}, switchDelay\)/.test(mainSrc),
+      ''
+    )
+    check(
+      'PR#15：目标屏按 ZCode 窗口中心判定',
+      /getDisplayNearestPoint\(center\)/.test(mainSrc) &&
+        /Math\.round\(rectDip\.x \+ rectDip\.width \/ 2\)/.test(mainSrc),
+      ''
+    )
+    check(
+      'PR#15：早退分支清掉待切换计时器',
+      /if \(msg\.gone\) \{\s*clearPendingDisplay\(\)/.test(mainSrc) &&
+        /if \(msg\.hide \|\| msg\.show === false\) \{\s*clearPendingDisplay\(\)/.test(mainSrc) &&
+        /if \(!uiReady && !refreshUiReady\(\)\) \{\s*clearPendingDisplay\(\)/.test(mainSrc),
+      ''
+    )
+    check(
+      'PR#15：重建时清旧跟随消息与视口，指标变化保留当前屏',
+      mainSrc.indexOf('clearPendingDisplay()\n  lastFollowerMsg = null') !== -1 &&
+        /screen\.getDisplayMatching\(win\.getBounds\(\)\)\.workArea/.test(mainSrc),
+      ''
+    )
+    check(
+      'PR#15：跟随脚本起不来时兜底回主屏并复位 overlayWorkArea',
+      /const \{ workArea \} = screen\.getPrimaryDisplay\(\)[\s\S]{0,300}?overlayWorkArea = null[\s\S]{0,120}?win\.setBounds\(overlayWorkAreaBounds\(workArea\)\)/.test(
+        mainSrc
+      ),
+      ''
+    )
+  }
+
   // ---------- 宿主更新时的让路（issue #2 后半段：更新 ZCode 时提示「无法关闭 ZCode」） ----------
   // 判定与探测抽在 desktop/update-guard.cjs（纯函数 + 一次「可执行映像是否被占用」探测）。
   // 这里测三层：纯函数三态、真机占用语义、以及**端到端**——用「跟随一个不存在的进程」模拟

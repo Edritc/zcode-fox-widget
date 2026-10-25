@@ -17,6 +17,7 @@ const os = require('node:os')
 const { evaluateBootState, readNewestLogTail } = require('./ui-ready.cjs')
 const { isUpdaterRunning, yieldPlan } = require('./update-guard.cjs')
 const { overlayWorkAreaBounds } = require('./window-bounds.cjs')
+const { shouldHideBeforeSwitch } = require('./display-follow.cjs')
 
 const PORT = Number(process.env.WHALE_PORT) || 39321
 const TARGET_URL = 'http://127.0.0.1:' + PORT + '/'
@@ -471,6 +472,9 @@ function startFollower() {
     try {
       if (!win || win.isDestroyed()) return
       const { workArea } = screen.getPrimaryDisplay()
+      // 兜底窗口在主屏，建窗依据也要一起复位，否则之后任何一次重建
+      // 都会把它送到上次换屏的副屏，而那边没有跟随脚本
+      overlayWorkArea = null
       win.setBounds(overlayWorkAreaBounds(workArea))
       if (!win.isVisible()) {
         win.showInactive()
@@ -534,12 +538,8 @@ let lastViewport = null
 // 所以换屏只能整窗重建。判定看 ZCode 窗口中心落在哪块显示器，且稳定一小段时间，
 // 避免拖拽经过边界时来回重建。
 const DISPLAY_SWITCH_MS = 700
-// 等待换屏期间，当前屏上 ZCode 的可见交集窄于这个值（约小于角色最小宽度）就
-// 没必要继续显示：按「先隐身」处理，避免鲸鱼卡在屏幕边缘的一条缝里。
-const MIN_PENDING_VISIBLE = 120
-// ZCode 还剩多少面积在当前屏上：低于这个比例才认为「已经明显移走」，先隐身。
-// 贴着边界小幅晃动（大部分还在本屏）时继续显示并跟随可见部分。
-const MIN_PENDING_OVERLAP_RATIO = 0.35
+// 等待换屏期间「当前屏还剩多少、要不要先隐身」的判据抽在 desktop/display-follow.cjs
+// （纯函数；selftest 用合成矩形覆盖负坐标副屏、不等宽屏与窄缝，不依赖双屏硬件）。
 let overlayWorkArea = null // 本次建窗使用的工作区（DIP）；null = 主显示器
 let pendingDisplay = null // { id, workArea, timer }
 
@@ -762,6 +762,7 @@ function ensureUiReadyPoll() {
 function applyZCodeBounds(msg) {
   if (!win || win.isDestroyed()) return
   if (msg.gone) {
+    clearPendingDisplay()
     log('zcode-gone')
     const plan = yieldPlan({ hostGone: true, updaterRunning: isUpdaterRunning() })
     yieldToHost(plan === 'quit-updater' ? 'updater' : 'hostgone')
@@ -774,6 +775,8 @@ function applyZCodeBounds(msg) {
   // 的位置/大小解耦：失焦、被盖住、最小化、启动加载中都不影响桌宠显示，唯一
   // 关心的是 ZCode 进程存活（msg.gone → 一起退出）。
   if (petMode) {
+    // 桌宠模式不参与换屏：别留一个到点还会重建窗口的计时器
+    clearPendingDisplay()
     // 全屏应用前台（borderless 游戏/视频/演示，follower 按「矩形覆盖整屏且非
     // 最大化且非 cloaked」判定）：桌宠让路，透明度隐身；退出全屏时 follower 的
     // 状态变化消息走回本函数，applyFrame 自带重现过渡。
@@ -788,11 +791,13 @@ function applyZCodeBounds(msg) {
   // show=false：ZCode 最小化、被别的应用盖住，或窗口暂时找不到。
   // 透明度隐身（而非 win.hide()），原因见 overlayShown 处的注释。
   if (msg.hide || msg.show === false) {
+    clearPendingDisplay()
     hideOverlay(msg.hide ? 'window-missing' : 'zcode-not-foreground')
     return
   }
   // ZCode 还在启动加载中：先隐身等着，就绪后由轮询补显示
   if (!uiReady && !refreshUiReady()) {
+    clearPendingDisplay()
     hideOverlay('zcode-loading')
     ensureUiReadyPoll()
     return
@@ -803,6 +808,7 @@ function applyZCodeBounds(msg) {
   // 的假尺寸），拿它定位会把视口甩出窗口——鲸鱼被画到不可见处。
   if (rect.x < -10000 || rect.y < -10000) {
     if (petMode) return
+    clearPendingDisplay()
     hideOverlay('window-missing')
     return
   }
@@ -851,7 +857,15 @@ function maybeSwitchDisplay(rectDip) {
   try {
     winBounds = win.getBounds()
     current = screen.getDisplayMatching(winBounds)
-    target = screen.getDisplayMatching(rectDip)
+    // 目标屏按 ZCode 窗口中心判定：getDisplayMatching 取的是「交集面积最大」，
+    // 窗口比目标屏宽时，中心已经过屏、多数面积却仍在原屏，会被误判成不用换屏。
+    const center = {
+      x: Math.round(rectDip.x + rectDip.width / 2),
+      y: Math.round(rectDip.y + rectDip.height / 2),
+    }
+    target = screen.getDisplayNearestPoint
+      ? screen.getDisplayNearestPoint(center)
+      : screen.getDisplayMatching(rectDip)
   } catch (err) {
     return false
   }
@@ -859,23 +873,15 @@ function maybeSwitchDisplay(rectDip) {
     clearPendingDisplay()
     return false
   }
-  // 还剩多少 ZCode 在当前屏：面积不足 35%（或只剩一条窄缝）才认为「已经明显
-  // 移走」，先隐身；贴着边界小幅晃动时继续显示并跟随可见部分。
-  const overlapW = Math.max(
-    0,
-    Math.min(rectDip.x + rectDip.width, winBounds.x + winBounds.width) - Math.max(rectDip.x, winBounds.x)
-  )
-  const overlapH = Math.max(
-    0,
-    Math.min(rectDip.y + rectDip.height, winBounds.y + winBounds.height) - Math.max(rectDip.y, winBounds.y)
-  )
-  const visibleRatio = (overlapW * overlapH) / Math.max(1, rectDip.width * rectDip.height)
-  const skipFrame =
-    visibleRatio < MIN_PENDING_OVERLAP_RATIO || overlapW < MIN_PENDING_VISIBLE || overlapH < MIN_PENDING_VISIBLE
-  if (skipFrame && overlayShown) hideOverlay('display-switch-pending')
+  // 当前屏还剩多少 ZCode、要不要先隐身：判据见 desktop/display-follow.cjs
+  const wasShown = overlayShown
+  const skipFrame = shouldHideBeforeSwitch(rectDip, winBounds)
+  if (skipFrame && wasShown) hideOverlay('display-switch-pending')
 
-  // 位置静止 DISPLAY_SWITCH_MS 才切：拖拽期间每来一个新矩形都重置计时，
-  // 松手（不再有位置变化）后才开始倒数，避免在拖动中途重建窗口。
+  // 已经上屏的窗口要等位置静止再切，避免拖拽经过边界时来回重建；还没上屏
+  // （冷启动就在副屏、或刚被隐藏）时没有可见画面可闪，直接切，别让首个窗口
+  // 白等 700ms、把注定作废的页面加载跑完再丢掉。
+  const switchDelay = wasShown ? DISPLAY_SWITCH_MS : 0
   const rectKey = rectDip.x + ',' + rectDip.y + ',' + rectDip.width + ',' + rectDip.height
   if (pendingDisplay && pendingDisplay.id === target.id && pendingDisplay.rectKey === rectKey) return skipFrame
   clearPendingDisplay()
@@ -895,7 +901,7 @@ function maybeSwitchDisplay(rectDip) {
     log('display-switch', String(wanted.id) + ' ' + JSON.stringify(wanted.workArea))
     overlayWorkArea = wanted.workArea
     recreateWindow('display-switch ' + wanted.id)
-  }, DISPLAY_SWITCH_MS)
+  }, switchDelay)
   pendingDisplay = wanted
   return skipFrame
 }
