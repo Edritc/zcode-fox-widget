@@ -4058,6 +4058,20 @@ try {
     )
   }
 
+  // 版本更新面板：气泡显示期间 hidePanelsForBubble() 会把二级面板设成
+  // visibility:hidden；用户主动打开面板时必须先让气泡让路，否则面板要等气泡
+  // 自动关闭才可见（表现为「点了检查更新，过一会才弹出」）。
+  {
+    const widgetSrc = fs.readFileSync(path.join(PLUGIN_ROOT, 'lib', 'widget.js'), 'utf8')
+    check(
+      '更新面板打开时先收掉当前气泡（气泡会把面板 visibility:hidden）',
+      /if \(updateOpen && \(costBubbleActive \|\| bubbleShown\)\) \{\s*if \(costBubbleActive\) hideCostBubble\(\)\s*else hideBubble\(\)/.test(
+        widgetSrc
+      ),
+      ''
+    )
+  }
+
   // ---------- 宿主更新时的让路（issue #2 后半段：更新 ZCode 时提示「无法关闭 ZCode」） ----------
   // 判定与探测抽在 desktop/update-guard.cjs（纯函数 + 一次「可执行映像是否被占用」探测）。
   // 这里测三层：纯函数三态、真机占用语义、以及**端到端**——用「跟随一个不存在的进程」模拟
